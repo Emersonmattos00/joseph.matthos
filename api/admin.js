@@ -75,8 +75,7 @@ const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'au
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 // ⚠️ Vercel limita o body a ~4.5 MB (Hobby) / ~50 MB (Pro com config).
 // Em base64, o payload é ~33% maior. Este limite só é efetivo se a
-// plataforma permitir o body. Considere migrar para upload direto ao
-// Supabase Storage via URL assinada se precisar de arquivos grandes.
+// plataforma permitir o body.
 const MAX_AUDIO_SIZE = 4 * 1024 * 1024;
 
 const VALID_ACTIONS = new Set([
@@ -111,29 +110,6 @@ module.exports = async function handler(req, res) {
     return handleLogin(req, res);
   }
 
-// 🔍 TEMPORÁRIO: gera hash para uma senha (remover depois!)
-if (action === '__gen_hash__' && method === 'POST') {
-  const b = parseBody(req);
-  const password = String(b.password || '');
-  if (!password) {
-    return sendJson(res, 400, { ok: false, error: 'password obrigatório' });
-  }
-  const crypto = require('crypto');
-  const salt = crypto.randomBytes(16);
-  const keyLen = 64;
-  const N = 16384, r = 8, p = 1;
-
-  return new Promise((resolve) => {
-    crypto.scrypt(password, salt, keyLen, { N, r, p }, (err, derived) => {
-      if (err) {
-        return resolve(sendJson(res, 500, { ok: false, error: err.message }));
-      }
-      const hash = `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
-      resolve(sendJson(res, 200, { ok: true, hash, password }));
-    });
-  });
-}
-   
   // ── Todas as outras ações exigem sessão
   const session = verifySession(req);
   if (!session) {
@@ -207,40 +183,12 @@ async function handleLogin(req, res) {
   }
 
   const userOk = timingSafeEq(user, expectedUser);
-const passOk = await verifyScrypt(pass, hash);
+  const passOk = await verifyScrypt(pass, hash);
 
-if (!userOk || !passOk) {
-  // 🔍 DIAGNÓSTICO TEMPORÁRIO — remover depois
-  console.error('[admin/login DIAGNÓSTICO]', JSON.stringify({
-    receivedUser: user,
-    receivedUserLength: user.length,
-    expectedUser: expectedUser,
-    expectedUserLength: expectedUser.length,
-    userOk,
-    hashLength: hash ? hash.length : 0,
-    hashPrefix: hash ? hash.substring(0, 20) : null,
-    passLength: pass.length,
-    passOk
-  }));
-
-  return sendJson(res, 401, {
-    ok: false,
-    error: 'Usuário ou senha incorretos.',
-    // 🔍 DIAGNÓSTICO TEMPORÁRIO
-    _debug: {
-      userOk,
-      passOk,
-      receivedUser: user,
-      receivedUserLength: user.length,
-      expectedUser: expectedUser,
-      expectedUserLength: expectedUser.length,
-      hashLength: hash ? hash.length : 0,
-      hashPrefix: hash ? hash.substring(0, 30) : null,
-      hashIsEmpty: !hash,
-      passLength: pass.length
-    }
-  });
-}
+  if (!userOk || !passOk) {
+    await audit('admin_login', { ip, userAgent, success: false, reason: 'invalid' });
+    return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
+  }
 
   // Cria cookie de sessão assinado
   const token = signHmac({ user: expectedUser, iat: Date.now() }, secret);
