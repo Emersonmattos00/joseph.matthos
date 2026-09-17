@@ -111,6 +111,29 @@ module.exports = async function handler(req, res) {
     return handleLogin(req, res);
   }
 
+// 🔍 TEMPORÁRIO: gera hash para uma senha (remover depois!)
+if (action === '__gen_hash__' && method === 'POST') {
+  const b = parseBody(req);
+  const password = String(b.password || '');
+  if (!password) {
+    return sendJson(res, 400, { ok: false, error: 'password obrigatório' });
+  }
+  const crypto = require('crypto');
+  const salt = crypto.randomBytes(16);
+  const keyLen = 64;
+  const N = 16384, r = 8, p = 1;
+
+  return new Promise((resolve) => {
+    crypto.scrypt(password, salt, keyLen, { N, r, p }, (err, derived) => {
+      if (err) {
+        return resolve(sendJson(res, 500, { ok: false, error: err.message }));
+      }
+      const hash = `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
+      resolve(sendJson(res, 200, { ok: true, hash, password }));
+    });
+  });
+}
+   
   // ── Todas as outras ações exigem sessão
   const session = verifySession(req);
   if (!session) {
