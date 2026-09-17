@@ -184,12 +184,40 @@ async function handleLogin(req, res) {
   }
 
   const userOk = timingSafeEq(user, expectedUser);
-  const passOk = await verifyScrypt(pass, hash);
+const passOk = await verifyScrypt(pass, hash);
 
-  if (!userOk || !passOk) {
-    await audit('admin_login', { ip, userAgent, success: false, reason: 'invalid' });
-    return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
-  }
+if (!userOk || !passOk) {
+  // 🔍 DIAGNÓSTICO TEMPORÁRIO — remover depois
+  console.error('[admin/login DIAGNÓSTICO]', JSON.stringify({
+    receivedUser: user,
+    receivedUserLength: user.length,
+    expectedUser: expectedUser,
+    expectedUserLength: expectedUser.length,
+    userOk,
+    hashLength: hash ? hash.length : 0,
+    hashPrefix: hash ? hash.substring(0, 20) : null,
+    passLength: pass.length,
+    passOk
+  }));
+
+  return sendJson(res, 401, {
+    ok: false,
+    error: 'Usuário ou senha incorretos.',
+    // 🔍 DIAGNÓSTICO TEMPORÁRIO
+    _debug: {
+      userOk,
+      passOk,
+      receivedUser: user,
+      receivedUserLength: user.length,
+      expectedUser: expectedUser,
+      expectedUserLength: expectedUser.length,
+      hashLength: hash ? hash.length : 0,
+      hashPrefix: hash ? hash.substring(0, 30) : null,
+      hashIsEmpty: !hash,
+      passLength: pass.length
+    }
+  });
+}
 
   // Cria cookie de sessão assinado
   const token = signHmac({ user: expectedUser, iat: Date.now() }, secret);
