@@ -56,9 +56,9 @@ const TAB_TITLES = {
 // Bootstrap
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
-  // ⚠️ IMPORTANTE: registra o atalho Ctrl+Shift+A ANTES de qualquer API.
+  // ⚠️ Registra o atalho ANTES de qualquer API.
   // Assim, mesmo que /api/admin?action=content retorne 401 (usuário não logado),
-  // o atalho já está ativo e o usuário consegue abrir a tela de login.
+  // o atalho Ctrl+Shift+A já está ativo e abre a tela de login.
   initAdminShortcuts();
 
   try {
@@ -69,9 +69,8 @@ async function bootstrap() {
     } catch (err) {
       if (err && (err.status === 401 || err.status === 403)) {
         // Sessão inválida. O atalho já está registrado.
-        // Nada a fazer aqui — a tela de login aparece quando o usuário
-        // aperta Ctrl+Shift+A.
-        console.warn('[admin] sessão inválida — atalho Ctrl+Shift+A disponível');
+        // Não faz nada — o usuário aperta Ctrl+Shift+A quando quiser logar.
+        console.warn('[admin] sessão inválida — Ctrl+Shift+A disponível');
         return;
       }
       throw err;
