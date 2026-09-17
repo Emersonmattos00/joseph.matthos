@@ -88,6 +88,28 @@ const VALID_ACTIONS = new Set([
   'sales'
 ]);
 
+// 🔍 TEMPORÁRIO: gera hash usando crypto.scrypt do Node
+if (action === '__gen_hash__' && method === 'POST') {
+  const b = parseBody(req);
+  const password = String(b.password || '');
+  if (!password) {
+    return sendJson(res, 400, { ok: false, error: 'password obrigatório' });
+  }
+  const salt = crypto.randomBytes(16);
+  return new Promise((resolve) => {
+    crypto.scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 }, (err, derived) => {
+      if (err) {
+        return resolve(sendJson(res, 500, { ok: false, error: err.message }));
+      }
+      resolve(sendJson(res, 200, {
+        ok: true,
+        hash: `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`,
+        password
+      }));
+    });
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // Handler
 // ─────────────────────────────────────────────────────────────
