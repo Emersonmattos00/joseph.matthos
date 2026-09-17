@@ -1,34 +1,19 @@
 /* ============================================================
-   CONFIG.JS — Conteúdo PADRÃO do site (fallback)
+   CONFIG.JS — Conteúdo padrão do site (fallback)
    ------------------------------------------------------------
    ⚠️ Este arquivo é servido ao navegador.
    NUNCA coloque aqui:
      - SERVICE_ROLE_KEY, JWT_SECRET, MP_ACCESS_TOKEN
      - senhas administrativas
      - chaves de API privadas
-
-   ✅ Pode conter:
-     - textos, branding, SEO
-     - estrutura de álbuns e faixas (títulos, URLs, descrições)
-     - IDs de planos (mas NÃO preços — ver abaixo)
-     - redes sociais, aparência
-
-   🎯 Preços:
-     Os preços exibidos no site vêm da API (`/api/plans` e `/api/tracks`)
-     porque o servidor é a fonte de verdade para cobrança.
-     Este arquivo NÃO define preços — só a estrutura.
-
-   📦 Uso:
+   ------------------------------------------------------------
+   Uso:
      - Módulos ES:   import { DEFAULT_CONTENT } from './config.js';
      - Código legado: window.DEFAULT_CONTENT
    ============================================================ */
 
-// Bump quando a estrutura mudar de forma incompatível
 export const CONTENT_SCHEMA_VERSION = 1;
 
-// ─────────────────────────────────────────────────────────────
-// Conteúdo padrão
-// ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
     name: "Joseph Matthos",
@@ -90,7 +75,6 @@ export const DEFAULT_CONTENT = {
   discografia: {
     title: "Disco<span class=\"gold\">grafia</span>",
     subtitle: "Explore álbuns, EPs e singles. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads.",
-    // ⚠️ Sem `price` e sem `forSale` — isso vem do servidor via /api/tracks.
     albums: [
       {
         id: "album-bbb",
@@ -255,13 +239,11 @@ export const DEFAULT_CONTENT = {
     currency: "BRL",
     discount: { minItems: 3, percent: 10 },
     showCart: true
-    // ⚠️ Sem `defaultPrice` — se o preço real falhar, o front mostra "indisponível".
   },
 
   planos: {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
-    // ⚠️ Sem `price` — o valor real vem de /api/plans (que lê as envs do MP).
     plans: [
       {
         id: "free",
@@ -319,7 +301,6 @@ export const DEFAULT_CONTENT = {
     subtitle: "Receba letras inéditas, reflexões e datas de shows.",
     heading: "Vamos trocar ideias.",
     description: "Para convites, parcerias ou apenas para compartilhar um verso, me encontre nas redes.",
-    // ⚠️ Só `network` e `url` — o label é derivado de SOCIAL_LABELS.
     socials: [
       { network: "spotify",   url: "https://open.spotify.com/playlist/3flgUEol1uBvFAlriXZE24?si=PtjKfVQuQfms4zMCjyIqaA" },
       { network: "youtube",   url: "https://www.youtube.com/@josephmatthos" },
@@ -342,9 +323,6 @@ export const DEFAULT_CONTENT = {
   }
 };
 
-// ─────────────────────────────────────────────────────────────
-// Labels de redes sociais (network → label)
-// ─────────────────────────────────────────────────────────────
 export const SOCIAL_LABELS = {
   spotify:   "Spotify",
   youtube:   "YouTube",
@@ -357,29 +335,20 @@ export const SOCIAL_LABELS = {
   deezer:    "Deezer"
 };
 
-// Ordem preferencial de exibição das redes no editor
 export const NETWORKS_ORDER = [
   'spotify', 'youtube', 'amazon', 'facebook',
   'tiktok', 'apple', 'audiomack', 'itunes', 'deezer'
 ];
 
-// ─────────────────────────────────────────────────────────────
-// Formatação de preço (pt-BR / BRL)
-// ─────────────────────────────────────────────────────────────
 export const PRICE_FORMATTER = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
   currency: 'BRL'
 });
 
-// ─────────────────────────────────────────────────────────────
-// Congelamento profundo (evita mutação acidental)
-// ─────────────────────────────────────────────────────────────
 function deepFreeze(obj) {
   if (obj && typeof obj === 'object' && !Object.isFrozen(obj)) {
     Object.freeze(obj);
-    for (const key of Object.keys(obj)) {
-      deepFreeze(obj[key]);
-    }
+    for (const key of Object.keys(obj)) deepFreeze(obj[key]);
   }
   return obj;
 }
@@ -387,9 +356,6 @@ function deepFreeze(obj) {
 deepFreeze(DEFAULT_CONTENT);
 deepFreeze(SOCIAL_LABELS);
 
-// ─────────────────────────────────────────────────────────────
-// Compatibilidade com código legado (site.js, store.js)
-// ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
   window.SOCIAL_LABELS = SOCIAL_LABELS;
