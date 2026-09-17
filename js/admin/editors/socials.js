@@ -2,7 +2,7 @@
    admin/editors/socials.js — Editor de redes sociais
    ============================================================ */
 
-import { AdminState } from '../index.js';
+import { AdminState } from '../state.js';
 import { esc } from '../ui/dom.js';
 
 const NETWORKS = [
@@ -12,52 +12,57 @@ const NETWORKS = [
   { key: 'facebook',  label: 'Facebook' },
   { key: 'tiktok',    label: 'TikTok' },
   { key: 'apple',     label: 'Apple Music' },
-  { key: 'audiomack', label: 'Audiomack' },
-  { key: 'itunes',    label: 'iTunes' },
-  { key: 'deezer',    label: 'Deezer' }
+  { key: 'audiomack', label: 'Audiomack' }
 ];
-
-const LABEL_BY_KEY = Object.fromEntries(NETWORKS.map((n) => [n.key, n.label]));
 
 export function renderSocialEditor(content = AdminState.content) {
   const wrap = document.getElementById('socialEditor');
   if (!wrap) return;
 
-  wrap.innerHTML = content.contato.socials.map((s, i) => `
-    <div class="track-editor">
-      <div class="track-head">
-        <strong>${esc(s.label || LABEL_BY_KEY[s.network || s.icon] || 'Rede')}</strong>
-        <button class="btn btn-ghost btn-sm" data-action="remove" data-i="${i}" aria-label="Remover">🗑</button>
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label>Rede</label>
-          <select data-field="network" data-i="${i}">
-            ${NETWORKS.map((n) =>
-              `<option value="${n.key}" ${(s.network || s.icon) === n.key ? 'selected' : ''}>${n.label}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label>URL</label>
-          <input type="text" value="${esc(s.url || '')}" data-field="url" data-i="${i}" placeholder="https://...">
-        </div>
-      </div>
-    </div>`).join('');
+  if (!content.contato) content.contato = {};
+  if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
 
-  // Bind
+  const socials = content.contato.socials;
+
+  if (!socials.length) {
+    wrap.innerHTML = '<p class="hint" style="color:var(--text-dim);padding:1rem;">Nenhuma rede social ainda.</p>';
+    return;
+  }
+
+  wrap.innerHTML = socials.map((s, i) => {
+    const network = s.network || s.icon || 'spotify';
+    return `
+      <div class="track-editor">
+        <div class="track-head">
+          <strong>${esc(s.label || network)}</strong>
+          <button class="btn btn-ghost btn-sm" data-action="remove" data-i="${i}">🗑</button>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Rede</label>
+            <select data-field="network" data-i="${i}">
+              ${NETWORKS.map((n) => `<option value="${n.key}" ${network === n.key ? 'selected' : ''}>${n.label}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>URL</label>
+            <input value="${esc(s.url || '')}" data-field="url" data-i="${i}" placeholder="https://...">
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
   wrap.querySelectorAll('[data-field]').forEach((el) => {
     el.addEventListener('input', () => {
       const i = Number(el.dataset.i);
       const field = el.dataset.field;
+      if (!content.contato.socials[i]) return;
+      content.contato.socials[i][field] = el.value;
       if (field === 'network') {
-        const net = el.value;
-        content.contato.socials[i].network = net;
-        content.contato.socials[i].icon = net;    // compatibilidade
-        content.contato.socials[i].label = LABEL_BY_KEY[net] || net;
-        renderSocialEditor(content);              // re-render para atualizar título
-      } else {
-        content.contato.socials[i][field] = el.value;
+        content.contato.socials[i].icon = el.value;
+        const net = NETWORKS.find((n) => n.key === el.value);
+        content.contato.socials[i].label = net ? net.label : el.value;
+        renderSocialEditor(content);
       }
     });
   });
@@ -74,12 +79,15 @@ export function bindSocialsAddButton() {
   if (!btn || btn.dataset.bound === '1') return;
   btn.dataset.bound = '1';
   btn.addEventListener('click', () => {
-    AdminState.content.contato.socials.push({
+    const content = AdminState.content;
+    if (!content.contato) content.contato = {};
+    if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
+    content.contato.socials.push({
       network: 'spotify',
       icon: 'spotify',
       label: 'Spotify',
-      url: '#'
+      url: ''
     });
-    renderSocialEditor(AdminState.content);
+    renderSocialEditor(content);
   });
 }
