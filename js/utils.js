@@ -1,10 +1,10 @@
 /* ============================================================
-   UTILS.JS — Funções utilitárias compartilhadas
+   js/utils.js — Funções utilitárias compartilhadas
    ------------------------------------------------------------
    Uso:
      - Módulos ES:      import { esc, formatPrice } from './utils.js';
      - Script clássico: window.esc, window.formatPrice, ...
-   ------------------------------------------------------------
+
    Nada aqui é específico do site, do admin ou do player.
    Tudo é determinístico, sem estado global mutável,
    exceto o timer interno do `toast`.
