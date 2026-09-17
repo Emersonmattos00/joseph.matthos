@@ -56,36 +56,41 @@ const TAB_TITLES = {
 // Bootstrap
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
+  // ⚠️ IMPORTANTE: registra o atalho Ctrl+Shift+A ANTES de qualquer API.
+  // Assim, mesmo que /api/admin?action=content retorne 401 (usuário não logado),
+  // o atalho já está ativo e o usuário consegue abrir a tela de login.
+  initAdminShortcuts();
+
   try {
-    // 1) Carrega conteúdo
+    // Carrega conteúdo
     let loaded;
     try {
       loaded = await loadContent();
     } catch (err) {
       if (err && (err.status === 401 || err.status === 403)) {
-        console.warn('[admin] sessão inválida ao carregar conteúdo');
-        showAdminLogin();
+        // Sessão inválida. O atalho já está registrado.
+        // Nada a fazer aqui — a tela de login aparece quando o usuário
+        // aperta Ctrl+Shift+A.
+        console.warn('[admin] sessão inválida — atalho Ctrl+Shift+A disponível');
         return;
       }
       throw err;
     }
 
-    // em admin/index.js, no bootstrap:
     AdminState.content = loaded.data;
     AdminState.contentVersion = loaded.version;
     AdminState.contentUpdatedAt = loaded.updatedAt || null;
 
-    // 2) Aplica no site público (site.js expõe essas funções em window)
+    // Aplica no site público
     safeCall('applyContentToSite', AdminState.content);
     safeCall('refreshFlatPlaylist');
     safeCall('refreshPlanConfig');
     safeCall('updateCartFab');
 
-    // 3) Preenche campos do admin ANTES de binear inputs
+    // Preenche campos do admin
     loadAllAdminFields();
 
-    // 4) Bind de eventos
-    initAdminShortcuts();
+    // Binds (o atalho já foi registrado no começo)
     bindNavTabs();
     bindContentInputs();
     bindGlobalActions();
@@ -93,15 +98,14 @@ async function bootstrap() {
     bindUploadZones();
     bindRefreshButtons();
 
-    // 5) Dashboard assíncrono
+    // Dashboard assíncrono
     renderDashboard().catch((err) => {
-  if (err && (err.status === 401 || err.status === 403)) {
-    console.warn('[admin] dashboard: sessão expirada');
-    showAdminLogin();
-    return;
-  }
-  console.warn('[admin] dashboard:', err);
-});
+      if (err && (err.status === 401 || err.status === 403)) {
+        console.warn('[admin] dashboard: sessão expirada');
+        return;
+      }
+      console.warn('[admin] dashboard:', err);
+    });
   } catch (err) {
     console.error('[admin] bootstrap falhou:', err);
     renderFatalError();
