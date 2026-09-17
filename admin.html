@@ -1,0 +1,20 @@
+<!-- No final do <body> -->
+<script type="module">
+  import { initAdmin } from '/js/admin/admin.js';
+
+  // Carrega conteúdo
+  const content = JSON.parse(localStorage.getItem('jm_content') || '{}');
+  const defaultContent = window.DEFAULT_CONTENT || {};
+
+  initAdmin({
+    content,
+    defaultContent,
+    onContentChange: (field) => {
+      try {
+        localStorage.setItem('jm_content', JSON.stringify(content));
+      } catch (e) {
+        console.error('Erro ao salvar:', e);
+      }
+    }
+  });
+</script>

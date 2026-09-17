@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Joseph Matthos | Plataforma Oficial</title>
+<meta name="description" content="Joseph Matthos — Rapper poético, filosófico e inspirador. Discografia, prévias gratuitas e assinatura premium.">
+<meta name="author" content="Joseph Matthos">
+<meta name="theme-color" content="#0b0a0c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Joseph Matthos | Plataforma Oficial">
+<meta property="og:description" content="Rimas que pensam. Discografia completa, prévias gratuitas.">
+<meta property="og:image" content="https://josephmatthos.vercel.app/assets/img/album-boom-boom-bap.jpg">
+<meta property="og:url" content="https://josephmatthos.vercel.app/">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"MusicGroup","name":"Joseph Matthos","genre":["Rap","Hip Hop","Poesia"],"description":"Rapper poético, filosófico e inspirador.","url":"https://josephmatthos.vercel.app"}
+</script>
+
+<!-- AdSense: carregar apenas em produção (ver main.js) -->
+<script>
+  (function () {
+    var host = location.hostname;
+    var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+    if (isLocal) return;
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7190208592008203';
+    s.crossOrigin = 'anonymous';
+    document.head.appendChild(s);
+  })();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300..700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer">
+
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<noscript>
+  <div style="padding:2rem;text-align:center;color:#eee9e0;background:#0b0a0c;font-family:sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;">
+    <div>
+      <h1 style="font-family:Georgia,serif;color:#d4af37;margin-bottom:1rem;">Joseph Matthos</h1>
+      <p>Este site precisa de JavaScript ativado.</p>
+    </div>
+  </div>
+</noscript>
+
+<div id="publicSite">
+  <header>
+    <div class="container header-inner">
+      <a href="#" class="logo" id="siteLogo" aria-label="Página inicial">Joseph <span>Matthos</span></a>
+      <nav aria-label="Navegação principal">
+        <a href="#discografia">Discografia</a>
+        <a href="#" id="navPlansLink" data-action="open-plans">Assinar</a>
+        <a href="#sobre">Sobre</a>
+        <a href="#filosofia">Filosofia</a>
+        <a href="#contato">Redes Sociais</a>
+        <a href="#" id="navCartLink" class="nav-cart" aria-label="Abrir carrinho de compras">
+          <i class="fa-solid fa-cart-shopping" aria-hidden="true"></i>
+          <span class="nav-cart-badge hidden" id="navCartBadge">0</span>
+        </a>
+      </nav>
+      <div class="auth-area">
+        <button class="btn btn-outline btn-sm" id="loginBtn" aria-label="Entrar na conta">Entrar</button>
+        <button class="btn btn-primary btn-sm" id="signupBtn" aria-label="Criar conta gratuita">Criar conta</button>
+        <div class="user-chip" id="userChip" role="button" tabindex="0" aria-label="Abrir menu da conta">
+          <div class="user-avatar" id="userAvatar">J</div>
+          <div class="user-info-mini">
+            <div class="user-name-mini" id="userNameMini">Usuário</div>
+            <div class="user-plan-mini" id="userPlanMini">Free</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="hero" id="heroSection" aria-labelledby="heroTitle">
+    <div class="container">
+      <div class="hero-content">
+        <h1 id="heroTitle">Rimas que<br><span class="gold">pensam.</span></h1>
+        <p class="hero-sub" id="heroSub">Rapper poético, filosófico e inspirador.</p>
+        <div class="hero-cta">
+          <a href="#discografia" class="btn btn-primary" id="heroBtnPrimary">▶ Explorar discografia</a>
+          <button type="button" class="btn btn-outline" id="heroBtnSecondary" data-action="open-plans">Ver planos</button>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="vinyl-container" id="heroVinyl" aria-hidden="true">
+          <div class="lyric" id="heroLyric">“Nada acabou. Só estamos começando.”</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="discografia" aria-labelledby="discoTitle">
+    <div class="container">
+      <h2 class="section-title" id="discoTitle">Disco<span class="gold">grafia</span></h2>
+      <p class="section-sub" id="discoSub">Clique em um álbum para ver as faixas e comprar.</p>
+
+      <div class="filter-bar" id="filterBar" aria-label="Filtros de discografia">
+        <div class="filter-bar-buttons">
+          <button class="filter-btn active" data-filter="all" aria-selected="true">Tudo</button>
+          <button class="filter-btn" data-filter="album" aria-selected="false">Álbuns</button>
+          <button class="filter-btn" data-filter="ep" aria-selected="false">EPs</button>
+          <button class="filter-btn" data-filter="single" aria-selected="false">Singles</button>
+        </div>
+        <div class="view-mode-buttons" role="group" aria-label="Modo de exibição">
+          <button class="view-mode-btn active" data-view-mode="cards" aria-label="Exibir músicas em cards" title="Cards">▦</button>
+          <button class="view-mode-btn" data-view-mode="list" aria-label="Exibir músicas em linhas" title="Linhas">☷</button>
+        </div>
+        <div class="shop-search-wrap">
+          <input type="search" id="shopSearch" class="shop-search" placeholder="Buscar faixa..." aria-label="Buscar faixa">
+        </div>
+      </div>
+
+      <div id="discographyContainer"></div>
+      <div class="playlists-panel" id="playlistsPanel" aria-labelledby="playlistsTitle">
+        <div class="playlists-heading"><div><h3 id="playlistsTitle">Playlists</h3><p>Seleções criadas para ouvir em sequência.</p></div></div>
+        <div class="playlists-grid" id="playlistsGrid"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="sobre" aria-labelledby="sobreTitle">
+    <div class="container">
+      <h2 class="section-title" id="sobreTitle">Sobre <span class="gold">Joseph</span></h2>
+      <p class="section-sub" id="sobreSub">Entre a poesia concreta e o rap de reflexão.</p>
+      <div class="sobre-grid">
+        <div class="sobre-img" id="sobreImg" aria-hidden="true"></div>
+        <div class="sobre-text" id="sobreText"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="filosofia" aria-labelledby="filosofiaTitle">
+    <div class="container">
+      <h2 class="section-title" id="filosofiaTitle">Filosofia <span class="gold">em rima</span></h2>
+      <p class="section-sub" id="filosofiaSub">Fragmentos de pensamentos que atravessam as letras de Joseph.</p>
+      <div class="frases-grid" id="frasesGrid"></div>
+    </div>
+  </section>
+
+  <section id="contato" aria-labelledby="contatoTitle">
+    <div class="container">
+      <h2 class="section-title" id="contatoTitle">Conecte-<span class="gold">se</span></h2>
+      <p class="section-sub" id="contatoSub">Receba letras inéditas, reflexões e datas de shows.</p>
+      <div class="contato-grid">
+        <div class="contato-info">
+          <h3 id="contatoHeading">Vamos trocar ideias.</h3>
+          <p id="contatoDesc">Para convites, parcerias ou apenas para compartilhar um verso.</p>
+          <div class="social-links" id="socialLinks"></div>
+        </div>
+        <form class="newsletter-form" id="newsletterForm">
+          <input type="text" placeholder="Seu nome" required aria-label="Seu nome">
+          <input type="email" placeholder="Seu melhor e-mail" required aria-label="Seu e-mail">
+          <button type="submit" class="btn btn-primary">Quero receber</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p id="footerText">© 2026 Joseph Matthos. Todos os direitos reservados. <span class="gold">✦</span> Feito com poesia e beat.</p>
+      <nav class="footer-nav" aria-label="Links legais">
+        <a href="termos-uso.html">Termos de Uso</a>
+        <span aria-hidden="true">·</span>
+        <a href="politica-privacidade.html">Política de Privacidade</a>
+        <span aria-hidden="true">·</span>
+        <a href="#contato">Contato</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- Player fixo (oculto por CSS) -->
+  <div class="player" id="player" role="region" aria-label="Player de áudio">
+    <div class="player-info">
+      <div class="player-cover" id="playerCover" aria-hidden="true"></div>
+      <div class="player-text">
+        <div class="now-label">Tocando agora <span class="preview-badge" id="previewBadge">PRÉVIA 30s</span></div>
+        <div class="now-title" id="nowTitle">—</div>
+        <div class="now-artist" id="nowArtist">Joseph Matthos</div>
+      </div>
+    </div>
+    <div class="player-center">
+      <div class="player-controls">
+        <button class="ctrl" id="prevBtn" title="Faixa anterior" aria-label="Faixa anterior">⏮</button>
+        <button class="ctrl ctrl-play" id="playBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">▶</button>
+        <button class="ctrl" id="nextBtn" title="Próxima faixa" aria-label="Próxima faixa">⏭</button>
+      </div>
+      <div class="player-progress">
+        <span id="currentTime" aria-live="off">0:00</span>
+        <div class="progress-bar" id="progressBar" role="slider" aria-label="Progresso da faixa" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="progress-fill" id="progressFill"></div></div>
+        <span id="duration" aria-live="off">0:00</span>
+      </div>
+    </div>
+    <div class="player-right">
+      <button class="ctrl download-btn" id="downloadBtn" title="Baixar faixa (Premium)" aria-label="Baixar faixa">⬇</button>
+      <button class="ctrl" id="lyricsBtn" title="Abrir letras" aria-label="Abrir letras">♫</button>
+      <div class="volume-wrap">
+        <button class="ctrl" id="muteBtn" title="Mudo" aria-label="Ativar ou desativar som">🔊</button>
+        <div class="volume-bar" id="volumeBar" role="slider" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80" tabindex="0"><div class="volume-fill" id="volumeFill"></div></div>
+      </div>
+    </div>
+  </div>
+  <audio id="audio" preload="auto"></audio>
+
+  <div class="lyrics-drawer" id="lyricsDrawer" aria-live="polite" aria-label="Letra sincronizada">
+    <div class="lyrics-drawer-head"><div><span class="now-label">LETRA</span><h2 id="lyricsTitle">Nenhuma faixa tocando</h2></div><button class="modal-close" id="closeLyrics" aria-label="Fechar letras">×</button></div>
+    <div id="lyricsContent" class="lyrics-content"><p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p></div>
+  </div>
+
+  <!-- Player expandido -->
+  <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
+    <div class="expanded-player">
+      <button class="modal-close" id="closeExpandedPlayer" aria-label="Fechar player">×</button>
+      <div class="expanded-player-main">
+        <div class="expanded-player-cover" id="expandedPlayerCover"></div>
+        <div class="expanded-player-meta">
+          <span class="now-label">TOCANDO AGORA <span class="preview-badge" id="expandedPreviewBadge">PRÉVIA</span></span>
+          <h2 id="expandedPlayerTitle">Nenhuma faixa selecionada</h2>
+          <p id="expandedPlayerAlbum">Joseph Matthos</p>
+          <div class="expanded-player-actions" id="expandedPlayerActions"></div>
+        </div>
+      </div>
+      <div class="expanded-controls">
+        <button class="ctrl" id="expandedPrevBtn" title="Faixa anterior" aria-label="Faixa anterior">⏮</button>
+        <button class="ctrl ctrl-play" id="expandedPlayBtn" title="Reproduzir ou pausar" aria-label="Reproduzir ou pausar">▶</button>
+        <button class="ctrl" id="expandedNextBtn" title="Próxima faixa" aria-label="Próxima faixa">⏭</button>
+        <button class="ctrl" id="expandedMuteBtn" title="Ativar ou desativar som" aria-label="Ativar ou desativar som">🔊</button>
+        <button class="ctrl" id="expandedDownloadBtn" title="Baixar faixa" aria-label="Baixar faixa">⬇</button>
+      </div>
+      <div class="expanded-progress">
+        <span id="expandedCurrentTime">0:00</span>
+        <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso da faixa ampliado" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="progress-fill" id="expandedProgressFill"></div></div>
+        <span id="expandedDuration">0:00</span>
+      </div>
+      <div class="expanded-lyrics" id="expandedLyricsContent"><p class="lyrics-empty">Cadastre uma letra sincronizada para esta faixa.</p></div>
+    </div>
+  </div>
+
+  <!-- ====================== MODAIS PÚBLICOS ====================== -->
+
+  <!-- Login -->
+  <div class="modal-overlay" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="modal">
+      <button class="modal-close" data-close aria-label="Fechar modal">×</button>
+      <h2 id="loginTitle">Bem-vindo de volta</h2>
+      <p class="sub">Entre para acessar a discografia completa.</p>
+      <form id="loginForm">
+        <div class="form-group"><label for="loginEmail">E-mail</label><input type="email" id="loginEmail" required autocomplete="email"></div>
+        <div class="form-group"><label for="loginPassword">Senha</label><input type="password" id="loginPassword" required autocomplete="current-password"></div>
+        <div class="form-error" id="loginError" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Entrar</button>
+      </form>
+      <div class="modal-switch">Não tem conta? <a id="switchToSignup">Criar agora</a></div>
+    </div>
+  </div>
+
+  <!-- Signup -->
+  <div class="modal-overlay" id="signupModal" role="dialog" aria-modal="true" aria-labelledby="signupTitle">
+    <div class="modal">
+      <button class="modal-close" data-close aria-label="Fechar modal">×</button>
+      <h2 id="signupTitle">Criar conta</h2>
+      <p class="sub">Comece grátis. Ouça prévias de toda a discografia.</p>
+      <form id="signupForm">
+        <div class="form-group"><label for="signupName">Nome</label><input type="text" id="signupName" required autocomplete="name"></div>
+        <div class="form-group"><label for="signupEmail">E-mail</label><input type="email" id="signupEmail" required autocomplete="email"></div>
+        <div class="form-group"><label for="signupPassword">Senha (mín. 8)</label><input type="password" id="signupPassword" required minlength="8" autocomplete="new-password"></div>
+        <div class="form-error" id="signupError" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Criar conta grátis</button>
+      </form>
+      <div class="modal-switch">Já tem conta? <a id="switchToLogin">Entrar</a></div>
+    </div>
+  </div>
+
+  <!-- Conta -->
+  <div class="modal-overlay" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="accountName">
+    <div class="modal">
+      <button class="modal-close" data-close aria-label="Fechar modal">×</button>
+      <div style="display:flex;align-items:center;gap:1rem;padding-bottom:1.5rem;border-bottom:1px solid var(--border);margin-bottom:1.5rem;">
+        <div class="user-avatar" id="accountAvatar" style="width:60px;height:60px;font-size:1.6rem;" aria-hidden="true">J</div>
+        <div>
+          <div id="accountName" style="font-family:var(--font-serif);font-size:1.4rem;font-weight:700;">Usuário</div>
+          <div style="color:var(--text-dim);font-size:0.85rem;" id="accountEmail">email@exemplo.com</div>
+        </div>
+      </div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1.2rem;margin-bottom:1rem;">
+        <div style="font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);font-weight:600;margin-bottom:0.4rem;">Plano atual</div>
+        <div style="font-family:var(--font-serif);font-size:1.4rem;font-weight:700;color:var(--accent);" id="accountPlanValue">Free</div>
+        <div style="font-size:0.8rem;color:var(--text-dim);margin-top:0.3rem;" id="accountPlanDesc">Acesso apenas a prévias.</div>
+      </div>
+      <div id="accountActions"></div>
+      <button class="btn btn-outline btn-block" id="logoutBtn" style="margin-top:1rem;">Sair da conta</button>
+    </div>
+  </div>
+
+  <!-- Planos -->
+  <div class="modal-overlay" id="plansModal" role="dialog" aria-modal="true" aria-labelledby="plansModalTitle">
+    <div class="modal modal-xl">
+      <button class="modal-close" data-close aria-label="Fechar planos">×</button>
+      <h2 id="plansModalTitle">Escolha seu <span style="color:var(--accent);">plano</span></h2>
+      <p class="sub" id="plansModalSub">Apoie a arte independente e tenha acesso ilimitado.</p>
+      <div class="plans-grid" id="plansGrid"></div>
+    </div>
+  </div>
+
+  <!-- NOTA: os modais subscribeModal e checkoutModal foram REMOVIDOS.
+       O checkout é hospedado no Mercado Pago via checkoutUrl. -->
+
+</div>
+
+<!-- ============ PAINEL ADMIN ============ -->
+<div id="adminSite" style="display:none;">
+  <div id="adminLogin" class="admin-login-wrap">
+    <div class="admin-login-card">
+      <div class="brand"><h1>Acesso Restrito</h1><p>Painel Administrativo</p></div>
+      <form id="adminLoginForm">
+        <div class="form-group"><label for="adminUser">Usuário</label><input type="text" id="adminUser" required autocomplete="username"></div>
+        <div class="form-group"><label for="adminPass">Senha</label><input type="password" id="adminPass" required autocomplete="current-password"></div>
+        <div class="form-error" id="adminLoginError" role="alert"></div>
+        <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Entrar no painel</button>
+      </form>
+      <button type="button" class="btn btn-ghost btn-block" id="adminForgotPassword" style="margin-top:0.75rem;">Esqueci minha senha</button>
+      <div class="modal-switch" style="margin-top:1.5rem;"><a id="backToSiteFromLogin">← Voltar ao site</a></div>
+    </div>
+  </div>
+
+  <div id="adminDashboard" class="admin-layout" style="display:none;">
+    <aside class="admin-sidebar">
+      <div class="brand"><h2>Painel</h2><p>Joseph Matthos</p></div>
+      <nav class="admin-nav" aria-label="Navegação do painel">
+        <button class="active" data-tab="dashboard"><span class="ico">📊</span> Dashboard</button>
+        <button data-tab="geral"><span class="ico">⚙️</span> Geral</button>
+        <button data-tab="hero"><span class="ico">🎬</span> Hero</button>
+        <button data-tab="sobre"><span class="ico">👤</span> Sobre</button>
+        <button data-tab="filosofia"><span class="ico">💭</span> Filosofia</button>
+        <button data-tab="discografia"><span class="ico">💿</span> Discografia</button>
+        <button data-tab="vendas"><span class="ico">💰</span> Vendas</button>
+        <button data-tab="planos"><span class="ico">💳</span> Planos</button>
+        <button data-tab="contato"><span class="ico">📞</span> Contato</button>
+        <button data-tab="usuarios"><span class="ico">👥</span> Usuários</button>
+        <button data-tab="aparencia"><span class="ico">🎨</span> Aparência</button>
+        <button data-tab="backup"><span class="ico">💾</span> Backup</button>
+      </nav>
+      <div style="padding:1.5rem;margin-top:1rem;border-top:1px solid var(--border);">
+        <button class="btn btn-outline btn-sm btn-block" id="adminViewSite">👁 Ver site</button>
+        <button class="btn btn-ghost btn-sm btn-block" id="adminLogout" style="margin-top:0.5rem;">Sair</button>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <div class="admin-topbar">
+        <h1 id="adminTabTitle">Dashboard</h1>
+        <div class="actions">
+          <button class="btn btn-outline btn-sm" id="adminResetBtn">↺ Restaurar padrão</button>
+          <button class="btn btn-primary btn-sm" id="adminSaveBtn">💾 Salvar alterações</button>
+        </div>
+      </div>
+
+      <div class="admin-section active" id="tab-dashboard">
+        <div class="stats-grid" id="statsGrid"></div>
+        <div class="admin-card"><h3>Atividade recente <span class="hint">últimos cadastros</span></h3><div id="recentUsersTable"></div></div>
+      </div>
+
+      <div class="admin-section" id="tab-geral">
+        <div class="admin-card">
+          <h3>Identidade do site</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Nome do artista (logo)</label><input type="text" data-content="branding.nameParts.first"></div>
+            <div class="form-group"><label>Nome destacado</label><input type="text" data-content="branding.nameParts.accent"></div>
+          </div>
+          <div class="form-group"><label>Texto do rodapé</label><input type="text" data-content="branding.footer"></div>
+          <div class="form-group"><label>Título da aba (SEO)</label><input type="text" data-content="branding.meta.title"></div>
+          <div class="form-group"><label>Descrição (meta description)</label><textarea data-content="branding.meta.description" style="min-height:60px;"></textarea></div>
+        </div>
+        <div class="admin-card">
+          <h3>Imagem de fundo do site</h3>
+          <div class="form-group"><label>URL da imagem</label><input type="text" data-content="branding.bgImage" placeholder="Padrão: assets/img/tema.png"></div>
+          <div class="upload-zone" data-upload-target="bgUpload" role="button" tabindex="0">📁 Ou clique para enviar arquivo</div>
+          <input type="file" id="bgUpload" accept="image/*" style="display:none;">
+          <div class="admin-img-preview" id="bgPreview">Sem imagem</div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-hero">
+        <div class="admin-card">
+          <h3>Seção Hero</h3>
+          <div class="form-group"><label>Título principal (HTML permitido)</label><textarea data-content="hero.title"></textarea></div>
+          <div class="form-group"><label>Subtítulo</label><textarea data-content="hero.subtitle"></textarea></div>
+          <div class="form-row">
+            <div class="form-group"><label>Botão primário (texto)</label><input type="text" data-content="hero.primaryBtn.text"></div>
+            <div class="form-group"><label>Botão primário (link)</label><input type="text" data-content="hero.primaryBtn.link"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Botão secundário (texto)</label><input type="text" data-content="hero.secondaryBtn.text"></div>
+            <div class="form-group"><label>Botão secundário (link)</label><input type="text" data-content="hero.secondaryBtn.link"></div>
+          </div>
+          <div class="form-group"><label>Frase do vinil</label><input type="text" data-content="hero.vinyl.lyric"></div>
+        </div>
+        <div class="admin-card">
+          <h3>Imagem do vinil (opcional)</h3>
+          <div class="form-group"><label>URL da imagem</label><input type="text" data-content="hero.vinyl.image" placeholder="Padrão: assets/img/vinil.png"></div>
+          <div class="upload-zone" data-upload-target="vinylUpload">📁 Ou enviar arquivo</div>
+          <input type="file" id="vinylUpload" accept="image/*" style="display:none;">
+          <div class="admin-img-preview" id="vinylPreview">Sem imagem</div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-sobre">
+        <div class="admin-card">
+          <h3>Seção Sobre</h3>
+          <div class="form-group"><label>Título (HTML permitido)</label><input type="text" data-content="sobre.title"></div>
+          <div class="form-group"><label>Subtítulo</label><input type="text" data-content="sobre.subtitle"></div>
+          <div class="form-group"><label>Parágrafos (um por linha)</label><textarea data-content="sobre.paragraphs" style="min-height:180px;"></textarea></div>
+          <div class="form-group"><label>Frase de destaque</label><input type="text" data-content="sobre.quote"></div>
+        </div>
+        <div class="admin-card">
+          <h3>Imagem da seção Sobre</h3>
+          <div class="form-group"><label>URL da imagem</label><input type="text" data-content="sobre.image" placeholder="Padrão: assets/img/josephmatthos.png"></div>
+          <div class="upload-zone" data-upload-target="sobreUpload">📁 Ou enviar arquivo</div>
+          <input type="file" id="sobreUpload" accept="image/*" style="display:none;">
+          <div class="admin-img-preview" id="sobrePreview">Sem imagem</div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-filosofia">
+        <div class="admin-card">
+          <h3>Seção Filosofia</h3>
+          <div class="form-group"><label>Título (HTML permitido)</label><input type="text" data-content="filosofia.title"></div>
+          <div class="form-group"><label>Subtítulo</label><input type="text" data-content="filosofia.subtitle"></div>
+        </div>
+        <div class="admin-card">
+          <h3>Frases <span class="hint">+ adicione quantas quiser</span></h3>
+          <div id="frasesEditor"></div>
+          <button class="btn btn-outline btn-sm" id="addFraseBtn" style="margin-top:0.5rem;">+ Adicionar frase</button>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-discografia">
+        <div class="admin-card">
+          <h3>Títulos da seção</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Título</label><input type="text" data-content="discografia.title"></div>
+            <div class="form-group"><label>Subtítulo</label><input type="text" data-content="discografia.subtitle"></div>
+          </div>
+        </div>
+        <div class="admin-card">
+          <h3>Álbuns / EPs / Singles</h3>
+          <div id="albumsEditor"></div>
+          <button class="btn btn-primary btn-sm" id="addAlbumBtn" style="margin-top:1rem;">+ Adicionar álbum/EP/single</button>
+        </div>
+        <div class="admin-card">
+          <h3>Playlists</h3>
+          <p class="hint">Use referências no formato <code>id-do-album:índice-da-faixa</code>, separadas por vírgula.</p>
+          <div id="playlistsEditor"></div>
+          <button class="btn btn-outline btn-sm" id="addPlaylistBtn" style="margin-top:1rem;">+ Criar playlist</button>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-vendas">
+        <div class="admin-card">
+          <h3>Resumo de vendas
+            <button class="btn btn-outline btn-sm" id="salesRefresh" style="float:right;">↻ Atualizar</button>
+          </h3>
+          <div class="stats-grid" id="salesStats"></div>
+        </div>
+        <div class="admin-card">
+          <h3>Histórico <span class="hint" id="salesCount"></span></h3>
+          <div id="salesTable"></div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-planos">
+        <div class="admin-card">
+          <h3>Títulos do modal</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Título</label><input type="text" data-content="planos.title"></div>
+            <div class="form-group"><label>Subtítulo</label><input type="text" data-content="planos.subtitle"></div>
+          </div>
+        </div>
+        <div class="admin-card"><h3>Planos de assinatura</h3><div id="plansEditor"></div></div>
+      </div>
+
+      <div class="admin-section" id="tab-contato">
+        <div class="admin-card">
+          <h3>Seção Contato</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Título (HTML)</label><input type="text" data-content="contato.title"></div>
+            <div class="form-group"><label>Subtítulo</label><input type="text" data-content="contato.subtitle"></div>
+          </div>
+          <div class="form-group"><label>Heading do bloco</label><input type="text" data-content="contato.heading"></div>
+          <div class="form-group"><label>Descrição</label><textarea data-content="contato.description"></textarea></div>
+        </div>
+        <div class="admin-card">
+          <h3>Redes sociais <span class="hint">+ adicione</span></h3>
+          <div id="socialEditor"></div>
+          <button class="btn btn-outline btn-sm" id="addSocialBtn" style="margin-top:0.5rem;">+ Adicionar rede</button>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-usuarios">
+        <div class="admin-card">
+          <h3>Usuários cadastrados
+            <span class="hint" id="usersCount"></span>
+            <button class="btn btn-outline btn-sm" id="usersRefresh" style="float:right;">↻ Atualizar</button>
+          </h3>
+          <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+            <input type="text" id="userSearch" placeholder="Buscar por nome ou e-mail..." style="flex:1;min-width:200px;padding:0.6rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--font-sans);outline:none;" aria-label="Buscar usuário">
+            <select id="userFilter" style="padding:0.6rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--font-sans);outline:none;" aria-label="Filtrar por plano">
+              <option value="all">Todos os planos</option>
+              <option value="free">Free</option>
+              <option value="premium">Premium</option>
+              <option value="anual">Anual</option>
+            </select>
+          </div>
+          <div id="usersTable"></div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-aparencia">
+        <div class="admin-card">
+          <h3>Cores</h3>
+          <div class="form-row-3">
+            <div class="form-group"><label>Cor de fundo</label><input type="color" data-content="aparencia.bg" style="height:50px;padding:0.3rem;"></div>
+            <div class="form-group"><label>Cor de destaque</label><input type="color" data-content="aparencia.accent" style="height:50px;padding:0.3rem;"></div>
+            <div class="form-group"><label>Cor do texto</label><input type="color" data-content="aparencia.text" style="height:50px;padding:0.3rem;"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Cor accent escura</label><input type="color" data-content="aparencia.accentDark" style="height:50px;padding:0.3rem;"></div>
+            <div class="form-group"><label>Cor de borda</label><input type="color" data-content="aparencia.border" style="height:50px;padding:0.3rem;"></div>
+          </div>
+        </div>
+        <div class="admin-card">
+          <h3>Tipografia</h3>
+          <div class="form-row">
+            <div class="form-group"><label>Fonte de títulos</label>
+              <select data-content="aparencia.fontSerif">
+                <option value="'Playfair Display', serif">Playfair Display (padrão)</option>
+                <option value="Georgia, serif">Georgia</option>
+                <option value="'Times New Roman', serif">Times New Roman</option>
+                <option value="'Courier New', monospace">Courier New</option>
+              </select>
+            </div>
+            <div class="form-group"><label>Fonte do corpo</label>
+              <select data-content="aparencia.fontSans">
+                <option value="'Inter', sans-serif">Inter (padrão)</option>
+                <option value="Arial, sans-serif">Arial</option>
+                <option value="Helvetica, sans-serif">Helvetica</option>
+                <option value="'Courier New', monospace">Courier New</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-backup">
+        <div class="admin-card">
+          <h3>Exportar / Importar conteúdo</h3>
+          <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:1rem;">JSON com todo o conteúdo do site. Persistido no servidor (Supabase).</p>
+          <div style="display:flex;gap:0.7rem;flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" id="exportBtn">⬇ Exportar JSON</button>
+            <button class="btn btn-outline btn-sm" data-upload-target="importFile">⬆ Importar JSON</button>
+            <input type="file" id="importFile" accept="application/json" style="display:none;">
+          </div>
+          <div id="backupInfo" style="margin-top:1rem;"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Modal admin (compartilhado) -->
+<div class="admin-modal-overlay" id="adminModal" role="dialog" aria-modal="true">
+  <div class="admin-modal">
+    <button class="modal-close" data-close aria-label="Fechar">×</button>
+    <div id="adminModalContent"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <span class="icon" id="toastIcon">✦</span>
+  <span id="toastMsg"></span>
+</div>
+
+<!-- ============================================================
+     ENTRYPOINTS (ES modules)
+     ------------------------------------------------------------
+     - site.js       → site público
+     - admin/index.js → painel administrativo
+     Ambos importam utils.js, config.js e seus submódulos.
+     ============================================================ -->
+<script type="module" src="js/site.js"></script>
+<script type="module" src="js/admin/index.js"></script>
+
+</body>
+</html>

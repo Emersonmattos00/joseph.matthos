@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Termos de Uso | Joseph Matthos</title>
+<meta name="description" content="Termos de Uso da plataforma Joseph Matthos. Leia as regras de utilização da plataforma, assinaturas e compras.">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0b0a0c">
+<link rel="canonical" href="https://josephmatthos.vercel.app/termos-uso">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Termos de Uso | Joseph Matthos">
+<meta property="og:description" content="Regras de utilização da plataforma, assinaturas e compras.">
+<meta property="og:url" content="https://josephmatthos.vercel.app/termos-uso">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary">
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0b0a0c;
+    --bg-elev: #131216;
+    --card: #1a181f;
+    --text: #eee9e0;
+    --text-dim: #b0a9a0;
+    --accent: #d4af37;
+    --border: #2b272f;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  .container {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 4rem 2rem 6rem;
+  }
+
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+    transition: opacity 0.2s;
+  }
+  .back-link:hover { opacity: 0.7; }
+
+  /* ===== NAV ===== */
+  .page-nav {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+    transition: color 0.2s;
+  }
+  .page-nav a:hover { color: var(--accent); }
+
+  header {
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow {
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
+  }
+  h1 .gold { color: var(--accent); font-style: italic; }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    margin-bottom: 0.5rem;
+  }
+  .update-date {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  section {
+    margin-bottom: 3rem;
+    scroll-margin-top: 2rem;
+  }
+
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: var(--accent);
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+  h2::before {
+    content: "✦";
+    font-size: 0.8em;
+    speak: none;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+  }
+
+  p { margin-bottom: 1rem; color: var(--text-dim); }
+  ul, ol { margin: 1rem 0 1.5rem 1.5rem; color: var(--text-dim); }
+  li { margin-bottom: 0.5rem; }
+  strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); }
+
+  .highlight-box {
+    background: var(--card);
+    border-left: 3px solid var(--accent);
+    padding: 1.2rem 1.5rem;
+    border-radius: 0 8px 8px 0;
+    margin: 1.5rem 0;
+  }
+  .highlight-box p { margin-bottom: 0; }
+
+  .warning-box {
+    background: rgba(212, 175, 55, 0.08);
+    border: 1px solid rgba(212, 175, 55, 0.3);
+    border-radius: 12px;
+    padding: 1.2rem 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .warning-box p { margin-bottom: 0; color: var(--text); }
+
+  /* ===== TOC ===== */
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin-bottom: 3rem;
+  }
+  .toc h3 {
+    margin-top: 0;
+    color: var(--accent);
+    font-family: 'Playfair Display', serif;
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+  }
+  .toc ol {
+    margin: 0;
+    counter-reset: toc;
+    list-style: none;
+    padding-left: 0;
+  }
+  .toc li {
+    counter-increment: toc;
+    margin-bottom: 0.5rem;
+    padding-left: 1.5rem;
+    position: relative;
+  }
+  .toc li::before {
+    content: counter(toc) ".";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.9em;
+  }
+  .toc a {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .toc a:hover,
+  .toc a[aria-current="true"] {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* ===== TABELAS ===== */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    background: var(--card);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  table caption {
+    text-align: left;
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: 'Playfair Display', serif;
+  }
+  th, td {
+    padding: 0.85rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.92rem;
+  }
+  th {
+    background: var(--bg-elev);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  td { color: var(--text-dim); }
+  tr:last-child td { border-bottom: none; }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  footer .current-page {
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  /* ===== BACK TO TOP ===== */
+  #backToTop {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    box-shadow: 0 4px 20px rgba(212, 175, 55, 0.3);
+    z-index: 100;
+  }
+  #backToTop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #backToTop:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 25px rgba(212, 175, 55, 0.5);
+  }
+  #backToTop:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 600px) {
+    .container { padding: 2.5rem 1.25rem 4rem; }
+    h2 { font-size: 1.35rem; }
+    th, td { padding: 0.65rem 0.75rem; font-size: 0.85rem; }
+    .page-nav { gap: 1rem; }
+    #backToTop { bottom: 1rem; right: 1rem; width: 42px; height: 42px; }
+  }
+
+  /* ===== IMPRESSÃO ===== */
+  @media print {
+    body { background: #fff; color: #000; }
+    .back-link, .page-nav, #backToTop, footer, .toc { display: none; }
+    h1, h2, h3 { color: #000; }
+    a { color: #000; text-decoration: underline; }
+    p, li, td { color: #333; }
+    .highlight-box, .warning-box { border: 1px solid #ccc; background: #f9f9f9; }
+    table { border: 1px solid #ccc; }
+  }
+</style>
+</head>
+<body id="top">
+  <div class="container">
+    <a href="index.html" class="back-link">← Voltar ao site</a>
+
+    <header>
+      <div class="eyebrow">Documento Legal</div>
+      <h1>Termos de <span class="gold">Uso</span></h1>
+      <p class="subtitle">
+        Regras e condições que regem o uso da plataforma Joseph Matthos,
+        incluindo acesso a conteúdo, assinaturas e compras de faixas.
+      </p>
+      <p class="update-date">
+        Última atualização: <time datetime="2026-09-15">15 de setembro de 2026</time>
+        · Versão 1.0
+      </p>
+    </header>
+
+    <nav class="toc" aria-label="Índice dos termos">
+      <h3>Índice</h3>
+      <ol>
+        <li><a href="#aceitacao">Aceitação dos Termos</a></li>
+        <li><a href="#servico">Descrição do Serviço</a></li>
+        <li><a href="#conta">Cadastro e Conta do Usuário</a></li>
+        <li><a href="#planos">Planos de Assinatura</a></li>
+        <li><a href="#loja">Loja de Faixas</a></li>
+        <li><a href="#propriedade">Propriedade Intelectual</a></li>
+        <li><a href="#conduta">Conduta do Usuário</a></li>
+        <li><a href="#cancelamento">Cancelamento e Reembolso</a></li>
+        <li><a href="#limitacao">Limitação de Responsabilidade</a></li>
+        <li><a href="#modificacoes">Modificações dos Termos</a></li>
+        <li><a href="#lei">Lei Aplicável e Foro</a></li>
+        <li><a href="#contato">Contato</a></li>
+      </ol>
+    </nav>
+
+    <section id="aceitacao">
+      <h2>1. Aceitação dos Termos</h2>
+      <p>
+        Ao acessar, navegar, cadastrar-se ou utilizar qualquer funcionalidade da
+        plataforma <strong>Joseph Matthos</strong> (doravante "Plataforma"), você
+        declara estar de pleno acordo com os presentes Termos de Uso e com a
+        <a href="politica-privacidade.html">Política de Privacidade</a>.
+      </p>
+      <p>
+        Caso não concorde com qualquer disposição aqui estabelecida, pedimos que
+        não utilize a Plataforma. O uso continuado após eventuais alterações
+        caracteriza aceitação tácita da nova versão.
+      </p>
+    </section>
+
+    <section id="servico">
+      <h2>2. Descrição do Serviço</h2>
+      <p>A Plataforma Joseph Matthos oferece:</p>
+      <ul>
+        <li>Acesso gratuito à discografia com prévias de 30 segundos;</li>
+        <li>Assinatura Premium mensal e anual, com acesso completo a todas as faixas e downloads ilimitados;</li>
+        <li>Loja de faixas individuais, com pagamento único e download imediato;</li>
+        <li>Aluguel de faixas por 48 horas, mediante pagamento único;</li>
+        <li>Conteúdo editorial (biografia, frases, reflexões) e informações de shows;</li>
+        <li>Newsletter opcional com novidades exclusivas.</li>
+      </ul>
+      <p>
+        A Plataforma reserva-se o direito de modificar, suspender ou encerrar,
+        temporária ou permanentemente, qualquer funcionalidade, com ou sem aviso
+        prévio, não sendo responsável perante você ou terceiros por tais medidas.
+      </p>
+
+      <h3>2.1 Disponibilidade</h3>
+      <p>
+        Buscamos manter a Plataforma disponível <strong>24 horas por dia, 7 dias
+        por semana</strong>, mas não garantimos disponibilidade ininterrupta.
+        Manutenções programadas serão comunicadas com antecedência mínima de
+        48 horas.
+      </p>
+      <p>
+        Eventuais indisponibilidades por motivos de força maior (falhas de
+        provedores, ataques, desastres naturais) não geram direito a reembolso,
+        mas faremos o possível para restaurar o serviço o mais rápido possível.
+      </p>
+    </section>
+
+    <section id="conta">
+      <h2>3. Cadastro e Conta do Usuário</h2>
+
+      <h3>3.1 Elegibilidade</h3>
+      <p>
+        Para criar uma conta, você deve ter pelo menos <strong>18 anos</strong>,
+        ou ser maior de 13 anos com autorização expressa dos pais ou responsáveis
+        legais, conforme Art. 14 da LGPD.
+      </p>
+
+      <h3>3.2 Veracidade das informações</h3>
+      <p>
+        Ao se cadastrar, você se compromete a fornecer informações verdadeiras,
+        atualizadas e completas, e a mantê-las atualizadas. Dados falsos ou
+        imprecisos podem resultar em suspensão ou cancelamento da conta.
+      </p>
+
+      <h3>3.3 Segurança da conta</h3>
+      <p>
+        Você é responsável por manter a confidencialidade de sua senha e por
+        todas as atividades realizadas em sua conta. Recomendamos o uso de senhas
+        fortes (mínimo 8 caracteres, combinando letras, números e símbolos).
+      </p>
+      <p>
+        Cada usuário pode manter <strong>apenas uma conta ativa</strong>. A
+        criação de múltiplas contas para burlar limites ou promoções resultará
+        em suspensão.
+      </p>
+
+      <div class="warning-box">
+        <p>
+          <span role="img" aria-label="Aviso">⚠</span>
+          <strong> Notifique-nos imediatamente</strong> caso suspeite de uso
+          não autorizado da sua conta através do e-mail de contato indicado na
+          seção 12.
+        </p>
+      </div>
+
+      <h3>3.4 Contas inativas</h3>
+      <p>
+        Contas sem login por mais de <strong>24 meses consecutivos</strong>
+        poderão ser desativadas, com aviso prévio por e-mail cadastrado com
+        antecedência mínima de 30 dias. O conteúdo adquirido (faixas compradas)
+        permanece acessível mesmo após a desativação.
+      </p>
+    </section>
+
+    <section id="planos">
+      <h2>4. Planos de Assinatura</h2>
+      <p>Oferecemos três modalidades de acesso:</p>
+
+      <table>
+        <caption>Comparação dos planos de assinatura</caption>
+        <thead>
+          <tr>
+            <th scope="col">Plano</th>
+            <th scope="col">Valor</th>
+            <th scope="col">Renovação</th>
+            <th scope="col">Benefícios</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Visitante</strong></td>
+            <td>Gratuito</td>
+            <td>—</td>
+            <td>Prévias de 30s, navegação completa</td>
+          </tr>
+          <tr>
+            <td><strong>Premium Mensal</strong></td>
+            <td>R$ 19,90</td>
+            <td>Mensal (automática)</td>
+            <td>Álbuns completos + downloads ilimitados</td>
+          </tr>
+          <tr>
+            <td><strong>Premium Anual</strong></td>
+            <td>R$ 179,00</td>
+            <td>Anual (automática)</td>
+            <td>Tudo do mensal + benefícios exclusivos</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>4.1 Cobrança</h3>
+      <p>
+        Ao assinar um plano, você autoriza a cobrança recorrente no cartão
+        cadastrado. O valor pode ser reajustado anualmente pelo
+        <strong>IPCA/IBGE</strong> ou índice equivalente, mediante aviso prévio
+        de, no mínimo, 30 dias.
+      </p>
+
+      <h3>4.2 Formas de pagamento</h3>
+      <p>
+        Os pagamentos são processados pelo <strong>Mercado Pago</strong>.
+        Aceitamos cartão de crédito, débito, PIX e boleto (conforme
+        disponibilidade). <strong>Não armazenamos dados de cartão</strong> em
+        nossos servidores — todas as transações são processadas diretamente
+        pelo gateway.
+      </p>
+      <p>
+        Todos os preços são em Reais (BRL) e incluem impostos aplicáveis.
+      </p>
+
+      <h3>4.3 Cancelamento</h3>
+      <p>
+        Você pode cancelar sua assinatura a qualquer momento através da área de
+        conta. O cancelamento entra em vigor ao final do período já pago, sem
+        direito a reembolso proporcional.
+      </p>
+
+      <h3>4.4 Renovação automática</h3>
+      <p>
+        As assinaturas são renovadas automaticamente ao final de cada período.
+        Você será notificado por e-mail <strong>7 dias antes</strong> de cada
+        renovação, podendo cancelar sem custo adicional.
+      </p>
+    </section>
+
+    <section id="loja">
+      <h2>5. Loja de Faixas</h2>
+      <p>
+        As faixas adquiridas individualmente na loja caracterizam
+        <strong>licença de uso pessoal e intransferível</strong>, com as
+        seguintes características:
+      </p>
+      <ul>
+        <li>Pagamento único, sem mensalidade;</li>
+        <li>Download imediato em formato digital (MP3 ou similar);</li>
+        <li>Acesso vitalício ao arquivo adquirido enquanto a plataforma existir;</li>
+        <li>Desconto progressivo a partir de 3 faixas no mesmo carrinho (conforme regra vigente);</li>
+        <li>Não inclui direitos de reprodução pública, sincronização ou comercialização.</li>
+      </ul>
+
+      <div class="highlight-box">
+        <p>
+          <strong>Importante:</strong> as faixas compradas permanecem disponíveis
+          para download mesmo após eventual cancelamento de assinatura Premium.
+        </p>
+      </div>
+
+      <h3>5.1 Aluguel de faixas (48h)</h3>
+      <p>
+        Oferecemos a modalidade de <strong>aluguel por 48 horas</strong>, com
+        pagamento único. Durante esse período, você tem acesso completo à faixa.
+        Após o prazo, o acesso expira automaticamente, sem renovação.
+      </p>
+      <p>
+        O aluguel <strong>não inclui download</strong> — apenas reprodução
+        durante o período contratado.
+      </p>
+
+      <h3>5.2 Disponibilidade de downloads</h3>
+      <p>
+        Os arquivos digitais ficam disponíveis para download por, no mínimo,
+        <strong>5 anos</strong> a contar da data da compra. Recomendamos que você
+        faça backup dos arquivos adquiridos em seus próprios dispositivos.
+      </p>
+    </section>
+
+    <section id="propriedade">
+      <h2>6. Propriedade Intelectual</h2>
+      <p>
+        Todo o conteúdo da Plataforma — incluindo, mas não se limitando a,
+        músicas, letras, áudios, capas de álbuns, logotipos, textos, imagens,
+        vídeos, design e código-fonte — é de propriedade exclusiva de
+        <strong>Joseph Matthos</strong> ou de seus licenciantes, protegido por
+        leis brasileiras e internacionais de direitos autorais, marcas e
+        propriedade intelectual.
+      </p>
+
+      <h3>6.1 Uso permitido</h3>
+      <p>Você pode:</p>
+      <ul>
+        <li>Ouvir e baixar conteúdo para uso pessoal e privado;</li>
+        <li>Compartilhar links oficiais da Plataforma em redes sociais;</li>
+        <li>Citar pequenos trechos de letras, desde que com atribuição.</li>
+      </ul>
+
+      <h3>6.2 Uso proibido</h3>
+      <p>Você <strong>não pode</strong>:</p>
+      <ul>
+        <li>Reproduzir, distribuir ou compartilhar arquivos de áudio com terceiros;</li>
+        <li>Utilizar as faixas em projetos comerciais, vídeos monetizados ou produções audiovisuais sem autorização expressa;</li>
+        <li>Realizar engenharia reversa, descompilar ou modificar qualquer parte da Plataforma;</li>
+        <li>Remover ou alterar avisos de direitos autorais, marcas ou créditos;</li>
+        <li>Criar obras derivadas das músicas sem autorização prévia e por escrito.</li>
+      </ul>
+
+      <h3>6.3 Violação de direitos autorais</h3>
+      <p>
+        Violações de direitos autorais estão sujeitas às penalidades previstas
+        na <strong>Lei nº 9.610/1998</strong> (Lei de Direitos Autorais),
+        incluindo indenização por perdas e danos e responsabilização criminal.
+      </p>
+    </section>
+
+    <section id="conduta">
+      <h2>7. Conduta do Usuário</h2>
+      <p>Ao utilizar a Plataforma, você se compromete a <strong>não</strong>:</p>
+      <ul>
+        <li>Violar qualquer lei, regulamento ou direito de terceiros;</li>
+        <li>Utilizar a Plataforma para fins ilegais, fraudulentos ou prejudiciais;</li>
+        <li>Transmitir malware, vírus ou qualquer código malicioso;</li>
+        <li>Realizar scraping, mineração de dados ou extração automatizada em larga escala;</li>
+        <li>Criar múltiplas contas para burlar limites ou promoções;</li>
+        <li>Fornecer informações falsas, enganosas ou de terceiros sem autorização;</li>
+        <li>Interferir no funcionamento normal da Plataforma ou na experiência de outros usuários;</li>
+        <li>Assediar, difamar, ameaçar ou constranger qualquer pessoa através da Plataforma;</li>
+        <li>Contornar ou tentar contornar medidas de segurança, DRM ou limitações de acesso;</li>
+        <li>Utilizar bots, scrapers ou ferramentas automatizadas para acessar a Plataforma.</li>
+      </ul>
+      <p>
+        A violação destes princípios pode resultar em suspensão ou encerramento
+        da sua conta, sem prejuízo de medidas judiciais cabíveis.
+      </p>
+    </section>
+
+    <section id="cancelamento">
+      <h2>8. Cancelamento e Reembolso</h2>
+
+      <h3>8.1 Direito de Arrependimento (Art. 49, CDC)</h3>
+      <p>
+        Para compras e assinaturas realizadas online, você tem até
+        <strong>7 (sete) dias corridos</strong> a contar da data da contratação
+        para solicitar cancelamento e reembolso integral, sem necessidade de
+        justificativa, conforme Art. 49 do Código de Defesa do Consumidor.
+      </p>
+
+      <h3>8.2 Como solicitar</h3>
+      <p>
+        Para exercer o direito de arrependimento, envie mensagem para
+        <strong>suporte@josephmatthos.com</strong> informando:
+      </p>
+      <ul>
+        <li>Nome completo e e-mail cadastrado;</li>
+        <li>Data da compra/assinatura;</li>
+        <li>Número do pedido (quando aplicável);</li>
+        <li>Declaração expressa de arrependimento.</li>
+      </ul>
+
+      <h3>8.3 Prazo de processamento</h3>
+      <p>
+        O reembolso será processado em até <strong>10 (dez) dias úteis</strong>,
+        utilizando o mesmo meio de pagamento da compra original, salvo acordo
+        diverso expressamente formalizado.
+      </p>
+
+      <h3>8.4 Exceções</h3>
+      <p>O direito de arrependimento <strong>não se aplica</strong> a:</p>
+      <ul>
+        <li>Faixas já baixadas pelo usuário (conforme Art. 49, parágrafo único, CDC);</li>
+        <li>Aluguéis de faixas já utilizados;</li>
+        <li>Serviços já prestados com consentimento expresso do usuário.</li>
+      </ul>
+
+      <h3>8.5 Cancelamento de assinatura</h3>
+      <p>
+        O cancelamento de assinatura pode ser feito a qualquer momento pela
+        área de conta, sem multa. O acesso Premium permanece até o final do
+        período já pago.
+      </p>
+    </section>
+
+    <section id="limitacao">
+      <h2>9. Limitação de Responsabilidade</h2>
+      <p>
+        A Plataforma é fornecida "no estado em que se encontra" ("as is"), sem
+        garantias expressas ou implícitas de qualquer natureza.
+      </p>
+      <p>Na máxima extensão permitida por lei, Joseph Matthos não se responsabiliza por:</p>
+      <ul>
+        <li>Interrupções temporárias do serviço por motivos técnicos, de manutenção ou força maior;</li>
+        <li>Perda de dados por falha do equipamento do usuário;</li>
+        <li>Danos indiretos, incidentais, consequenciais ou lucros cessantes;</li>
+        <li>Conteúdo, produtos ou serviços de terceiros acessados por links externos;</li>
+        <li>Uso indevido da sua conta por terceiros;</li>
+        <li>Alterações em funcionalidades, preços ou disponibilidade de conteúdo;</li>
+        <li>Incompatibilidade com navegadores ou dispositivos específicos;</li>
+        <li>Falhas de conexão à internet do usuário.</li>
+      </ul>
+
+      <div class="highlight-box">
+        <p>
+          <strong>Nota:</strong> Nada nestes Termos exclui ou limita direitos
+          garantidos pelo Código de Defesa do Consumidor (Lei nº 8.078/1990).
+        </p>
+      </div>
+    </section>
+
+    <section id="modificacoes">
+      <h2>10. Modificações dos Termos</h2>
+      <p>
+        Reservamo-nos o direito de modificar estes Termos de Uso a qualquer
+        momento, publicando a versão atualizada nesta mesma página, com a
+        respectiva data de atualização.
+      </p>
+      <p>
+        Alterações substanciais que afetem seus direitos contratuais serão
+        comunicadas por e-mail ou mediante aviso destacado na Plataforma com, no
+        mínimo, <strong>15 (quinze) dias</strong> de antecedência. A continuidade
+        do uso após esse prazo implica aceitação tácita.
+      </p>
+      <p>
+        Recomendamos que você revise esta página periodicamente para se manter
+        informado sobre eventuais alterações.
+      </p>
+    </section>
+
+    <section id="lei">
+      <h2>11. Lei Aplicável e Foro</h2>
+      <p>
+        Estes Termos são regidos e interpretados de acordo com as leis da
+        <strong>República Federativa do Brasil</strong>, em especial:
+      </p>
+      <ul>
+        <li><strong>Código de Defesa do Consumidor</strong> (Lei nº 8.078/1990);</li>
+        <li><strong>Marco Civil da Internet</strong> (Lei nº 12.965/2014);</li>
+        <li><strong>Lei Geral de Proteção de Dados</strong> (Lei nº 13.709/2018);</li>
+        <li><strong>Lei de Direitos Autorais</strong> (Lei nº 9.610/1998).</li>
+      </ul>
+      <p>
+        Fica eleito o foro da Comarca de <strong>São Paulo/SP</strong> para
+        dirimir quaisquer controvérsias oriundas destes Termos, com renúncia
+        expressa a qualquer outro, por mais privilegiado que seja, ressalvada a
+        competência especial prevista no <strong>Art. 101, I, do CDC</strong>
+        (domicílio do consumidor).
+      </p>
+      <p>
+        Antes de recorrer ao Poder Judiciário, as partes se comprometem a tentar
+        resolver eventuais conflitos de forma amigável, por meio dos canais de
+        contato indicados na seção 12.
+      </p>
+    </section>
+
+    <section id="contato">
+      <h2>12. Contato</h2>
+      <p>
+        Para dúvidas, sugestões, reclamações ou solicitações relacionadas a estes
+        Termos de Uso, entre em contato pelos canais abaixo:
+      </p>
+      <ul>
+        <li><strong>E-mail geral:</strong> <a href="mailto:contato@josephmatthos.com">contato@josephmatthos.com</a></li>
+        <li><strong>Assuntos de privacidade:</strong> <a href="mailto:privacidade@josephmatthos.com">privacidade@josephmatthos.com</a></li>
+        <li><strong>Suporte a compras e assinaturas:</strong> <a href="mailto:suporte@josephmatthos.com">suporte@josephmatthos.com</a></li>
+      </ul>
+      <p>
+        Todas as mensagens são respondidas em até <strong>5 (cinco) dias
+        úteis</strong>. Para questões urgentes relacionadas a segurança ou
+        cobrança indevida, marque o assunto como <strong>"URGENTE"</strong>.
+      </p>
+    </section>
+
+    <footer>
+      <p>© 2026 Joseph Matthos. Todos os direitos reservados.</p>
+      <p style="margin-top:0.75rem;">
+        <a href="index.html">Início</a> ·
+        <span class="current-page" aria-current="page">Termos de Uso</span> ·
+        <a href="politica-privacidade.html">Política de Privacidade</a>
+      </p>
+      <p style="margin-top:0.75rem;font-size:0.75rem;opacity:0.7;">
+        Versão 1.0 · Última atualização: 15 de setembro de 2026
+      </p>
+    </footer>
+  </div>
+
+  <!-- Botão "Voltar ao topo" -->
+  <button type="button" id="backToTop" aria-label="Voltar ao topo">↑</button>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /* ============================================================
+         BOTÃO VOLTAR AO TOPO
+         ============================================================ */
+      var backToTop = document.getElementById('backToTop');
+      var scrollThreshold = 400;
+
+      function toggleBackToTop() {
+        if (!backToTop) return;
+        backToTop.classList.toggle('visible', window.scrollY > scrollThreshold);
+      }
+
+      if (backToTop) {
+        backToTop.addEventListener('click', function () {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+
+      window.addEventListener('scroll', toggleBackToTop, { passive: true });
+      toggleBackToTop();
+
+      /* ============================================================
+         ARIA-CURRENT NO TOC (destaca seção ativa)
+         ============================================================ */
+      var tocLinks = document.querySelectorAll('.toc a[href^="#"]');
+      var sections = document.querySelectorAll('section[id]');
+
+      if ('IntersectionObserver' in window && tocLinks.length && sections.length) {
+        var observer = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              var id = entry.target.id;
+              tocLinks.forEach(function (link) {
+                if (link.getAttribute('href') === '#' + id) {
+                  link.setAttribute('aria-current', 'true');
+                } else {
+                  link.removeAttribute('aria-current');
+                }
+              });
+            }
+          });
+        }, {
+          rootMargin: '-20% 0px -70% 0px',
+          threshold: 0
+        });
+
+        sections.forEach(function (section) {
+          observer.observe(section);
+        });
+      }
+
+      /* ============================================================
+         SMOOTH SCROLL COM OFFSET (para TOC)
+         ============================================================ */
+      document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+        link.addEventListener('click', function (e) {
+          var targetId = link.getAttribute('href').slice(1);
+          if (!targetId) return;
+
+          var target = document.getElementById(targetId);
+          if (!target) return;
+
+          e.preventDefault();
+
+          var prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          target.scrollIntoView({
+            behavior: prefersReducedMotion ? 'auto' : 'smooth',
+            block: 'start'
+          });
+
+          if (history.pushState) {
+            history.pushState(null, '', '#' + targetId);
+          }
+
+          target.setAttribute('tabindex', '-1');
+          target.focus({ preventScroll: true });
+        });
+      });
+
+      console.log('[termos] Página carregada · Versão 1.0');
+    })();
+  </script>
+</body>
+</html>

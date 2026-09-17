@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sem conexão | Joseph Matthos</title>
+<meta name="description" content="Você está offline. Algumas funcionalidades da plataforma precisam de internet.">
+<meta name="robots" content="noindex, follow">
+<meta name="theme-color" content="#0b0a0c">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7190208592008203"
+     crossorigin="anonymous"></script>
+ 
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0b0a0c;
+    --card: #1a181f;
+    --text: #eee9e0;
+    --text-dim: #b0a9a0;
+    --accent: #d4af37;
+    --border: #2b272f;
+  }
+  body {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    background-image: radial-gradient(circle at 50% 40%, rgba(212, 175, 55, 0.06), transparent 60%);
+  }
+  .container {
+    max-width: 520px;
+    width: 100%;
+    animation: fadeIn 0.5s ease;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .icon {
+    font-size: 4rem;
+    margin-bottom: 1.5rem;
+    display: inline-block;
+    animation: pulse 2.4s ease-in-out infinite;
+    filter: drop-shadow(0 0 20px rgba(212, 175, 55, 0.3));
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 0.6; }
+    50% { transform: scale(1.08); opacity: 1; }
+  }
+
+  h1 {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-size: clamp(2rem, 6vw, 3rem);
+    color: var(--accent);
+    margin-bottom: 1rem;
+    font-style: italic;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  p {
+    color: var(--text-dim);
+    line-height: 1.7;
+    margin-bottom: 1rem;
+    font-size: 1rem;
+  }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 40px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 2rem;
+    transition: all 0.3s ease;
+  }
+  .status.online {
+    border-color: rgba(74, 222, 128, 0.4);
+    color: #4ade80;
+  }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f87171;
+    transition: background 0.3s ease;
+  }
+  .status.online .status-dot {
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+  }
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 2rem;
+    align-items: center;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.9rem 2rem;
+    text-decoration: none;
+    border-radius: 40px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.85rem;
+    transition: all 0.3s ease;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    min-width: 220px;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+  .btn-primary:hover {
+    background: transparent;
+    color: var(--accent);
+    box-shadow: 0 0 25px rgba(212, 175, 55, 0.25);
+  }
+  .btn-outline {
+    background: transparent;
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+  .btn-outline:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  .hint {
+    margin-top: 1.5rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    opacity: 0.7;
+    line-height: 1.6;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+  <main class="container" role="main">
+    <div class="icon" aria-hidden="true">📡</div>
+
+    <h1>Sem conexão</h1>
+
+    <p>
+      Parece que você está offline. Algumas partes da plataforma ainda
+      funcionam, mas precisamos de internet para carregar áudios e
+      atualizações.
+    </p>
+
+    <div class="status" id="status" role="status" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="statusText">Você está offline</span>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="retryBtn" aria-label="Tentar carregar novamente">
+        ↻ Tentar novamente
+      </button>
+      <a href="/" class="btn btn-outline" aria-label="Voltar para a página inicial">
+        ← Voltar ao site
+      </a>
+    </div>
+
+    <p class="hint">
+      Dica: verifique sua conexão Wi-Fi ou dados móveis. Quando a internet
+      voltar, esta página será atualizada automaticamente.
+    </p>
+  </main>
+
+  <noscript>
+    <style>
+      .actions { display: none; }
+      .status { display: none; }
+    </style>
+    <p style="margin-top:2rem;">
+      <a href="/" class="btn btn-primary">← Voltar ao site</a>
+    </p>
+  </noscript>
+
+<script>
+(function () {
+  var retryBtn = document.getElementById('retryBtn');
+  var statusEl = document.getElementById('status');
+  var statusText = document.getElementById('statusText');
+
+  function updateStatus() {
+    if (navigator.onLine) {
+      statusEl.classList.add('online');
+      statusText.textContent = 'Conexão restaurada';
+    } else {
+      statusEl.classList.remove('online');
+      statusText.textContent = 'Você está offline';
+    }
+  }
+
+  function tryReload() {
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Verificando...';
+    // Pequeno delay pra dar feedback visual
+    setTimeout(function () {
+      window.location.reload();
+    }, 400);
+  }
+
+  retryBtn.addEventListener('click', tryReload);
+
+  window.addEventListener('online', function () {
+    updateStatus();
+    // Recarrega automaticamente quando a conexão volta
+    setTimeout(function () {
+      window.location.reload();
+    }, 800);
+  });
+  window.addEventListener('offline', updateStatus);
+
+  updateStatus();
+
+  // Fallback: se navigator.onLine mentir, tenta uma requisição de teste
+  fetch(window.location.origin + '/favicon.ico', { method: 'HEAD', cache: 'no-store' })
+    .then(function () {
+      statusEl.classList.add('online');
+      statusText.textContent = 'Conexão restaurada';
+      setTimeout(function () { window.location.reload(); }, 600);
+    })
+    .catch(function () {
+      // Continua offline — sem ação
+    });
+})();
+</script>
+</body>
+</html>

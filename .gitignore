@@ -1,0 +1,105 @@
+# ============================================================
+# SISTEMA OPERACIONAL
+# ============================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ============================================================
+# NODE / DEPENDÊNCIAS
+# ============================================================
+node_modules/
+yarn.lock
+pnpm-lock.yaml
+.npm/
+.yarn/
+.pnp.js
+.pnp.cjs
+
+# ============================================================
+# LOGS
+# ============================================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ============================================================
+# VARIÁVEIS DE AMBIENTE
+# ============================================================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# ============================================================
+# VERCEL / DEPLOY
+# ============================================================
+.vercel
+.now
+.netlify
+.netlify.toml
+
+# ============================================================
+# EDITORES / IDEs
+# ============================================================
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================
+# BUILD / CACHE
+# ============================================================
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vite/
+.turbo/
+
+# ============================================================
+# TESTES / COBERTURA
+# ============================================================
+coverage/
+.nyc_output/
+*.lcov
+
+# ============================================================
+# ÁUDIOS LOCAIS (grandes — não commitar)
+# ------------------------------------------------------------
+# Envie os áudios via painel admin (IndexedDB) ou hospede-os
+# externamente. Se precisar versionar alguns, use exceções.
+# ============================================================
+assets/audio/*.mp3
+assets/audio/*.wav
+assets/audio/*.ogg
+assets/audio/*.m4a
+assets/audio/*.flac
+!assets/audio/.gitkeep
+
+# ============================================================
+# IMAGENS PESADAS (> 5MB — otimizar antes de subir)
+# ============================================================
+assets/img/*.psd
+assets/img/*.ai
+assets/img/*.tiff
+assets/img/raw/

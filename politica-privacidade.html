@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Política de Privacidade | Joseph Matthos</title>
+<meta name="description" content="Política de Privacidade da plataforma Joseph Matthos. Saiba como coletamos, usamos e protegemos seus dados conforme a LGPD.">
+<meta name="robots" content="index, follow">
+<meta name="theme-color" content="#0b0a0c">
+<link rel="canonical" href="https://josephmatthos.vercel.app/politica-privacidade">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Política de Privacidade | Joseph Matthos">
+<meta property="og:description" content="Saiba como tratamos seus dados conforme a LGPD.">
+<meta property="og:url" content="https://josephmatthos.vercel.app/politica-privacidade">
+<meta property="og:locale" content="pt_BR">
+<meta name="twitter:card" content="summary">
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0b0a0c;
+    --bg-elev: #131216;
+    --card: #1a181f;
+    --text: #eee9e0;
+    --text-dim: #b0a9a0;
+    --accent: #d4af37;
+    --border: #2b272f;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  /* Acessibilidade: respeita preferência do usuário */
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  .container {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 4rem 2rem 6rem;
+  }
+
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+    margin-bottom: 1.5rem;
+    transition: opacity 0.2s;
+  }
+  .back-link:hover { opacity: 0.7; }
+
+  /* ===== NAV ===== */
+  .page-nav {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .page-nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.78rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+    transition: color 0.2s;
+  }
+  .page-nav a:hover { color: var(--accent); }
+
+  header {
+    margin-bottom: 3rem;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow {
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1rem;
+    font-weight: 600;
+  }
+  h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: clamp(2rem, 5vw, 3rem);
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+    letter-spacing: -0.02em;
+  }
+  h1 .gold { color: var(--accent); font-style: italic; }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 1.05rem;
+    margin-bottom: 0.5rem;
+  }
+  .update-date {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  section {
+    margin-bottom: 3rem;
+    scroll-margin-top: 2rem;
+  }
+
+  h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+    color: var(--accent);
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+  h2::before {
+    content: "✦";
+    font-size: 0.8em;
+    speak: none;
+  }
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+  }
+
+  p {
+    margin-bottom: 1rem;
+    color: var(--text-dim);
+  }
+
+  ul, ol {
+    margin: 1rem 0 1.5rem 1.5rem;
+    color: var(--text-dim);
+  }
+  li { margin-bottom: 0.5rem; }
+  strong { color: var(--text); font-weight: 600; }
+  a { color: var(--accent); }
+
+  /* ===== CODE ===== */
+  code {
+    font-family: 'Courier New', ui-monospace, monospace;
+    background: rgba(212, 175, 55, 0.1);
+    color: var(--accent);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    border: 1px solid rgba(212, 175, 55, 0.2);
+  }
+
+  .highlight-box {
+    background: var(--card);
+    border-left: 3px solid var(--accent);
+    padding: 1.2rem 1.5rem;
+    border-radius: 0 8px 8px 0;
+    margin: 1.5rem 0;
+  }
+  .highlight-box p { margin-bottom: 0; }
+
+  .contact-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+  }
+  .contact-card strong {
+    display: block;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+    font-family: 'Playfair Display', serif;
+    font-size: 1.15rem;
+  }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+  footer .current-page {
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+
+  /* ===== TOC ===== */
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem 2rem;
+    margin-bottom: 3rem;
+  }
+  .toc h3 {
+    margin-top: 0;
+    color: var(--accent);
+    font-family: 'Playfair Display', serif;
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+  }
+  .toc ol {
+    margin: 0;
+    counter-reset: toc;
+    list-style: none;
+    padding-left: 0;
+  }
+  .toc li {
+    counter-increment: toc;
+    margin-bottom: 0.5rem;
+    padding-left: 1.5rem;
+    position: relative;
+  }
+  .toc li::before {
+    content: counter(toc) ".";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.9em;
+  }
+  .toc a {
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .toc a:hover,
+  .toc a[aria-current="true"] {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  /* ===== BACK TO TOP ===== */
+  #backToTop {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s, transform 0.3s;
+    box-shadow: 0 4px 20px rgba(212, 175, 55, 0.3);
+    z-index: 100;
+  }
+  #backToTop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #backToTop:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 25px rgba(212, 175, 55, 0.5);
+  }
+  #backToTop:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 3px;
+  }
+
+  @media (max-width: 600px) {
+    .container { padding: 2.5rem 1.25rem 4rem; }
+    h2 { font-size: 1.35rem; }
+    .page-nav { gap: 1rem; }
+    #backToTop { bottom: 1rem; right: 1rem; width: 42px; height: 42px; }
+  }
+
+  /* ===== IMPRESSÃO ===== */
+  @media print {
+    body { background: #fff; color: #000; }
+    .back-link, .page-nav, #backToTop, footer { display: none; }
+    .toc { display: none; }
+    h1, h2, h3 { color: #000; }
+    a { color: #000; text-decoration: underline; }
+    p, li { color: #333; }
+    .highlight-box, .contact-card { border: 1px solid #ccc; background: #f9f9f9; }
+  }
+</style>
+</head>
+<body id="top">
+  <div class="container">
+    <a href="index.html" class="back-link">← Voltar ao site</a>
+
+    <header>
+      <div class="eyebrow">Documento Legal</div>
+      <h1>Política de <span class="gold">Privacidade</span></h1>
+      <p class="subtitle">
+        Como tratamos seus dados na plataforma Joseph Matthos, em conformidade
+        com a Lei Geral de Proteção de Dados (LGPD — Lei nº 13.709/2018) e o
+        Marco Civil da Internet (Lei nº 12.965/2014).
+      </p>
+      <p class="update-date">
+        Última atualização: <time datetime="2026-09-15">15 de setembro de 2026</time>
+        · Versão 1.0
+      </p>
+    </header>
+
+    <nav class="toc" aria-label="Índice da política">
+      <h3>Índice</h3>
+      <ol>
+        <li><a href="#introducao">Introdução e Abrangência</a></li>
+        <li><a href="#coleta">Quais Dados Coletamos</a></li>
+        <li><a href="#finalidade">Finalidade do Tratamento</a></li>
+        <li><a href="#base-legal">Base Legal</a></li>
+        <li><a href="#compartilhamento">Compartilhamento de Dados</a></li>
+        <li><a href="#transferencia">Transferência Internacional</a></li>
+        <li><a href="#armazenamento">Armazenamento e Segurança</a></li>
+        <li><a href="#retencao">Prazos de Retenção</a></li>
+        <li><a href="#cookies">Cookies e Tecnologias Similares</a></li>
+        <li><a href="#direitos">Seus Direitos como Titular</a></li>
+        <li><a href="#menores">Crianças e Adolescentes</a></li>
+        <li><a href="#alteracoes">Alterações nesta Política</a></li>
+        <li><a href="#contato">Como Entrar em Contato</a></li>
+      </ol>
+    </nav>
+
+    <section id="introducao">
+      <h2>1. Introdução e Abrangência</h2>
+      <p>
+        Esta Política de Privacidade descreve como <strong>Joseph Matthos</strong>
+        ("nós", "nossa plataforma") coleta, utiliza, armazena e protege as
+        informações pessoais dos usuários ("você", "titular") ao utilizar o site
+        <strong>josephmatthos.vercel.app</strong> e suas funcionalidades.
+      </p>
+      <p>
+        Ao acessar, cadastrar-se, assinar planos ou comprar faixas na plataforma,
+        você concorda com as práticas descritas neste documento e com os
+        <a href="termos-uso.html">Termos de Uso</a>. Caso não concorde, pedimos que
+        não utilize nossos serviços.
+      </p>
+    </section>
+
+    <section id="coleta">
+      <h2>2. Quais Dados Coletamos</h2>
+
+      <h3>2.1 Dados fornecidos diretamente por você</h3>
+      <ul>
+        <li><strong>Cadastro:</strong> nome completo e endereço de e-mail.</li>
+        <li><strong>Assinaturas e compras:</strong> o modo demo usa validação local apenas para simulação; pagamentos reais estão bloqueados até a integração de um gateway compatível.</li>
+        <li><strong>Newsletter:</strong> nome e e-mail, mediante consentimento explícito.</li>
+        <li><strong>Contato:</strong> mensagens enviadas voluntariamente por canais de atendimento.</li>
+      </ul>
+
+      <h3>2.2 Dados coletados automaticamente</h3>
+      <ul>
+        <li>Dados técnicos eventualmente registrados pelo provedor de hospedagem, como endereço IP, navegador e sistema operacional;</li>
+        <li>Idioma, resolução de tela e informações necessárias ao funcionamento do site;</li>
+        <li>Interações com o player de áudio somente quando forem implementadas métricas compatíveis com esta política.</li>
+      </ul>
+
+      <h3>2.3 Dados que NÃO coletamos</h3>
+      <p>
+        <strong>Não coletamos dados pessoais sensíveis</strong> conforme definidos
+        no Art. 5º, II da LGPD — origem racial ou étnica, convicção religiosa,
+        opinião política, filiação a sindicato, dados de saúde, vida sexual,
+        dados genéticos ou biométricos.
+      </p>
+
+      <div class="highlight-box">
+        <p>
+          <strong>Nota técnica:</strong> A versão demo da plataforma armazena
+          dados localmente no navegador via <code>localStorage</code> e
+          <code>IndexedDB</code>. Seus áudios enviados pelo painel administrativo
+          permanecem exclusivamente no dispositivo onde foram carregados.
+        </p>
+      </div>
+    </section>
+
+    <section id="finalidade">
+      <h2>3. Finalidade do Tratamento</h2>
+      <p>Utilizamos seus dados pessoais para:</p>
+      <ul>
+        <li>Criar e manter sua conta na plataforma;</li>
+        <li>Processar assinaturas e vendas de faixas;</li>
+        <li>Liberar acesso a conteúdos premium e downloads;</li>
+        <li>Enviar comunicações sobre novas músicas, shows e atualizações (apenas com consentimento);</li>
+        <li>Responder solicitações de suporte e contato;</li>
+        <li>Melhorar a experiência do usuário e a performance da plataforma;</li>
+        <li>Cumprir obrigações legais, fiscais e regulatórias;</li>
+        <li>Prevenir fraudes e garantir a segurança da plataforma.</li>
+      </ul>
+    </section>
+
+    <section id="base-legal">
+      <h2>4. Base Legal para o Tratamento</h2>
+      <p>Tratamos seus dados com fundamento nas seguintes bases legais da LGPD:</p>
+      <ul>
+        <li><strong>Consentimento (Art. 7º, I):</strong> newsletter e comunicações de marketing;</li>
+        <li><strong>Execução de contrato (Art. 7º, V):</strong> fornecimento do serviço contratado (acesso a faixas, assinaturas);</li>
+        <li><strong>Legítimo interesse (Art. 7º, IX):</strong> segurança da plataforma, prevenção a fraudes, análises agregadas;</li>
+        <li><strong>Cumprimento de obrigação legal (Art. 7º, II):</strong> retenção de dados fiscais de compras.</li>
+      </ul>
+    </section>
+
+    <section id="compartilhamento">
+      <h2>5. Compartilhamento de Dados</h2>
+      <p>
+        <strong>Não vendemos, alugamos nem comercializamos seus dados pessoais.</strong>
+        Compartilhamentos só ocorrem nas seguintes hipóteses:
+      </p>
+      <ul>
+        <li><strong>Operadores de serviço:</strong> provedores de hospedagem (Vercel), CDN de fontes (Google Fonts) e CDN de ícones (Cloudflare), todos com políticas compatíveis com a LGPD;</li>
+        <li><strong>Gateways de pagamento:</strong> quando integrados, compartilhamos apenas os dados necessários para processamento da transação;</li>
+        <li><strong>Obrigação legal:</strong> por ordem judicial ou requisição de autoridade competente;</li>
+        <li><strong>Proteção de direitos:</strong> em situações que envolvam fraude, segurança ou defesa em processos.</li>
+      </ul>
+    </section>
+
+    <section id="transferencia">
+      <h2>6. Transferência Internacional de Dados</h2>
+      <p>
+        Alguns dos operadores que utilizamos — <strong>Vercel</strong> (hospedagem),
+        <strong>Google Fonts</strong> (tipografia) e <strong>Cloudflare</strong>
+        (CDN de ícones) — podem armazenar ou processar dados em servidores
+        localizados fora do Brasil, principalmente nos Estados Unidos.
+      </p>
+      <p>
+        Essas transferências são realizadas com base em:
+      </p>
+      <ul>
+        <li>Cláusulas contratuais padrão aprovadas pela ANPD;</li>
+        <li>Certificações e políticas de privacidade dos operadores;</li>
+        <li>Salvaguardas adequadas conforme Art. 33 da LGPD.</li>
+      </ul>
+      <p>
+        Ao utilizar a plataforma, você reconhece e concorda com essas
+        transferências internacionais, que são necessárias para o funcionamento
+        do serviço.
+      </p>
+    </section>
+
+    <section id="armazenamento">
+      <h2>7. Armazenamento e Segurança</h2>
+      <p>
+        Aplicamos medidas técnicas e administrativas aptas a proteger seus dados
+        contra acesso não autorizado, perda, alteração ou divulgação:
+      </p>
+      <ul>
+        <li>Senhas de usuários demo são processadas no navegador; a senha do admin em produção é validada com bcrypt no backend;</li>
+        <li>Comunicação via HTTPS (TLS 1.3) em todas as páginas;</li>
+        <li>Content Security Policy (CSP) configurada para prevenir XSS;</li>
+        <li>Validação de entrada e sanitização em todos os pontos de interação;</li>
+        <li>Retenção mínima necessária para as finalidades descritas.</li>
+      </ul>
+      <div class="highlight-box">
+        <p>
+          <strong>Importante:</strong> Nenhum sistema é completamente invulnerável.
+          Em caso de incidente de segurança que possa gerar risco ou dano relevante,
+          comunicaremos os titulares afetados e a ANPD no prazo legal.
+        </p>
+      </div>
+    </section>
+
+    <section id="retencao">
+      <h2>8. Prazos de Retenção</h2>
+      <p>
+        Mantemos seus dados apenas pelo tempo necessário para cumprir as
+        finalidades desta Política:
+      </p>
+      <ul>
+        <li><strong>Dados de conta:</strong> enquanto ativa + 6 meses após exclusão;</li>
+        <li><strong>Dados fiscais (compras):</strong> 5 anos (obrigação legal — CTN);</li>
+        <li><strong>Logs de acesso:</strong> no mínimo 6 meses (Marco Civil da Internet, Art. 15);</li>
+        <li><strong>Newsletter:</strong> até revogação do consentimento;</li>
+        <li><strong>Dados de suporte:</strong> 2 anos após resolução.</li>
+      </ul>
+      <p>
+        Após esses prazos, os dados são anonimizados ou eliminados de forma
+        segura, salvo quando a lei exigir retenção por período superior.
+      </p>
+    </section>
+
+    <section id="cookies">
+      <h2>9. Cookies e Tecnologias Similares</h2>
+      <p>Utilizamos as seguintes categorias:</p>
+      <ul>
+        <li><strong>Essenciais:</strong> sessão do usuário, preferências de volume do player, carrinho de compras (obrigatórios para o funcionamento);</li>
+        <li><strong>Funcionais:</strong> lembrar suas preferências de aparência e plano escolhido;</li>
+        <li><strong>Analíticos:</strong> métricas agregadas de uso (quando habilitados).</li>
+      </ul>
+      <p>
+        Você pode gerenciar ou desabilitar cookies pelas configurações do seu
+        navegador. A desativação de cookies essenciais pode prejudicar o
+        funcionamento da plataforma.
+      </p>
+      <p>
+        Respeitamos o sinal <code>Do Not Track</code> (DNT) do navegador. Quando
+        ativado, não utilizamos tecnologias analíticas de rastreamento.
+      </p>
+    </section>
+
+    <section id="direitos">
+      <h2>10. Seus Direitos como Titular</h2>
+      <p>
+        Conforme o Art. 18 da LGPD, você pode solicitar, a qualquer momento e
+        mediante requisição gratuita:
+      </p>
+      <ul>
+        <li>Confirmação da existência de tratamento;</li>
+        <li>Acesso aos dados mantidos sobre você;</li>
+        <li>Correção de dados incompletos, inexatos ou desatualizados;</li>
+        <li>Anonimização, bloqueio ou eliminação de dados desnecessários;</li>
+        <li>Portabilidade dos dados a outro fornecedor de serviço;</li>
+        <li>Eliminação dos dados tratados com seu consentimento;</li>
+        <li>Informação sobre compartilhamento com terceiros;</li>
+        <li>Informação sobre a possibilidade de não fornecer consentimento;</li>
+        <li>Revogação do consentimento previamente dado.</li>
+      </ul>
+      <p>
+        Para exercer qualquer desses direitos, basta enviar mensagem pelo
+        canal indicado na seção 13 desta política.
+      </p>
+    </section>
+
+    <section id="menores">
+      <h2>11. Crianças e Adolescentes</h2>
+      <p>
+        A plataforma não é direcionada a menores de 13 anos. Não coletamos
+        intencionalmente dados de crianças. Caso tomemos conhecimento de que
+        coletamos dados de menor sem o consentimento dos responsáveis,
+        procederemos com a exclusão imediata.
+      </p>
+      <p>
+        Adolescentes entre 13 e 18 anos podem utilizar a plataforma com
+        consentimento dos pais ou responsáveis legais, conforme Art. 14 da LGPD.
+      </p>
+    </section>
+
+    <section id="alteracoes">
+      <h2>12. Alterações nesta Política</h2>
+      <p>
+        Esta Política pode ser atualizada periodicamente para refletir mudanças
+        legais, operacionais ou de práticas de tratamento. A versão vigente
+        sempre estará disponível nesta página, com a data da última atualização.
+      </p>
+      <p>
+        Em caso de alterações relevantes que afetem o tratamento dos seus dados,
+        comunicaremos através do e-mail cadastrado ou por aviso destacado na
+        plataforma, com antecedência mínima de 30 (trinta) dias.
+      </p>
+    </section>
+
+    <section id="contato">
+      <h2>13. Como Entrar em Contato</h2>
+      <p>
+        Para exercer seus direitos, tirar dúvidas sobre esta Política ou tratar
+        de qualquer questão relacionada aos seus dados pessoais, entre em
+        contato com o Encarregado (DPO):
+      </p>
+      <div class="contact-card">
+        <strong>Encarregado de Proteção de Dados</strong>
+        <p>
+          E-mail: <a href="mailto:privacidade@josephmatthos.com">privacidade@josephmatthos.com</a><br>
+          Assunto recomendado: <strong>"LGPD — [Seu nome]"</strong><br>
+          Prazo de resposta: até 15 (quinze) dias corridos
+        </p>
+      </div>
+      <p>
+        Você também tem o direito de apresentar reclamação à
+        <strong>Autoridade Nacional de Proteção de Dados (ANPD)</strong>,
+        acessível em
+        <a href="https://www.gov.br/anpd" target="_blank" rel="noopener noreferrer">www.gov.br/anpd</a>.
+      </p>
+    </section>
+
+    <footer>
+      <p>© 2026 Joseph Matthos. Todos os direitos reservados.</p>
+      <p style="margin-top:0.75rem;">
+        <a href="index.html">Início</a> ·
+        <a href="termos-uso.html">Termos de Uso</a> ·
+        <span class="current-page" aria-current="page">Política de Privacidade</span>
+      </p>
+      <p style="margin-top:0.75rem;font-size:0.75rem;opacity:0.7;">
+        Versão 1.0 · Última atualização: 15 de setembro de 2026
+      </p>
+    </footer>
+  </div>
+
+  <!-- Botão "Voltar ao topo" -->
+  <button type="button" id="backToTop" aria-label="Voltar ao topo">↑</button>
+
+  <script>
+    (function () {
+      'use strict';
+
+      /* ============================================================
+         BOTÃO VOLTAR AO TOPO
+         ============================================================ */
+      var backToTop = document.getElementById('backToTop');
+      var scrollThreshold = 400;
+
+      function toggleBackToTop() {
+        if (!backToTop) return;
+        var shouldShow = window.scrollY > scrollThreshold;
+        backToTop.classList.toggle('visible', shouldShow);
+      }
+
+      if (backToTop) {
+        backToTop.addEventListener('click', function () {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+      }
+
+      window.addEventListener('scroll', toggleBackToTop, { passive: true });
+      toggleBackToTop();
+
+      /* ============================================================
+         ARIA-CURRENT NO TOC (destaca seção ativa)
+         ============================================================ */
+      var tocLinks = document.querySelectorAll('.toc a[href^="#"]');
+      var sections = document.querySelectorAll('section[id]');
+
+      if ('IntersectionObserver' in window && tocLinks.length && sections.length) {
+        var observer = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              var id = entry.target.id;
+              tocLinks.forEach(function (link) {
+                var isActive = link.getAttribute('href') === '#' + id;
+                if (isActive) {
+                  link.setAttribute('aria-current', 'true');
+                } else {
+                  link.removeAttribute('aria-current');
+                }
+              });
+            }
+          });
+        }, {
+          rootMargin: '-20% 0px -70% 0px',
+          threshold: 0
+        });
+
+        sections.forEach(function (section) {
+          observer.observe(section);
+        });
+      }
+
+      /* ============================================================
+         SMOOTH SCROLL COM OFFSET (para TOC)
+         ============================================================ */
+      document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+        link.addEventListener('click', function (e) {
+          var targetId = link.getAttribute('href').slice(1);
+          if (!targetId) return;
+
+          var target = document.getElementById(targetId);
+          if (!target) return;
+
+          e.preventDefault();
+
+          var prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+          target.scrollIntoView({
+            behavior: prefersReducedMotion ? 'auto' : 'smooth',
+            block: 'start'
+          });
+
+          // Atualiza a URL sem recarregar
+          if (history.pushState) {
+            history.pushState(null, '', '#' + targetId);
+          }
+
+          // Foco para acessibilidade
+          target.setAttribute('tabindex', '-1');
+          target.focus({ preventScroll: true });
+        });
+      });
+
+      /* ============================================================
+         LOG (para debug)
+         ============================================================ */
+      console.log('[privacidade] Página carregada · Versão 1.0');
+    })();
+  </script>
+</body>
+</html>
