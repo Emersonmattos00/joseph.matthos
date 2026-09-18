@@ -9,7 +9,7 @@
    ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v9';
+const CACHE_VERSION = 'jm-v10';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
@@ -172,7 +172,10 @@ async function handleAsset(req) {
 
   // Se está em cache, retorna imediatamente e revalida em background
   if (cached) {
-    revalidate(req).catch(() => {});
+    // Só revalida se houver conexão (evita fetch inútil offline)
+    if (navigator.onLine) {
+      revalidate(req).catch(() => {});
+    }
     return cached;
   }
 
