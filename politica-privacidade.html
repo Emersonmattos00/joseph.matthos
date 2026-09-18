@@ -332,8 +332,8 @@
         Marco Civil da Internet (Lei nº 12.965/2014).
       </p>
       <p class="update-date">
-        Última atualização: <time datetime="2026-09-15">15 de setembro de 2026</time>
-        · Versão 1.0
+        Última atualização: <time datetime="2026-09-18">18 de setembro de 2026</time>
+        · Versão 1.1
       </p>
     </header>
 
@@ -381,12 +381,14 @@
         <li><strong>Assinaturas e compras:</strong> o modo demo usa validação local apenas para simulação; pagamentos reais estão bloqueados até a integração de um gateway compatível.</li>
         <li><strong>Newsletter:</strong> nome e e-mail, mediante consentimento explícito.</li>
         <li><strong>Contato:</strong> mensagens enviadas voluntariamente por canais de atendimento.</li>
+        <li><strong>Conteúdo enviado:</strong> arquivos de áudio e metadados associados, enviados por administradores através do painel de gestão.</li>
       </ul>
 
       <h3>2.2 Dados coletados automaticamente</h3>
       <ul>
-        <li>Dados técnicos eventualmente registrados pelo provedor de hospedagem, como endereço IP, navegador e sistema operacional;</li>
+        <li>Dados técnicos eventualmente registrados pelo provedor de hospedagem e pelo serviço de banco de dados, como endereço IP, navegador e sistema operacional;</li>
         <li>Idioma, resolução de tela e informações necessárias ao funcionamento do site;</li>
+        <li>Metadados de arquivos enviados (nome, tamanho, tipo MIME, data de upload) armazenados no banco de dados;</li>
         <li>Interações com o player de áudio somente quando forem implementadas métricas compatíveis com esta política.</li>
       </ul>
 
@@ -400,10 +402,17 @@
 
       <div class="highlight-box">
         <p>
-          <strong>Nota técnica:</strong> A versão demo da plataforma armazena
-          dados localmente no navegador via <code>localStorage</code> e
-          <code>IndexedDB</code>. Seus áudios enviados pelo painel administrativo
-          permanecem exclusivamente no dispositivo onde foram carregados.
+          <strong>Nota técnica:</strong> Os dados de sessão e preferências da
+          plataforma são armazenados localmente no navegador via
+          <code>localStorage</code> e <code>IndexedDB</code>. Os arquivos de
+          áudio enviados pelo painel administrativo são armazenados no serviço
+          de armazenamento de objetos <strong>Supabase Storage</strong>. Os
+          metadados dos arquivos (nome, caminho, tamanho, tipo) são mantidos em
+          banco de dados PostgreSQL, enquanto o conteúdo real dos arquivos
+          reside no provedor de armazenamento backend. O acesso aos objetos é
+          controlado por políticas de Row Level Security (RLS) do PostgreSQL,
+          garantindo que apenas usuários autorizados possam ler, enviar ou
+          excluir arquivos.
         </p>
       </div>
     </section>
@@ -415,6 +424,7 @@
         <li>Criar e manter sua conta na plataforma;</li>
         <li>Processar assinaturas e vendas de faixas;</li>
         <li>Liberar acesso a conteúdos premium e downloads;</li>
+        <li>Armazenar e servir arquivos de áudio enviados pelo painel administrativo;</li>
         <li>Enviar comunicações sobre novas músicas, shows e atualizações (apenas com consentimento);</li>
         <li>Responder solicitações de suporte e contato;</li>
         <li>Melhorar a experiência do usuário e a performance da plataforma;</li>
@@ -428,7 +438,7 @@
       <p>Tratamos seus dados com fundamento nas seguintes bases legais da LGPD:</p>
       <ul>
         <li><strong>Consentimento (Art. 7º, I):</strong> newsletter e comunicações de marketing;</li>
-        <li><strong>Execução de contrato (Art. 7º, V):</strong> fornecimento do serviço contratado (acesso a faixas, assinaturas);</li>
+        <li><strong>Execução de contrato (Art. 7º, V):</strong> fornecimento do serviço contratado (acesso a faixas, assinaturas, armazenamento de conteúdo);</li>
         <li><strong>Legítimo interesse (Art. 7º, IX):</strong> segurança da plataforma, prevenção a fraudes, análises agregadas;</li>
         <li><strong>Cumprimento de obrigação legal (Art. 7º, II):</strong> retenção de dados fiscais de compras.</li>
       </ul>
@@ -441,7 +451,8 @@
         Compartilhamentos só ocorrem nas seguintes hipóteses:
       </p>
       <ul>
-        <li><strong>Operadores de serviço:</strong> provedores de hospedagem (Vercel), CDN de fontes (Google Fonts) e CDN de ícones (Cloudflare), todos com políticas compatíveis com a LGPD;</li>
+        <li><strong>Operadores de serviço:</strong> provedores de hospedagem (Vercel), CDN de fontes (Google Fonts), CDN de ícones (Cloudflare) e infraestrutura de banco de dados e armazenamento (Supabase), todos com políticas compatíveis com a LGPD;</li>
+        <li><strong>Supabase (Infraestrutura):</strong> fornece serviços de banco de dados PostgreSQL, autenticação e armazenamento de objetos, processando dados de arquivos enviados por administradores e seus metadados associados;</li>
         <li><strong>Gateways de pagamento:</strong> quando integrados, compartilhamos apenas os dados necessários para processamento da transação;</li>
         <li><strong>Obrigação legal:</strong> por ordem judicial ou requisição de autoridade competente;</li>
         <li><strong>Proteção de direitos:</strong> em situações que envolvam fraude, segurança ou defesa em processos.</li>
@@ -452,9 +463,10 @@
       <h2>6. Transferência Internacional de Dados</h2>
       <p>
         Alguns dos operadores que utilizamos — <strong>Vercel</strong> (hospedagem),
-        <strong>Google Fonts</strong> (tipografia) e <strong>Cloudflare</strong>
-        (CDN de ícones) — podem armazenar ou processar dados em servidores
-        localizados fora do Brasil, principalmente nos Estados Unidos.
+        <strong>Google Fonts</strong> (tipografia), <strong>Cloudflare</strong>
+        (CDN de ícones) e <strong>Supabase</strong> (banco de dados e
+        armazenamento de objetos) — podem armazenar ou processar dados em
+        servidores localizados fora do Brasil, principalmente nos Estados Unidos.
       </p>
       <p>
         Essas transferências são realizadas com base em:
@@ -478,8 +490,9 @@
         contra acesso não autorizado, perda, alteração ou divulgação:
       </p>
       <ul>
-        <li>Senhas de usuários demo são processadas no navegador; a senha do admin em produção é validada com bcrypt no backend;</li>
-        <li>Comunicação via HTTPS (TLS 1.3) em todas as páginas;</li>
+        <li>Senhas de usuários demo são processadas no navegador; credenciais administrativas em produção são validadas com <code>crypto.scrypt</code> no backend, com salt único por senha e comparação em tempo constante;</li>
+        <li>Arquivos enviados são armazenados em buckets do Supabase Storage com políticas de Row Level Security (RLS) que restringem leitura, escrita e exclusão a usuários autenticados e autorizados;</li>
+        <li>Comunicação via HTTPS (TLS 1.3) em todas as páginas e em todas as chamadas à API do Supabase;</li>
         <li>Content Security Policy (CSP) configurada para prevenir XSS;</li>
         <li>Validação de entrada e sanitização em todos os pontos de interação;</li>
         <li>Retenção mínima necessária para as finalidades descritas.</li>
@@ -504,11 +517,14 @@
         <li><strong>Dados fiscais (compras):</strong> 5 anos (obrigação legal — CTN);</li>
         <li><strong>Logs de acesso:</strong> no mínimo 6 meses (Marco Civil da Internet, Art. 15);</li>
         <li><strong>Newsletter:</strong> até revogação do consentimento;</li>
-        <li><strong>Dados de suporte:</strong> 2 anos após resolução.</li>
+        <li><strong>Dados de suporte:</strong> 2 anos após resolução;</li>
+        <li><strong>Arquivos de áudio e metadados:</strong> enquanto o conteúdo permanecer publicado na plataforma, ou até solicitação de exclusão pelo titular ou administrador responsável.</li>
       </ul>
       <p>
         Após esses prazos, os dados são anonimizados ou eliminados de forma
-        segura, salvo quando a lei exigir retenção por período superior.
+        segura, salvo quando a lei exigir retenção por período superior. A
+        exclusão de arquivos no Supabase Storage remove tanto o objeto no
+        backend quanto seus metadados no banco de dados.
       </p>
     </section>
 
@@ -550,7 +566,9 @@
       </ul>
       <p>
         Para exercer qualquer desses direitos, basta enviar mensagem pelo
-        canal indicado na seção 13 desta política.
+        canal indicado na seção 13 desta política. A exclusão de arquivos
+        enviados por administradores remove o objeto do Supabase Storage e
+        seus metadados associados no banco de dados.
       </p>
     </section>
 
@@ -613,7 +631,7 @@
         <span class="current-page" aria-current="page">Política de Privacidade</span>
       </p>
       <p style="margin-top:0.75rem;font-size:0.75rem;opacity:0.7;">
-        Versão 1.0 · Última atualização: 15 de setembro de 2026
+        Versão 1.1 · Última atualização: 18 de setembro de 2026
       </p>
     </footer>
   </div>
@@ -710,7 +728,7 @@
       /* ============================================================
          LOG (para debug)
          ============================================================ */
-      console.log('[privacidade] Página carregada · Versão 1.0');
+      console.log('[privacidade] Página carregada · Versão 1.1');
     })();
   </script>
 </body>
