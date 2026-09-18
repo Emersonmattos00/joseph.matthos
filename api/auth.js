@@ -9,6 +9,7 @@
    HEAD /api/auth?action=me       → só headers
 
    - Cookies __Host- em produção (HttpOnly + SameSite=Lax)
+   - CSRF: Origin check em métodos mutantes
    - Nenhum segredo exposto ao cliente
    - Rate limit por IP + e-mail (Redis/KV)
    - Auditoria em todas as ações
@@ -29,7 +30,8 @@ const {
   VALID_PLANS,
   checkAndIncrement,
   resetBucket,
-  audit
+  audit,
+  checkOrigin
 } = require('./_lib');
 
 // ─────────────────────────────────────────────────────────────
@@ -78,6 +80,18 @@ module.exports = async function handler(req, res) {
   }
 
   const method = (req.method || 'GET').toUpperCase();
+
+  // ── CSRF: Origin check em métodos mutantes
+  if (method !== 'GET' && method !== 'HEAD') {
+    if (!checkOrigin(req)) {
+      console.warn('[auth] Origin rejeitada:', {
+        action,
+        method,
+        origin: req.headers.origin || req.headers.referer || null
+      });
+      return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
+    }
+  }
 
   switch (action) {
     case 'login':
@@ -156,7 +170,7 @@ async function handleLogin(req, res) {
     const user = result.body.user || {};
     const metadata = user.user_metadata || {};
 
-    await reset(`login:email:${email}`).catch(() => {});
+    await resetBucket(`login:email:${email}`).catch(() => {});
     setAuthCookies(res, result.body);
 
     await audit('login', {
@@ -565,7 +579,7 @@ async function ensureProfile(userId, { email, name }) {
       body: JSON.stringify({
         id: userId,
         email,
-        name,
+        name
         // profiles NÃO tem coluna plan — plano vive em subscriptions
       })
     });
