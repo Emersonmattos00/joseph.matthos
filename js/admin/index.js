@@ -2,6 +2,7 @@
    js/admin/index.js — Entrypoint do painel administrativo
    ------------------------------------------------------------
    - Registra atalho Ctrl+Shift+A antes de qualquer API
+   - Detecta URL /?admin e abre o painel automaticamente
    - Binds resilientes (try/catch por editor)
    - Nav tabs com bind único (MutationObserver só no <nav>)
    ============================================================ */
@@ -54,6 +55,17 @@ async function bootstrap() {
 
   // 1) Atalho SEMPRE primeiro
   initAdminShortcuts();
+
+  // ==========================================================
+  // >>> NOVO: Verifica se a URL contém ?admin e abre o painel
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('admin')) {
+    // setTimeout garante que os binds iniciais da UI já foram registrados
+    setTimeout(() => {
+      openAdminSite();
+    }, 0);
+  }
+  // ==========================================================
 
   // 2) Binds de navegação e ações ANTES de carregar conteúdo
   bindNavTabs();
