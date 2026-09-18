@@ -8,6 +8,7 @@
    - Assinatura via /api/payments?type=subscription → MP checkout
    - Nenhum localStorage para dados de negócio
    - Sem onclick inline; tudo via data-action + delegação
+   - ?admin dispara evento 'jm:admin-open' para o painel
    ============================================================ */
 
 import { DEFAULT_CONTENT, SOCIAL_LABELS } from './config.js';
@@ -25,43 +26,50 @@ import {
   clone
 } from './utils.js';
 
-// Detecta ?admin na URL e ativa o painel
-function checkAdminTrigger() {
-  var params = new URLSearchParams(window.location.search);
-  if (params.has('admin')) {
-    // Remove o parâmetro da URL (para não poluir histórico / compartilhamento)
-    if (window.history.replaceState) {
-      var clean = window.location.pathname + window.location.hash;
-      window.history.replaceState(null, '', clean);
-    }
-    return true;
-  }
-  return false;
-}
-
-if (checkAdminTrigger()) {
-  // Mostra o painel admin (mesma função que o Ctrl+Shift+A chama)
-  document.getElementById('publicSite').style.display = 'none';
-  document.getElementById('adminSite').style.display = 'block';
-
-  // Se já houver sessão válida, o admin/index.js detecta via /api/admin?action=session
-  // e pula o login. Senão, mostra o formulário.
-}
-
 // ─────────────────────────────────────────────────────────────
-// ESTADO GLOBAL
+// ESTADO GLOBAL — declarado no TOPO para evitar TDZ
 // ─────────────────────────────────────────────────────────────
 export const SITE = {
-  content: null,     // conteúdo do site (default + API)
-  tracks: {},        // { "albumId:trackIndex": { priceCents, forSale, ... } }
-  plans: {},         // { premium: { priceCents }, anual: { priceCents } }
-  user: null,        // usuário autenticado (ou null)
-  rentals: [],       // aluguéis ativos: [{ trackKey, expiresAt }]
-  viewMode: 'cards', // 'cards' | 'list'
-  filter: 'all',     // 'all' | 'album' | 'ep' | 'single'
+  content: null,
+  tracks: {},
+  plans: {},
+  user: null,
+  rentals: [],
+  viewMode: 'cards',
+  filter: 'all',
   expandedAlbumId: null,
   shopSearch: ''
 };
+
+// Estado do player — movido para cá (era declarado no fim do arquivo)
+let audio = null;
+let currentTrackIdentity = null;
+let previewState = { active: false, start: 0, end: Infinity };
+let previewNoticeTrackKey = '';
+let isSeeking = false;
+let lastVolume = 0.8;
+let muted = false;
+
+// ─────────────────────────────────────────────────────────────
+// GATILHO ?admin — apenas dispara evento; o painel decide o que fazer
+// ─────────────────────────────────────────────────────────────
+function maybeOpenAdmin() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has('admin')) return;
+
+  // Notifica o admin/index.js (que tem sua própria lógica de auth)
+  document.dispatchEvent(new CustomEvent('jm:admin-open'));
+
+  // Limpa o parâmetro da URL sem quebrar o histórico
+  // (o admin já foi notificado via evento, então pode limpar)
+  if (window.history.replaceState) {
+    window.history.replaceState(
+      null,
+      '',
+      window.location.pathname + window.location.hash
+    );
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // BOOT
@@ -83,6 +91,9 @@ async function boot() {
     updateCartBadge();
     bindGlobalEvents();
 
+    // Só agora trata o ?admin, com DOM pronto e painel carregado
+    maybeOpenAdmin();
+
     console.log('✅ site.js pronto');
   } catch (err) {
     console.error('❌ Falha no boot:', err);
@@ -96,6 +107,7 @@ async function boot() {
       updateAuthUI();
       updateCartBadge();
       bindGlobalEvents();
+      maybeOpenAdmin();
     } catch (inner) {
       console.error('❌ Fallback também falhou:', inner);
     }
@@ -117,13 +129,11 @@ async function loadPublicData() {
       return;
     }
 
-    // Conteúdo
     SITE.content =
       json.content && typeof json.content === 'object'
         ? json.content
         : clone(DEFAULT_CONTENT);
 
-    // Faixas
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -132,7 +142,6 @@ async function loadPublicData() {
       }
     }
 
-    // Planos
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) {
@@ -676,7 +685,6 @@ async function subscribe(planId) {
 // DELEGAÇÃO GLOBAL DE EVENTOS
 // ─────────────────────────────────────────────────────────────
 function bindGlobalEvents() {
-  // ── Ações (delegação)
   document.addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (!action) return;
@@ -718,7 +726,6 @@ function bindGlobalEvents() {
     }
   });
 
-  // ── Busca
   const shopSearch = document.getElementById('shopSearch');
   if (shopSearch && shopSearch.dataset.bound !== '1') {
     shopSearch.dataset.bound = '1';
@@ -731,7 +738,6 @@ function bindGlobalEvents() {
     );
   }
 
-  // ── Filtros + view mode
   const filterBar = document.getElementById('filterBar');
   if (filterBar && filterBar.dataset.bound !== '1') {
     filterBar.dataset.bound = '1';
@@ -759,7 +765,6 @@ function bindGlobalEvents() {
     });
   }
 
-  // ── Auth: abrir modais
   document
     .getElementById('loginBtn')
     ?.addEventListener('click', () => openModal('loginModal'));
@@ -770,7 +775,6 @@ function bindGlobalEvents() {
     .getElementById('userChip')
     ?.addEventListener('click', openAccountModal);
 
-  // ── Trocar entre login/signup
   document.getElementById('switchToSignup')?.addEventListener('click', () => {
     closeModal('loginModal');
     openModal('signupModal');
@@ -780,7 +784,6 @@ function bindGlobalEvents() {
     openModal('loginModal');
   });
 
-  // ── Logout
   document.getElementById('logoutBtn')?.addEventListener('click', async () => {
     try {
       await fetch('/api/auth?action=logout', {
@@ -796,7 +799,6 @@ function bindGlobalEvents() {
     toast('Você saiu da conta.', 'ℹ');
   });
 
-  // ── Forms de auth
   document
     .getElementById('loginForm')
     ?.addEventListener('submit', onLoginSubmit);
@@ -804,7 +806,6 @@ function bindGlobalEvents() {
     .getElementById('signupForm')
     ?.addEventListener('submit', onSignupSubmit);
 
-  // ── Newsletter
   document
     .getElementById('newsletterForm')
     ?.addEventListener('submit', (e) => {
@@ -813,7 +814,6 @@ function bindGlobalEvents() {
       e.target.reset();
     });
 
-  // ── Modais: fechar via [data-close]
   document.querySelectorAll('[data-close]').forEach((el) => {
     el.addEventListener('click', () => {
       el.closest('.modal-overlay')?.classList.remove('open');
@@ -821,7 +821,6 @@ function bindGlobalEvents() {
     });
   });
 
-  // ── Modais: clique no overlay
   document.querySelectorAll('.modal-overlay').forEach((o) => {
     o.addEventListener('click', (e) => {
       if (e.target === o) {
@@ -831,7 +830,6 @@ function bindGlobalEvents() {
     });
   });
 
-  // ── ESC fecha modais
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     document
@@ -840,7 +838,6 @@ function bindGlobalEvents() {
     document.body.style.overflow = '';
   });
 
-  // ── Space → play/pause
   document.addEventListener('keydown', (e) => {
     const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
     const pub = document.getElementById('publicSite');
@@ -883,7 +880,7 @@ async function onLoginSubmit(e) {
     SITE.user = json.user;
     e.target.reset();
     closeModal('loginModal');
-    await loadUser(); // pega plan + rentals
+    await loadUser();
     updateAuthUI();
     renderDiscography();
     toast(
@@ -1089,8 +1086,6 @@ function updateAuthUI() {
 }
 
 function updateCartBadge() {
-  // No modelo novo não há carrinho persistente: compra direta via MP.
-  // Esconde o link inteiro para não confundir o usuário.
   const cartLink = document.getElementById('navCartLink');
   if (cartLink) cartLink.style.display = 'none';
 }
@@ -1155,14 +1150,6 @@ function openAccountModal() {
 // ─────────────────────────────────────────────────────────────
 // PLAYER
 // ─────────────────────────────────────────────────────────────
-let audio = null;
-let currentTrackIdentity = null;
-let previewState = { active: false, start: 0, end: Infinity };
-let previewNoticeTrackKey = '';
-let isSeeking = false;
-let lastVolume = 0.8;
-let muted = false;
-
 function initPlayer() {
   audio = document.getElementById('audio');
   if (!audio) return;
@@ -1185,7 +1172,6 @@ function bindPlayerControls() {
   const bind = (id, fn) =>
     document.getElementById(id)?.addEventListener('click', fn);
 
-  // Fixo
   bind('playBtn', togglePlay);
   bind('nextBtn', nextTrack);
   bind('prevBtn', prevTrack);
@@ -1195,7 +1181,6 @@ function bindPlayerControls() {
     document.getElementById('lyricsDrawer')?.classList.toggle('open')
   );
 
-  // Expandido
   bind('closeExpandedPlayer', closeExpandedPlayer);
   bind('expandedPlayBtn', togglePlay);
   bind('expandedNextBtn', nextTrack);
@@ -1206,11 +1191,8 @@ function bindPlayerControls() {
     document.getElementById('lyricsDrawer')?.classList.remove('open')
   );
 
-  // Barras de progresso
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
-
-  // Barra de volume
   bindVolumeBar('volumeBar');
 }
 
@@ -1251,7 +1233,6 @@ async function playFromDiscography(albumId, trackIndex) {
   };
   audio.addEventListener('loadedmetadata', onLoaded);
 
-  // Título / artista
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
@@ -1261,7 +1242,6 @@ async function playFromDiscography(albumId, trackIndex) {
     }`;
   }
 
-  // Capa do player
   const cover = document.getElementById('playerCover');
   if (cover) {
     const safeCover = safeMediaUrl(album.coverImage);
@@ -1274,7 +1254,6 @@ async function playFromDiscography(albumId, trackIndex) {
     }
   }
 
-  // Badges de prévia
   document
     .getElementById('previewBadge')
     ?.classList.toggle('visible', !unlocked);
@@ -1282,7 +1261,6 @@ async function playFromDiscography(albumId, trackIndex) {
     .getElementById('expandedPreviewBadge')
     ?.classList.toggle('visible', !unlocked);
 
-  // Letras + player expandido
   renderLyrics(track);
   syncExpandedPlayer(track, album, unlocked);
   updatePlayingHighlight();
@@ -1608,7 +1586,6 @@ function onPause() {
 }
 
 function onError(e) {
-  // Ignora abort durante troca de src
   if (audio && audio.error && audio.error.code === MediaError.MEDIA_ERR_ABORTED) {
     return;
   }
@@ -1778,5 +1755,8 @@ window.__site = {
     await loadUser();
     applyContentToSite();
     renderDiscography();
+  },
+  openAdmin() {
+    maybeOpenAdmin();
   }
 };
