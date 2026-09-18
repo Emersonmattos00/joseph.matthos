@@ -6,14 +6,36 @@
      - SERVICE_ROLE_KEY, JWT_SECRET, MP_ACCESS_TOKEN
      - senhas administrativas
      - chaves de API privadas
-   ------------------------------------------------------------
-   Uso:
+
+   ✅ Pode conter:
+     - textos, branding, SEO
+     - estrutura de álbuns e faixas (títulos, descrições)
+     - IDs de planos (mas NÃO preços)
+     - redes sociais, aparência
+
+   🎯 Este arquivo é apenas FALLBACK:
+     - Quando /api/public falha, o site usa o conteúdo daqui.
+     - Quando o backend funciona, o site lê do banco
+       (`site_content`, `tracks`, `effective_plan`).
+     - Áudios e imagens reais devem ser cadastrados pelo painel
+       admin (Supabase Storage), NÃO aqui.
+
+   🚫 Áudios:
+     As faixas abaixo têm `fullAudio: ""` de propósito — não há
+     áudio real cadastrado em produção. O player mostrará
+     "Faixa sem áudio cadastrado" até o admin subir os arquivos.
+
+   📦 Uso:
      - Módulos ES:   import { DEFAULT_CONTENT } from './config.js';
      - Código legado: window.DEFAULT_CONTENT
    ============================================================ */
 
+// Bump quando a estrutura mudar de forma incompatível
 export const CONTENT_SCHEMA_VERSION = 1;
 
+// ─────────────────────────────────────────────────────────────
+// Conteúdo padrão
+// ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
     name: "Joseph Matthos",
@@ -40,7 +62,7 @@ export const DEFAULT_CONTENT = {
   sobre: {
     title: "Sobre <span class=\"gold\">Joseph</span>",
     subtitle: "Entre a poesia concreta e o rap de reflexão, uma voz que incomoda e cura.",
-    paragraphs: "<strong>Joseph Matthos</strong> não é apenas um rapper. É um cronista do invisível, um filósofo de esquina, um poeta que encontrou no beat a cadência perfeita para suas inquietações.\nNascido na periferia e formado nas ruas, Joseph transforma vivências cruas em letras que equilibram profundidade e acessibilidade.\nCom influências que vão de <strong>Racionais MC's</strong> a <strong>Fernando Pessoa</strong>, ele constrói pontes entre o sagrado e o cotidiano. Em <strong>Boom, Boom, Bap</strong> (2026), palavras viram rumor, rumor vira verdade e verdade vira legado.",
+    paragraphs: "<strong>Joseph Matthos</strong> não é apenas um rapper. É um cronista do invisível, um filósofo de esquina, um poeta que encontrou no beat a cadência perfeita para suas inquietações.\nNascido na periferia e formado nas ruas, Joseph transforma vivências cruas em letras que equilibram profundidade e acessibilidade.\nCom influências que vão de <strong>Racionais MC's</strong> a <strong>Fernando Pessoa</strong>, ele constrói pontes entre o sagrado e o cotidiano. Em <strong>Boom, Boom, Bàp</strong> (2026), palavras viram rumor, rumor vira verdade e verdade vira legado.",
     quote: "\u201cMinha rima é a filha da noite que pariu o dia.\u201d",
     image: "assets/img/josephmatthos.webp"
   },
@@ -51,7 +73,7 @@ export const DEFAULT_CONTENT = {
     frases: [
       {
         text: "Haverá dias difíceis, mas a missão continua. Enquanto eu respirar, a história não termina. Nada acabou. Só estamos começando.",
-        author: "Boom, Boom, Bap"
+        author: "Boom, Boom, Bàp"
       },
       {
         text: "A rua me ensinou que quem tem pressa de chegar esquece de ver a paisagem.",
@@ -75,11 +97,14 @@ export const DEFAULT_CONTENT = {
   discografia: {
     title: "Disco<span class=\"gold\">grafia</span>",
     subtitle: "Explore álbuns, EPs e singles. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads.",
+
+    // ⚠️ SEM `price` — preço sempre vem de `tracks.price_cents` no banco.
+    // ⚠️ SEM `fullAudio` real — o admin cadastra os áudios pelo painel.
     albums: [
       {
         id: "album-bbb",
         type: "album",
-        title: "Boom, Boom, Bap",
+        title: "Boom, Boom, Bàp",
         year: 2026,
         cover: "BBB",
         coverImage: "assets/img/boomboombap.webp",
@@ -89,7 +114,7 @@ export const DEFAULT_CONTENT = {
             id: "album-bbb:0",
             title: "Palavras",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-9.mp3",
+            fullAudio: "",
             previewStart: 30,
             previewDuration: 30,
             duration: "3:58"
@@ -98,7 +123,7 @@ export const DEFAULT_CONTENT = {
             id: "album-bbb:1",
             title: "Rumor",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-10.mp3",
+            fullAudio: "",
             previewStart: 45,
             previewDuration: 30,
             duration: "4:12"
@@ -107,7 +132,7 @@ export const DEFAULT_CONTENT = {
             id: "album-bbb:2",
             title: "Verdade",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-11.mp3",
+            fullAudio: "",
             previewStart: 20,
             previewDuration: 30,
             duration: "4:45"
@@ -116,13 +141,14 @@ export const DEFAULT_CONTENT = {
             id: "album-bbb:3",
             title: "Legado",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-12.mp3",
+            fullAudio: "",
             previewStart: 60,
             previewDuration: 30,
             duration: "5:20"
           }
         ]
       },
+
       {
         id: "album-1",
         type: "album",
@@ -136,7 +162,7 @@ export const DEFAULT_CONTENT = {
             id: "album-1:0",
             title: "Silêncio Fértil",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+            fullAudio: "",
             previewStart: 30,
             previewDuration: 30,
             duration: "6:12"
@@ -145,7 +171,7 @@ export const DEFAULT_CONTENT = {
             id: "album-1:1",
             title: "Fé Inversa",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+            fullAudio: "",
             previewStart: 45,
             previewDuration: 30,
             duration: "5:01"
@@ -154,7 +180,7 @@ export const DEFAULT_CONTENT = {
             id: "album-1:2",
             title: "Cálice de Verso",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3",
+            fullAudio: "",
             previewStart: 20,
             previewDuration: 30,
             duration: "4:48"
@@ -163,13 +189,14 @@ export const DEFAULT_CONTENT = {
             id: "album-1:3",
             title: "Ponte para o Nada",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3",
+            fullAudio: "",
             previewStart: 60,
             previewDuration: 30,
             duration: "4:15"
           }
         ]
       },
+
       {
         id: "ep-1",
         type: "ep",
@@ -183,7 +210,7 @@ export const DEFAULT_CONTENT = {
             id: "ep-1:0",
             title: "Oração Urbana",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3",
+            fullAudio: "",
             previewStart: 30,
             previewDuration: 30,
             duration: "4:20"
@@ -192,13 +219,14 @@ export const DEFAULT_CONTENT = {
             id: "ep-1:1",
             title: "Cinzas e Versos",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3",
+            fullAudio: "",
             previewStart: 40,
             previewDuration: 30,
             duration: "3:55"
           }
         ]
       },
+
       {
         id: "single-1",
         type: "single",
@@ -212,7 +240,7 @@ export const DEFAULT_CONTENT = {
             id: "single-1:0",
             title: "Vozes na Madrugada",
             previewAudio: "",
-            fullAudio: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3",
+            fullAudio: "",
             previewStart: 35,
             previewDuration: 30,
             duration: "4:02"
@@ -244,6 +272,7 @@ export const DEFAULT_CONTENT = {
   planos: {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
+    // ⚠️ SEM `price` — preço sempre de /api/plans (envs MP_PREMIUM_*).
     plans: [
       {
         id: "free",
@@ -323,6 +352,9 @@ export const DEFAULT_CONTENT = {
   }
 };
 
+// ─────────────────────────────────────────────────────────────
+// Labels de redes sociais (network → label)
+// ─────────────────────────────────────────────────────────────
 export const SOCIAL_LABELS = {
   spotify:   "Spotify",
   youtube:   "YouTube",
@@ -331,31 +363,50 @@ export const SOCIAL_LABELS = {
   tiktok:    "TikTok",
   apple:     "Apple Music",
   audiomack: "Audiomack",
-  itunes:    "iTunes",
-  deezer:    "Deezer"
+  deezer:    "Deezer",
+  soundcloud:"SoundCloud",
+  instagram: "Instagram",
+  x:         "X (Twitter)",
+  itunes:    "iTunes"
 };
 
+// ─────────────────────────────────────────────────────────────
+// Ordem preferencial de exibição das redes no editor
+// ─────────────────────────────────────────────────────────────
 export const NETWORKS_ORDER = [
-  'spotify', 'youtube', 'amazon', 'facebook',
-  'tiktok', 'apple', 'audiomack', 'itunes', 'deezer'
+  'spotify', 'youtube', 'amazon', 'apple',
+  'audiomack', 'deezer', 'soundcloud',
+  'facebook', 'instagram', 'tiktok', 'x', 'itunes'
 ];
 
+// ─────────────────────────────────────────────────────────────
+// Formatação de preço (pt-BR / BRL)
+// ─────────────────────────────────────────────────────────────
 export const PRICE_FORMATTER = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
   currency: 'BRL'
 });
 
+// ─────────────────────────────────────────────────────────────
+// Congelamento profundo (evita mutação acidental)
+// ─────────────────────────────────────────────────────────────
 function deepFreeze(obj) {
   if (obj && typeof obj === 'object' && !Object.isFrozen(obj)) {
     Object.freeze(obj);
-    for (const key of Object.keys(obj)) deepFreeze(obj[key]);
+    for (const key of Object.keys(obj)) {
+      deepFreeze(obj[key]);
+    }
   }
   return obj;
 }
 
 deepFreeze(DEFAULT_CONTENT);
 deepFreeze(SOCIAL_LABELS);
+deepFreeze(NETWORKS_ORDER);
 
+// ─────────────────────────────────────────────────────────────
+// Compatibilidade com código legado (site.js, store.js)
+// ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
   window.SOCIAL_LABELS = SOCIAL_LABELS;
