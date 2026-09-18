@@ -9,16 +9,22 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 ## 📋 Índice
 
 - [Arquitetura](#arquitetura)
+- [Stack](#stack)
 - [Estrutura de arquivos](#estrutura-de-arquivos)
 - [Endpoints](#endpoints)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Banco de dados](#banco-de-dados)
+- [Storage (Supabase)](#storage-supabase)
 - [Geração de hash do admin](#geração-de-hash-do-admin)
+- [PWA / Offline](#pwa--offline)
+- [Dependências npm](#dependências-npm)
+- [SEO e metadados](#seo-e-metadados)
 - [Deploy](#deploy)
 - [Painel admin](#painel-admin)
 - [Desenvolvimento local](#desenvolvimento-local)
 - [Segurança](#segurança)
 - [Manutenção](#manutenção)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -29,8 +35,9 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 │                     CLIENTE (navegador)                     │
 │                                                             │
 │  index.html                                                 │
-│   ├── site.js         → site público                        │
-│   └── admin/index.js  → painel administrativo               │
+│   ├── js/site.js          → site público                    │
+│   ├── js/admin/index.js   → painel administrativo           │
+│   └── sw.js               → Service Worker (cache/offline)  │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -57,12 +64,29 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 ┌─────────────────────────────────────────────────────────────┐
 │                    SERVIÇOS EXTERNOS                        │
 │                                                             │
-│  Mercado Pago  → checkout (assinaturas e aluguéis)          │
-│  Upstash Redis → rate limit (opcional)                      │
+│  Mercado Pago     → checkout (assinaturas e aluguéis)       │
+│  Upstash Redis    → rate limit (opcional)                   │
+│  Google Fonts     → tipografia (Inter + Playfair Display)   │
+│  Cloudflare CDN   → Font Awesome 6.5.1                      │
+│  Google AdSense   → anúncios (produção apenas)              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Stack
+### Camadas de cache
+
+O Service Worker (`sw.js`) atua como uma **camada de cache no cliente**, com estratégias diferentes por tipo de recurso:
+
+| Recurso | Estratégia | Fallback offline |
+|---|---|---|
+| Navegação (HTML) | network-first | `offline.html` |
+| Assets (CSS/JS/imagens) | cache-first + revalidate em background | placeholder / 504 |
+| API (`/api/*`) | nunca cacheada | erro de rede |
+| Range requests (áudio) | passa direto | erro de rede |
+| Cross-origin (CDNs) | passa direto | erro de rede |
+
+---
+
+## 🧱 Stack
 
 - **Frontend**: HTML + CSS + JavaScript (ES modules nativos, sem bundler)
 - **Backend**: Vercel Serverless Functions (Node.js 20+)
@@ -71,6 +95,10 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 - **Pagamentos**: Mercado Pago (preapproval + checkout preferences)
 - **Storage**: Supabase Storage
 - **Cache/Rate limit**: Upstash Redis (opcional, fail-open)
+- **PWA / Offline**: Service Worker nativo + Cache API
+- **Fontes**: Google Fonts (Inter + Playfair Display)
+- **Ícones**: Font Awesome 6.5.1 (via cdnjs)
+- **Ads**: Google AdSense (apenas em produção)
 - **Deploy**: Vercel
 
 ---
@@ -81,9 +109,15 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 josephmatthos/
 │
 ├── index.html                  # Página principal (site + painel admin)
+├── offline.html                # Página offline (usada pelo SW)
+├── termos-uso.html             # Termos de Uso
+├── politica-privacidade.html   # Política de Privacidade (LGPD)
+├── sw.js                       # Service Worker (cache + offline)
 ├── vercel.json                 # Configuração de deploy (opcional)
-├── README.md                   # Este arquivo
+├── package.json                # Engines apenas (zero deps runtime)
+├── package-lock.json           # Lockfile (npm 9+)
 ├── schema.sql                  # Schema completo do banco
+├── README.md                   # Este arquivo
 │
 ├── css/
 │   └── style.css               # Todos os estilos (site + admin)
@@ -127,15 +161,14 @@ josephmatthos/
 │
 ├── assets/
 │   └── img/                    # Imagens estáticas
-│       ├── tema.png
-│       ├── vinil.png
-│       ├── josephmatthos.png
-│       └── album-boom-boom-bap.jpg
+│       ├── tema.webp
+│       ├── vinil.webp
+│       ├── josephmatthos.webp
+│       ├── boomboombap.webp
+│       └── placeholder.webp
 │
-├── scripts/
-│   └── hash-admin-password.js  # Gera hash scrypt da senha admin
-│
-└── sw.js                       # Service Worker (opcional)
+└── scripts/
+    └── hash-admin-password.js  # Gera hash scrypt da senha admin
 ```
 
 ---
@@ -287,25 +320,45 @@ create policy "xxx_service_all" on public.xxx
 
 **Sem essas policies, os endpoints do admin retornam 502.**
 
-### Bucket do Storage
+---
+
+## 📦 Storage (Supabase)
+
+### Bucket
 
 1. Supabase → **Storage** → **New bucket**
 2. Nome: `site-assets`
-3. Marcar como **Public**
-4. Policies: leitura pública, escrita só via service role
+3. Marcar como **Public** (para servir imagens/áudios diretamente)
+4. Policies: leitura pública, escrita/edição/exclusão só via `service_role`
 
-Estrutura:
+### Estrutura
+
 ```
 site-assets/
-  images/    ← imagens do site
-  audio/     ← áudios das faixas
+  images/    ← imagens do site (hero, sobre, fundo, capas)
+  audio/     ← áudios das faixas (completos e prévias)
 ```
+
+### Como o backend usa
+
+- Uploads feitos via `/api/admin?action=upload` (server-side, com `service_role`)
+- O cliente **nunca** recebe a `service_role`
+- URLs públicas são retornadas após o upload e persistidas em `albums`/`tracks`/`site_content`
+- Exclusão de objetos via API do Supabase Storage (server-side)
+
+### Direitos LGPD
+
+Quando um titular exerce direito de exclusão (Art. 18 LGPD), o backend remove:
+1. Os metadados no PostgreSQL
+2. O objeto correspondente no bucket
+
+Ambos os passos são necessários — remover só metadados deixa o arquivo "órfão" no bucket.
 
 ---
 
 ## 🔑 Geração de hash do admin
 
-A senha do admin **nunca é armazenada em texto puro**. Usamos **scrypt** (N=16384, r=8, p=1).
+A senha do admin **nunca é armazenada em texto puro**. Usamos **scrypt** (N=16384, r=8, p=1) com salt de 16 bytes.
 
 ### Opção A — via Node.js local
 
@@ -336,6 +389,162 @@ Cole o hash em `ADMIN_PASSWORD_HASH` no Vercel → Settings → Environment Vari
 
 ---
 
+## 📴 PWA / Offline
+
+O projeto inclui um **Service Worker** (`sw.js`) que fornece suporte offline parcial e cache de assets.
+
+### Registro
+
+O SW é registrado no final do `index.html`:
+
+```js
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function (err) {
+      console.warn('[SW] Registro falhou:', err.message);
+    });
+  });
+}
+```
+
+> Em `localhost` e `https://`, o registro funciona. Em `file://`, o navegador bloqueia — sempre teste via servidor HTTP.
+
+### Estratégias por tipo de requisição
+
+| Tipo | Estratégia | Observação |
+|---|---|---|
+| Navegação (HTML) | network-first → `offline.html` | Se offline, serve a página salva |
+| Assets (CSS/JS/imagens) | cache-first + revalidate em background | Atualiza em background sem bloquear |
+| API (`/api/*`) | **nunca cacheada** | Sempre vai à rede (dados sensíveis) |
+| Range requests (`Range:` header) | **nunca interceptada** | Áudio com seek precisa ir direto à rede |
+| Cross-origin | **nunca interceptada** | Fonts, CDNs, AdSense, MP ficam fora |
+
+### Precache (`CACHE_STATIC`)
+
+O SW pré-cacheia no `install`:
+
+- Páginas: `/`, `/index.html`, `/offline.html`, `/termos-uso.html`, `/politica-privacidade.html`
+- CSS: `/css/style.css`
+- JS público: `utils.js`, `config.js`, `site.js`
+- JS admin: todos os módulos (o SW **não segue imports**, então cada arquivo precisa estar listado)
+- Imagens padrão: `tema.webp`, `vinil.webp`, `josephmatthos.webp`, `placeholder.webp`
+
+> ⚠️ **Importante**: ao adicionar um novo módulo ES em `js/` ou `js/admin/`, você **precisa** adicioná-lo ao `CACHE_STATIC`, senão ele não estará disponível offline.
+
+### Atualização do cache
+
+Quando você alterar assets (CSS, JS, imagens), **bumpe a versão** no topo do `sw.js`:
+
+```js
+const CACHE_VERSION = 'jm-v9';  // ← incremente aqui
+```
+
+Ao subir para `jm-v10`, o SW:
+1. Instala o novo cache
+2. Ativa e **apaga** o cache antigo
+3. Toma controle via `clients.claim()`
+
+Clientes com o SW antigo pegam a atualização na próxima visita.
+
+### Forçar atualização
+
+Se um cliente ficar preso numa versão antiga:
+
+```js
+// No console do navegador (DevTools)
+navigator.serviceWorker.getRegistrations().then(function (regs) {
+  regs.forEach(function (r) { r.unregister(); });
+});
+```
+
+Depois, Ctrl+Shift+R para recarregar sem cache.
+
+### O que funciona offline
+
+✅ Site público (HTML + CSS + JS + imagens padrão)
+✅ Navegação entre páginas pré-cacheadas
+✅ Página `offline.html` como fallback
+
+### O que NÃO funciona offline
+
+❌ Login / signup (dependem de `/api/auth`)
+❌ Checkout / pagamentos
+❌ Painel admin (depende de `/api/admin`)
+❌ Áudios das faixas (streaming, não cacheados — apenas Range passa direto)
+❌ Conteúdo dinâmico (vem de `/api/public`)
+
+---
+
+## 📦 Dependências npm
+
+**Runtime = zero dependências npm.**
+
+O `package.json` existe **apenas** para declarar a versão mínima do Node.js:
+
+```json
+{
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}
+```
+
+Todo o backend usa apenas módulos nativos do Node (`crypto`, `fetch` global, etc.). O `package-lock.json` reflete isso (árvore de dependências vazia).
+
+> **Histórico**: uma versão anterior usava `bcryptjs`, que foi removido ao migrar o hash de senha do admin para `crypto.scrypt` nativo. Se você encontrar referências a `bcryptjs` em código antigo, são resquícios.
+
+### Instalar
+
+```bash
+npm install    # apenas valida o package.json, não instala nada
+```
+
+### Por que isso importa
+
+- **Build mais rápido** na Vercel (~2s)
+- **Zero superfície de ataque** por dependências de terceiros
+- **Sem `npm audit`** reclamando
+- **Sem risco de supply chain attack**
+
+---
+
+## 🔍 SEO e metadados
+
+### No `<head>` do `index.html`
+
+- **Title** e **meta description** otimizados
+- **Open Graph** completo (`og:type`, `og:title`, `og:image` em `.webp` 1200×1200, etc.)
+- **Twitter Card** (`summary_large_image`)
+- **JSON-LD** (`schema.org/MusicGroup`) com nome, gênero, descrição, imagem e URL
+- **`theme-color`** (`#0b0a0c`) para a barra do navegador mobile
+- **Favicon** em SVG inline (emoji 🎤)
+
+### Páginas legais
+
+Ambas têm `<link rel="canonical">` e são indexáveis (`robots: index, follow`):
+
+- `/termos-uso.html`
+- `/politica-privacidade.html`
+
+### `offline.html`
+
+Tem `<meta name="robots" content="noindex, follow">` — não deve aparecer em buscas.
+
+### AdSense
+
+O script do AdSense é carregado **condicionalmente**:
+
+```js
+var host = location.hostname;
+var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+if (isLocal) return;  // não carrega em dev
+```
+
+Em produção (`josephmatthos.vercel.app`), o script é injetado dinamicamente. Em `localhost`, é ignorado — evita erros e requisições desnecessárias durante o desenvolvimento.
+
+---
+
 ## 🚀 Deploy
 
 ### Primeiro deploy
@@ -357,6 +566,8 @@ git push
 ```
 
 O Vercel detecta o push e faz deploy automático (~30s).
+
+> ⚠️ **Atenção ao Service Worker**: se você alterou assets (CSS, JS, imagens), **bumpe `CACHE_VERSION` no `sw.js`** antes do commit. Caso contrário, clientes com cache antigo continuarão vendo a versão antiga.
 
 ### Ambientes
 
@@ -444,7 +655,16 @@ python -m http.server 8000
 
 E abra `http://localhost:8000`. **Funciona para o site público, mas o painel admin não funciona** (precisa do backend).
 
-> **⚠️ Importante**: não abra `index.html` direto via `file://` — os ES modules são bloqueados por CORS.
+> **⚠️ Importante**: não abra `index.html` direto via `file://` — os ES modules e o Service Worker são bloqueados por CORS.
+
+### Testar offline
+
+1. Rode `vercel dev` ou um servidor HTTP
+2. Abra o site uma vez (para o SW instalar)
+3. DevTools → **Application → Service Workers** → confirme `jm-vN` ativo
+4. DevTools → **Network** → marque **Offline**
+5. Recarregue → deve aparecer `offline.html`
+6. Navegue para `/politica-privacidade.html` → deve carregar (está no precache)
 
 ---
 
@@ -456,7 +676,8 @@ E abra `http://localhost:8000`. **Funciona para o site público, mas o painel ad
 - ✅ **Cookies `__Host-`** HttpOnly + SameSite=Lax em produção
 - ✅ **Sessão admin** assinada com HMAC-SHA256 (4h)
 - ✅ **Senha admin** com scrypt (N=16384) + salt de 16 bytes
-- ✅ **Rate limit** por IP em login e endpoints sensíveis
+- ✅ **Comparação timing-safe** em senhas e tokens (`crypto.timingSafeEqual`)
+- ✅ **Rate limit** por IP em login e endpoints sensíveis (Upstash, opcional)
 - ✅ **Auditoria** em toda operação de escrita
 - ✅ **RLS** habilitada em todas as tabelas
 - ✅ **`service_role` só no servidor** — nunca exposta ao cliente
@@ -464,7 +685,8 @@ E abra `http://localhost:8000`. **Funciona para o site público, mas o painel ad
 - ✅ **Sanitização** de input (remove HTML de campos de nome)
 - ✅ **Content Security Policy** configurada
 - ✅ **Idempotência** em pagamentos (evita cobranças duplicadas)
-- ✅ **Timing-safe comparison** em senhas e tokens
+- ✅ **Service Worker não cacheia API** — dados sensíveis sempre vão à rede
+- ✅ **Service Worker não intercepta Range** — áudio vai direto à rede
 
 ### Secrets que NUNCA podem ir para o cliente
 
@@ -503,6 +725,13 @@ Envie e-mail para o mantenedor. **Não abra issues públicas** para vulnerabilid
 3. **Faça redeploy**
 4. **Todas as sessões ativas expiram** — o admin precisa logar de novo
 
+### Atualizar assets (CSS/JS/imagens)
+
+1. Edite os arquivos
+2. **Bumpe `CACHE_VERSION` no `sw.js`** (ex: `jm-v9` → `jm-v10`)
+3. Commit + push
+4. O SW novo será instalado na próxima visita de cada cliente
+
 ### Limpeza de dados antigos
 
 Rode periodicamente no SQL Editor (ou via pg_cron):
@@ -526,6 +755,86 @@ delete from public.payments_events where created_at < now() - interval '365 days
 - **Vercel → Project → Logs**: erros das functions
 - **Supabase → Logs**: queries lentas, erros de RLS
 - **Mercado Pago → Developers**: notificações pendentes
+
+---
+
+## 🩺 Troubleshooting
+
+### Service Worker não atualiza
+
+**Sintoma**: você alterou CSS/JS, fez deploy, mas o site continua com a versão antiga.
+
+**Causa**: esqueceu de bumpar `CACHE_VERSION` no `sw.js`.
+
+**Solução**:
+1. Bumpe `CACHE_VERSION` (`jm-v9` → `jm-v10`)
+2. Commit + push
+3. No navegador: DevTools → Application → Service Workers → **Unregister**
+4. Ctrl+Shift+R
+
+### Site não carrega offline
+
+**Sintoma**: em modo offline, aparece erro de rede em vez de `offline.html`.
+
+**Causas possíveis**:
+- SW não instalado (primeira visita)
+- `offline.html` não está em `CACHE_STATIC`
+- URL acessada não está no cache e não é navegação
+
+**Solução**: abra o site **uma vez online** para o SW instalar tudo. Depois teste offline.
+
+### Admin retorna 502
+
+**Sintoma**: login no painel admin retorna erro 502.
+
+**Causa**: falta de policy RLS para `service_role` em alguma tabela.
+
+**Solução**: verifique se todas as tabelas têm a policy:
+
+```sql
+create policy "xxx_service_all" on public.xxx
+  for all to service_role
+  using (true) with check (true);
+```
+
+Rode `select * from pg_policies where schemaname = 'public';` para auditar.
+
+### AdSense não carrega em dev
+
+**Comportamento esperado**: o script só carrega em produção. Em `localhost`, `127.0.0.1` e `[::1]`, é ignorado intencionalmente.
+
+**Para testar AdSense localmente**: use um túnel (`ngrok`, `cloudflared`) e acesse via domínio público — o `hostname` não será `localhost`.
+
+### Login admin falha após rotação de secret
+
+**Causa**: `ADMIN_SESSION_SECRET` mudou, todas as sessões HMAC existentes ficam inválidas.
+
+**Solução**: faça login novamente. É o comportamento esperado.
+
+### Áudio não toca offline
+
+**Comportamento esperado**: o SW **não intercepta** Range requests, e os áudios das faixas ficam no Supabase Storage (cross-origin). Offline, o player não consegue baixar.
+
+**Para suportar áudio offline**, seria necessário:
+1. Cachear áudios completos (grande uso de disco)
+2. Interceptar Range requests e servir do cache (complexo)
+3. Pré-carregar áudios via `Cache API` manualmente
+
+Não é o objetivo atual.
+
+### Build da Vercel falha com "npm ci can only install..."
+
+**Causa**: `package.json` e `package-lock.json` estão dessincronizados.
+
+**Solução**:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+git add package.json package-lock.json
+git commit -m "chore: sincroniza lockfile"
+git push
+```
 
 ---
 
