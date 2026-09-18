@@ -115,7 +115,6 @@ export function initAdminShortcuts() {
   shortcutsBound = true;
 
   document.addEventListener('keydown', (e) => {
-    // Ctrl + Shift + A
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyA') {
       e.preventDefault();
       window.history.pushState({}, '', '/?admin');
