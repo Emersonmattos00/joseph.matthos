@@ -9,7 +9,7 @@
    ⚠️  Ao fazer deploy de mudanças nos assets, bu mpe CACHE_VERSION
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v7';
+const CACHE_VERSION = 'jm-v8';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
@@ -19,25 +19,12 @@ const CACHE_VERSION = 'jm-v7';
 // precisam estar aqui também (o SW não segue imports).
 // ─────────────────────────────────────────────────────────────
 const CACHE_STATIC = [
-  // Páginas
   '/',
   '/index.html',
-  '/offline.html',
-  '/termos-uso.html',
-  '/politica-privacidade.html',
-
-  // CSS
   '/css/style.css',
-
-  // Libs públicas (opcional — remova se preferir CDN sempre online)
-  // '/vendor/fontawesome/css/all.min.css',
-
-  // JS raiz
   '/js/utils.js',
   '/js/config.js',
   '/js/site.js',
-
-  // Admin — entrypoint + submódulos
   '/js/admin/index.js',
   '/js/admin/state.js',
   '/js/admin/api.js',
@@ -56,13 +43,13 @@ const CACHE_STATIC = [
   '/js/admin/editors/albums.js',
   '/js/admin/editors/playlists.js',
   '/js/admin/editors/plans.js',
-  '/js/admin/editors/socials.js',
+  '/js/admin/editors/socials.js'
 
   // Imagens padrão (fallback de layout)
-  '/assets/img/tema.png',
-  '/assets/img/vinil.png',
-  '/assets/img/josephmatthos.png',
-  '/assets/img/placeholder.jpg'
+  '/assets/img/tema.webp',
+  '/assets/img/vinil.webp',
+  '/assets/img/josephmatthos.webp',
+  '/assets/img/placeholder.webp'
 ];
 
 // ─────────────────────────────────────────────────────────────
