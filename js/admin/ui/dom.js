@@ -1,10 +1,27 @@
-javascript
 /* ============================================================
    js/admin/ui/dom.js
    ------------------------------------------------------------
    Helpers DOM utilizados pelo painel administrativo.
+
+   - getByPath / setByPath : acesso e mutação segura de objetos
+   - esc                   : escape de HTML
+
+   Reexporta safeExternalUrl para compatibilidade com módulos
+   que importam de '../ui/dom.js' (ex: socials.js).
    ============================================================ */
 
+// ─────────────────────────────────────────────────────────────
+// REEXPORTS de utils.js
+// ------------------------------------------------------------
+// O editor de redes sociais (socials.js) importa safeExternalUrl
+// de '../ui/dom.js'. Esta linha mantém esse contrato sem duplicar
+// a implementação (que vive em utils.js).
+// ─────────────────────────────────────────────────────────────
+export { safeExternalUrl } from '../../utils.js';
+
+// ─────────────────────────────────────────────────────────────
+// ACESSO A PATHS
+// ─────────────────────────────────────────────────────────────
 export function getByPath(obj, path) {
   if (!obj || typeof path !== 'string' || !path) {
     return undefined;
@@ -51,6 +68,9 @@ export function setByPath(obj, path, value) {
   target[last] = value;
 }
 
+// ─────────────────────────────────────────────────────────────
+// ESCAPE HTML
+// ─────────────────────────────────────────────────────────────
 export function esc(value) {
   return String(value == null ? '' : value)
     .replace(/[&<>"']/g, (char) => ({
