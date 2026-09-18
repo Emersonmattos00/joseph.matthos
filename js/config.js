@@ -23,7 +23,7 @@ export const DEFAULT_CONTENT = {
       title: "Joseph Matthos | Plataforma Oficial",
       description: "Rapper poético, filosófico e inspirador. Discografia completa, prévias gratuitas e loja de faixas individuais."
     },
-    bgImage: "assets/img/tema.png"
+    bgImage: "assets/img/tema.webp"
   },
 
   hero: {
@@ -33,16 +33,16 @@ export const DEFAULT_CONTENT = {
     secondaryBtn: { text: "Ver planos", link: "" },
     vinyl: {
       lyric: "\u201cNada acabou. Só estamos começando.\u201d",
-      image: "assets/img/vinil.png"
+      image: "assets/img/vinil.webp"
     }
   },
 
   sobre: {
     title: "Sobre <span class=\"gold\">Joseph</span>",
     subtitle: "Entre a poesia concreta e o rap de reflexão, uma voz que incomoda e cura.",
-    paragraphs: "<strong>Joseph Matthos</strong> não é apenas um rapper. É um cronista do invisível, um filósofo de esquina, um poeta que encontrou no beat a cadência perfeita para suas inquietações.\nNascido na periferia e formado nas ruas, Joseph transforma vivências cruas em letras que equilibram profundidade e acessibilidade.\nCom influências que vão de <strong>Racionais MC's</strong> a <strong>Fernando Pessoa</strong>, ele constrói pontes entre o sagrado e o cotidiano. Em <strong>Boom, Boom, Bàp</strong> (2026), palavras viram rumor, rumor vira verdade e verdade vira legado.",
+    paragraphs: "<strong>Joseph Matthos</strong> não é apenas um rapper. É um cronista do invisível, um filósofo de esquina, um poeta que encontrou no beat a cadência perfeita para suas inquietações.\nNascido na periferia e formado nas ruas, Joseph transforma vivências cruas em letras que equilibram profundidade e acessibilidade.\nCom influências que vão de <strong>Racionais MC's</strong> a <strong>Fernando Pessoa</strong>, ele constrói pontes entre o sagrado e o cotidiano. Em <strong>Boom, Boom, Bap</strong> (2026), palavras viram rumor, rumor vira verdade e verdade vira legado.",
     quote: "\u201cMinha rima é a filha da noite que pariu o dia.\u201d",
-    image: "assets/img/josephmatthos.png"
+    image: "assets/img/josephmatthos.webp"
   },
 
   filosofia: {
@@ -51,7 +51,7 @@ export const DEFAULT_CONTENT = {
     frases: [
       {
         text: "Haverá dias difíceis, mas a missão continua. Enquanto eu respirar, a história não termina. Nada acabou. Só estamos começando.",
-        author: "Boom, Boom, Bàp"
+        author: "Boom, Boom, Bap"
       },
       {
         text: "A rua me ensinou que quem tem pressa de chegar esquece de ver a paisagem.",
@@ -79,10 +79,10 @@ export const DEFAULT_CONTENT = {
       {
         id: "album-bbb",
         type: "album",
-        title: "Boom, Boom, Bàp",
+        title: "Boom, Boom, Bap",
         year: 2026,
         cover: "BBB",
-        coverImage: "assets/img/album-boom-boom-bap.jpg",
+        coverImage: "assets/img/boomboombap.webp",
         description: "O álbum da maturidade. Palavras que viram rumor, rumor que vira verdade, verdade que vira legado.",
         tracks: [
           {
