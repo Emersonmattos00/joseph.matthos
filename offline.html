@@ -12,9 +12,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
 
-<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7190208592008203"
-     crossorigin="anonymous"></script>
- 
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
@@ -194,7 +191,7 @@
       <button type="button" class="btn btn-primary" id="retryBtn" aria-label="Tentar carregar novamente">
         ↻ Tentar novamente
       </button>
-      <a href="/" class="btn btn-outline" aria-label="Voltar para a página inicial">
+      <a href="/" class="btn btn-outline" id="homeLink" aria-label="Voltar para a página inicial">
         ← Voltar ao site
       </a>
     </div>
@@ -207,62 +204,108 @@
 
   <noscript>
     <style>
-      .actions { display: none; }
-      .status { display: none; }
+      .actions, .status { display: none; }
     </style>
     <p style="margin-top:2rem;">
-      <a href="/" class="btn btn-primary">← Voltar ao site</a>
+      <a href="/" style="color:#d4af37;">← Voltar ao site</a>
     </p>
   </noscript>
 
 <script>
 (function () {
   var retryBtn = document.getElementById('retryBtn');
+  var homeLink = document.getElementById('homeLink');
   var statusEl = document.getElementById('status');
   var statusText = document.getElementById('statusText');
 
+  function setOnline() {
+    statusEl.classList.add('online');
+    statusText.textContent = 'Conexão restaurada';
+  }
+
+  function setOffline() {
+    statusEl.classList.remove('online');
+    statusText.textContent = 'Você está offline';
+  }
+
   function updateStatus() {
-    if (navigator.onLine) {
-      statusEl.classList.add('online');
-      statusText.textContent = 'Conexão restaurada';
-    } else {
-      statusEl.classList.remove('online');
-      statusText.textContent = 'Você está offline';
-    }
+    if (navigator.onLine) setOnline();
+    else setOffline();
   }
 
-  function tryReload() {
+  // Ping real: HEAD na própria origem, sem cache. Só considera online se response.ok.
+  function ping() {
+    return fetch(window.location.origin + '/?ping=' + Date.now(), {
+      method: 'HEAD',
+      cache: 'no-store',
+      redirect: 'follow'
+    }).then(function (res) {
+      return res && res.ok;
+    }).catch(function () {
+      return false;
+    });
+  }
+
+  function checkAndMaybeReload() {
+    ping().then(function (ok) {
+      if (ok) {
+        setOnline();
+        setTimeout(function () { window.location.reload(); }, 600);
+      } else {
+        setOffline();
+      }
+    });
+  }
+
+  retryBtn.addEventListener('click', function () {
     retryBtn.disabled = true;
+    var originalText = retryBtn.textContent;
     retryBtn.textContent = 'Verificando...';
-    // Pequeno delay pra dar feedback visual
-    setTimeout(function () {
-      window.location.reload();
-    }, 400);
-  }
 
-  retryBtn.addEventListener('click', tryReload);
+    ping().then(function (ok) {
+      if (ok) {
+        retryBtn.textContent = 'Conectado! Recarregando...';
+        window.location.reload();
+      } else {
+        retryBtn.disabled = false;
+        retryBtn.textContent = originalText;
+        setOffline();
+      }
+    });
+  });
+
+  // Impede navegação se ainda offline
+  homeLink.addEventListener('click', function (e) {
+    if (!navigator.onLine) {
+      e.preventDefault();
+      setOffline();
+      statusEl.animate(
+        [{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }],
+        { duration: 250 }
+      );
+    }
+  });
 
   window.addEventListener('online', function () {
-    updateStatus();
-    // Recarrega automaticamente quando a conexão volta
-    setTimeout(function () {
-      window.location.reload();
-    }, 800);
+    setOnline();
+    setTimeout(function () { window.location.reload(); }, 800);
   });
-  window.addEventListener('offline', updateStatus);
+
+  window.addEventListener('offline', setOffline);
 
   updateStatus();
 
-  // Fallback: se navigator.onLine mentir, tenta uma requisição de teste
-  fetch(window.location.origin + '/favicon.ico', { method: 'HEAD', cache: 'no-store' })
-    .then(function () {
-      statusEl.classList.add('online');
-      statusText.textContent = 'Conexão restaurada';
-      setTimeout(function () { window.location.reload(); }, 600);
-    })
-    .catch(function () {
-      // Continua offline — sem ação
+  // Se navigator.onLine disser online, confirma com ping real
+  if (navigator.onLine) {
+    ping().then(function (ok) {
+      if (ok) {
+        setOnline();
+        setTimeout(function () { window.location.reload(); }, 600);
+      } else {
+        setOffline();
+      }
     });
+  }
 })();
 </script>
 </body>
