@@ -12,7 +12,8 @@
    GET  /api/admin?action=sales      → assinaturas + rentals + eventos
 
    - Sessão via cookie __Host-jm_admin (HttpOnly + HMAC assinado)
-   - Todas as ações exigem sessão válida (exceto login)
+   - ADMIN_SESSION_SECRET exige mínimo de 32 caracteres
+   - CSRF: Origin check em todos os métodos mutantes
    - Rate limit por IP no login
    - Auditoria em toda escrita
    ============================================================ */
@@ -49,6 +50,9 @@ const {
   verifyScrypt,
   timingSafeEq,
 
+  // CSRF
+  checkOrigin,
+
   // Ambiente
   IS_PROD
 } = require('./_lib');
@@ -61,6 +65,7 @@ const SESSION_COOKIE_DEV = 'jm_admin';
 const SESSION_COOKIE = IS_PROD ? SESSION_COOKIE_PROD : SESSION_COOKIE_DEV;
 
 const SESSION_MAX_AGE = 60 * 60 * 4; // 4h
+const MIN_SESSION_SECRET_LENGTH = 32;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
@@ -86,6 +91,29 @@ const VALID_ACTIONS = new Set([
 ]);
 
 // ─────────────────────────────────────────────────────────────
+// Segredo da sessão — validação
+// ─────────────────────────────────────────────────────────────
+function getSessionSecret() {
+  const secret = String(process.env.ADMIN_SESSION_SECRET || '').trim();
+
+  if (!secret) {
+    const err = new Error('ADMIN_SESSION_SECRET ausente.');
+    err.code = 'SECRET_MISSING';
+    throw err;
+  }
+
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) {
+    const err = new Error(
+      `ADMIN_SESSION_SECRET deve ter no mínimo ${MIN_SESSION_SECRET_LENGTH} caracteres (atual: ${secret.length}).`
+    );
+    err.code = 'SECRET_TOO_SHORT';
+    throw err;
+  }
+
+  return secret;
+}
+
+// ─────────────────────────────────────────────────────────────
 // Handler
 // ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
@@ -100,6 +128,18 @@ module.exports = async function handler(req, res) {
   }
 
   const method = (req.method || 'GET').toUpperCase();
+
+  // ── CSRF: Origin check em métodos mutantes
+  if (method !== 'GET' && method !== 'HEAD') {
+    if (!checkOrigin(req)) {
+      console.warn('[admin] Origin rejeitada:', {
+        action,
+        method,
+        origin: req.headers.origin || req.headers.referer || null
+      });
+      return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
+    }
+  }
 
   // ── Login: público, com rate limit
   if (action === 'login') {
@@ -172,10 +212,17 @@ async function handleLogin(req, res) {
 
   const expectedUser = String(process.env.ADMIN_USER || '').trim();
   const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
-  const secret = String(process.env.ADMIN_SESSION_SECRET || '').trim();
 
-  if (!expectedUser || !hash || !secret) {
-    console.error('[admin/login] env ausente');
+  let secret;
+  try {
+    secret = getSessionSecret();
+  } catch (err) {
+    console.error('[admin/login]', err.code, err.message);
+    return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+  }
+
+  if (!expectedUser || !hash) {
+    console.error('[admin/login] ADMIN_USER ou ADMIN_PASSWORD_HASH ausente');
     return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
   }
 
@@ -205,7 +252,7 @@ async function handleLogin(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SESSION
+// SESSION / LOGOUT
 // ─────────────────────────────────────────────────────────────
 async function handleSession(req, res, session) {
   const method = (req.method || 'GET').toUpperCase();
@@ -218,9 +265,6 @@ async function handleSession(req, res, session) {
   return sendJson(res, 200, { ok: true, user: session.user });
 }
 
-// ─────────────────────────────────────────────────────────────
-// LOGOUT
-// ─────────────────────────────────────────────────────────────
 async function handleLogout(req, res, session) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
@@ -317,7 +361,6 @@ async function handlePutContent(req, res, session) {
 
     const newVersion = currentVersion + 1;
 
-    // Salva versão atual no histórico
     if (currentRow) {
       await supabaseAdminRequest('/rest/v1/site_content_history', {
         method: 'POST',
@@ -705,8 +748,12 @@ function verifySession(req) {
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
 
-  const secret = String(process.env.ADMIN_SESSION_SECRET || '');
-  if (!secret) return null;
+  let secret;
+  try {
+    secret = getSessionSecret();
+  } catch {
+    return null;
+  }
 
   return verifyHmac(token, secret, SESSION_MAX_AGE * 1000);
 }
