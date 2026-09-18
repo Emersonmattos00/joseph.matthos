@@ -597,12 +597,12 @@ async function buyTrack(albumId, trackIndex) {
 
   try {
     toast('Abrindo checkout seguro...', '✦');
-    const r = await fetch('/api/payments-rental', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ albumId, trackIndex })
-    });
+    const r = await fetch('/api/payments?type=rental', {
+     method: 'POST',
+     credentials: 'same-origin',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ albumId, trackIndex })
+   });
     const json = await r.json();
     if (!r.ok || !json.ok || !json.checkoutUrl) {
       toast(json.error || 'Não foi possível iniciar o pagamento.', '⚠');
@@ -631,12 +631,12 @@ async function subscribe(planId) {
 
   try {
     toast('Abrindo checkout seguro...', '✦');
-    const r = await fetch('/api/payments-subscription', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan: planId })
-    });
+    const r = await fetch('/api/payments?type=subscription', {
+     method: 'POST',
+     credentials: 'same-origin',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ plan: planId })
+   });
     const json = await r.json();
     if (!r.ok || !json.ok || !json.checkoutUrl) {
       toast(json.error || 'Pagamento indisponível.', '⚠');
