@@ -56,14 +56,12 @@ module.exports = async function handler(req, res) {
 
   const method = (req.method || 'GET').toUpperCase();
 
-  // 🔍 TEMPORÁRIO — gera hash com crypto.scrypt do Node
+  // 🔍 TEMPORÁRIO
   if (action === '__gen_hash__') {
     if (method !== 'POST') return methodNotAllowed(res, 'POST');
     const b = parseBody(req);
     const password = String(b.password || '');
-    if (!password) {
-      return sendJson(res, 400, { ok: false, error: 'password obrigatório' });
-    }
+    if (!password) return sendJson(res, 400, { ok: false, error: 'password obrigatório' });
     const salt = crypto.randomBytes(16);
     return new Promise((resolve) => {
       crypto.scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 }, (err, derived) => {
@@ -71,7 +69,7 @@ module.exports = async function handler(req, res) {
         resolve(sendJson(res, 200, {
           ok: true,
           hash: 'scrypt$' + salt.toString('hex') + '$' + derived.toString('hex'),
-          password
+          password: password
         }));
       });
     });
@@ -113,6 +111,9 @@ module.exports = async function handler(req, res) {
   }
 };
 
+// ─────────────────────────────────────────────────────────────
+// LOGIN
+// ─────────────────────────────────────────────────────────────
 async function handleLogin(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
@@ -151,11 +152,13 @@ async function handleLogin(req, res) {
   ].filter(Boolean).join('; ');
 
   res.setHeader('Set-Cookie', SESSION_COOKIE + '=' + token + '; ' + cookieAttrs);
-
   await audit('admin_login', { ip, userAgent, success: true });
   return sendJson(res, 200, { ok: true, user: expectedUser });
 }
 
+// ─────────────────────────────────────────────────────────────
+// SESSION / LOGOUT
+// ─────────────────────────────────────────────────────────────
 async function handleSession(req, res, session) {
   const method = (req.method || 'GET').toUpperCase();
   if (method === 'HEAD') { res.status(200); return res.end(); }
@@ -167,23 +170,33 @@ async function handleLogout(req, res, session) {
   const userAgent = req.headers['user-agent'] || '';
   const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0',
     IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
+
   res.setHeader('Set-Cookie', [
     SESSION_COOKIE + '=; ' + attrs,
     'jm_admin=; ' + attrs,
     '__Host-jm_admin=; ' + attrs
   ]);
   res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+
   await audit('admin_logout', { actor: session.user, ip, userAgent, success: true });
   return sendJson(res, 200, { ok: true });
 }
 
+// ─────────────────────────────────────────────────────────────
+// CONTENT — GET
+// ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   try {
     const r = await supabaseAdminRequest(
       '/rest/v1/site_content?key=eq.' + CONTENT_KEY + '&select=data,version,updated_at&limit=1',
       { method: 'GET' }
     );
-    if (!r.response.ok) return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    if (!r.response.ok) {
+      return sendJson(res, 502, {
+        ok: false, error: 'Serviço indisponível.',
+        _debug: { stage: 'content_get', status: r.response.status, body: r.body }
+      });
+    }
     const row = Array.isArray(r.body) ? r.body[0] : null;
     return sendJson(res, 200, {
       ok: true,
@@ -192,10 +205,16 @@ async function handleGetContent(req, res) {
       updatedAt: (row && row.updated_at) || null
     });
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Serviço indisponível.',
+      _debug: { stage: 'content_get_throw', message: err.message, code: err.code }
+    });
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// CONTENT — PUT (com _debug detalhado)
+// ─────────────────────────────────────────────────────────────
 async function handlePutContent(req, res, session) {
   const body = parseBody(req);
   const data = body.data;
@@ -219,19 +238,24 @@ async function handlePutContent(req, res, session) {
     const currentVersion = (currentRow && currentRow.version) || 0;
 
     if (baseVersion !== null && baseVersion !== currentVersion) {
-      return sendJson(res, 409, { ok: false, error: 'Conflito.', currentVersion });
+      return sendJson(res, 409, { ok: false, error: 'Conflito.', currentVersion: currentVersion });
     }
 
     const newVersion = currentVersion + 1;
 
+    // Salva no histórico (best-effort)
     if (currentRow) {
-      await supabaseAdminRequest('/rest/v1/site_content_history', {
+      const histRes = await supabaseAdminRequest('/rest/v1/site_content_history', {
         method: 'POST',
         headers: { Prefer: 'return=minimal' },
         body: JSON.stringify({ key: CONTENT_KEY, data: currentRow.data, version: currentRow.version })
-      }).catch(function() {});
+      });
+      if (!histRes.response.ok) {
+        console.warn('[admin/content] history insert falhou:', histRes.response.status);
+      }
     }
 
+    // Upsert
     const upsert = await supabaseAdminRequest(
       '/rest/v1/site_content?on_conflict=key',
       {
@@ -244,15 +268,33 @@ async function handlePutContent(req, res, session) {
       }
     );
 
-    if (!upsert.response.ok) return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    if (!upsert.response.ok) {
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Serviço indisponível.',
+        _debug: {
+          stage: 'content_put_upsert',
+          supabaseStatus: upsert.response.status,
+          supabaseBody: upsert.body,
+          newVersion: newVersion,
+          dataSize: bytes
+        }
+      });
+    }
 
     await audit('content.update', { actor: session.user, metadata: { version: newVersion, bytes: bytes } });
     return sendJson(res, 200, { ok: true, version: newVersion });
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Serviço indisponível.',
+      _debug: { stage: 'content_put_throw', message: err.message, code: err.code }
+    });
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// UPLOAD
+// ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
@@ -291,9 +333,17 @@ async function handleUpload(req, res, session) {
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': contentType, 'x-upsert': 'true' },
       body: buffer
     });
-    if (!response.ok) return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
+    if (!response.ok) {
+      return sendJson(res, 502, {
+        ok: false, error: 'Falha no upload.',
+        _debug: { stage: 'storage_upload', status: response.status }
+      });
+    }
   } catch (e) {
-    return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Falha no upload.',
+      _debug: { stage: 'storage_throw', message: e.message }
+    });
   }
 
   const publicUrl = process.env.SUPABASE_URL + '/storage/v1/object/public/site-assets/' + path;
@@ -301,21 +351,52 @@ async function handleUpload(req, res, session) {
   return sendJson(res, 200, { ok: true, url: publicUrl, path: path });
 }
 
+// ─────────────────────────────────────────────────────────────
+// USERS — GET (com _debug)
+// ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
   const limit = clampLimit(req.query && req.query.limit);
+
   try {
     const profilesRes = await supabaseAdminRequest(
       '/rest/v1/profiles?select=id,email,name,created_at&order=created_at.desc&limit=' + limit,
       { method: 'GET', headers: { Prefer: 'count=exact' } }
     );
-    if (!profilesRes.response.ok) return sendJson(res, 502, { ok: false, error: 'Falha.' });
+
+    if (!profilesRes.response.ok) {
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Falha.',
+        _debug: {
+          stage: 'users_profiles',
+          status: profilesRes.response.status,
+          body: profilesRes.body
+        }
+      });
+    }
 
     const profiles = Array.isArray(profilesRes.body) ? profilesRes.body : [];
     const total = parseTotalFromHeaders(profilesRes.response.headers) || profiles.length;
 
-    const plansRes = await supabaseAdminRequest('/rest/v1/effective_plan?select=user_id,plan', { method: 'GET' });
+    const plansRes = await supabaseAdminRequest(
+      '/rest/v1/effective_plan?select=user_id,plan',
+      { method: 'GET' }
+    );
+
+    if (!plansRes.response.ok) {
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Falha.',
+        _debug: {
+          stage: 'users_plans',
+          status: plansRes.response.status,
+          body: plansRes.body
+        }
+      });
+    }
+
     const planMap = new Map();
-    if (plansRes.response.ok && Array.isArray(plansRes.body)) {
+    if (Array.isArray(plansRes.body)) {
       plansRes.body.forEach(function(row) { planMap.set(row.user_id, row.plan); });
     }
 
@@ -329,10 +410,16 @@ async function handleGetUsers(req, res) {
 
     return sendJson(res, 200, { ok: true, users: users, total: total, limit: limit });
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Falha.',
+      _debug: { stage: 'users_throw', message: err.message, code: err.code }
+    });
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// USERS — PATCH
+// ─────────────────────────────────────────────────────────────
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
@@ -361,7 +448,12 @@ async function handlePatchUser(req, res, session) {
           })
         }
       );
-      if (!cancelRes.response.ok) return sendJson(res, 502, { ok: false, error: 'Falha.' });
+      if (!cancelRes.response.ok) {
+        return sendJson(res, 502, {
+          ok: false, error: 'Falha.',
+          _debug: { stage: 'patch_cancel', status: cancelRes.response.status, body: cancelRes.body }
+        });
+      }
     } else {
       const manualId = 'manual_' + userId + '_' + Date.now();
       const insertRes = await supabaseAdminRequest('/rest/v1/subscriptions', {
@@ -373,66 +465,73 @@ async function handlePatchUser(req, res, session) {
           started_at: new Date().toISOString(), updated_at: new Date().toISOString()
         })
       });
-      if (!insertRes.response.ok) return sendJson(res, 502, { ok: false, error: 'Falha.' });
+      if (!insertRes.response.ok) {
+        return sendJson(res, 502, {
+          ok: false, error: 'Falha.',
+          _debug: { stage: 'patch_insert', status: insertRes.response.status, body: insertRes.body }
+        });
+      }
     }
 
     await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan: plan } });
     return sendJson(res, 200, { ok: true, plan: plan });
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Falha.',
+      _debug: { stage: 'patch_throw', message: err.message }
+    });
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// SALES (com _debug)
+// ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   const days = parseDays(req.query && req.query.days);
   const since = days ? new Date(Date.now() - days * 86400 * 1000).toISOString() : null;
+
   try {
-    const results = await Promise.all([
-      fetchSubscriptions(since),
-      fetchRentals(since),
-      fetchPayments(since)
-    ]);
-    const subscriptions = Array.isArray(results[0]) ? results[0] : [];
-    const rentals = Array.isArray(results[1]) ? results[1] : [];
-    const payments = Array.isArray(results[2]) ? results[2] : [];
+    const subs = await fetchTable('subscriptions',
+      'select=id,user_id,plan,status,current_period_end,created_at',
+      since);
+    const rentals = await fetchTable('rentals',
+      'select=id,user_id,track_id,amount_cents,status,expires_at,created_at',
+      since);
+    const payments = await fetchTable('payments_events',
+      'select=id,event_type,external_id,processed_at,failure_reason,created_at',
+      since);
+
+    if (!subs.ok) return sendJson(res, 502, { ok: false, error: 'Falha.', _debug: { stage: 'sales_subs', ...subs.debug } });
+    if (!rentals.ok) return sendJson(res, 502, { ok: false, error: 'Falha.', _debug: { stage: 'sales_rentals', ...rentals.debug } });
+    if (!payments.ok) return sendJson(res, 502, { ok: false, error: 'Falha.', _debug: { stage: 'sales_payments', ...payments.debug } });
+
     return sendJson(res, 200, {
-      ok: true, period: days ? days + 'd' : 'all', limit: SALES_LIMIT,
-      subscriptions: subscriptions, rentals: rentals, payments: payments,
-      summary: buildSummary(subscriptions, rentals, payments)
+      ok: true,
+      period: days ? days + 'd' : 'all',
+      limit: SALES_LIMIT,
+      subscriptions: subs.data,
+      rentals: rentals.data,
+      payments: payments.data,
+      summary: buildSummary(subs.data, rentals.data, payments.data)
     });
   } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false, error: 'Falha.',
+      _debug: { stage: 'sales_throw', message: err.message }
+    });
   }
 }
 
-async function fetchSubscriptions(since) {
+async function fetchTable(table, select, since) {
   const filter = since ? '&created_at=gte.' + encodeURIComponent(since) : '';
   const r = await supabaseAdminRequest(
-    '/rest/v1/subscriptions?select=id,user_id,plan,status,current_period_end,created_at' + filter + '&order=created_at.desc&limit=' + SALES_LIMIT,
+    '/rest/v1/' + table + '?' + select + filter + '&order=created_at.desc&limit=' + SALES_LIMIT,
     { method: 'GET' }
   );
-  if (!r.response.ok) throw new Error('subscriptions fetch failed');
-  return r.body;
-}
-
-async function fetchRentals(since) {
-  const filter = since ? '&created_at=gte.' + encodeURIComponent(since) : '';
-  const r = await supabaseAdminRequest(
-    '/rest/v1/rentals?select=id,user_id,track_id,amount_cents,status,expires_at,created_at' + filter + '&order=created_at.desc&limit=' + SALES_LIMIT,
-    { method: 'GET' }
-  );
-  if (!r.response.ok) throw new Error('rentals fetch failed');
-  return r.body;
-}
-
-async function fetchPayments(since) {
-  const filter = since ? '&created_at=gte.' + encodeURIComponent(since) : '';
-  const r = await supabaseAdminRequest(
-    '/rest/v1/payments_events?select=id,event_type,external_id,processed_at,failure_reason,created_at' + filter + '&order=created_at.desc&limit=' + SALES_LIMIT,
-    { method: 'GET' }
-  );
-  if (!r.response.ok) throw new Error('payments fetch failed');
-  return r.body;
+  if (!r.response.ok) {
+    return { ok: false, debug: { status: r.response.status, body: r.body } };
+  }
+  return { ok: true, data: Array.isArray(r.body) ? r.body : [] };
 }
 
 function buildSummary(subscriptions, rentals, payments) {
@@ -467,6 +566,9 @@ function countBy(arr, key) {
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 function verifySession(req) {
   const cookies = parseCookies((req.headers && req.headers.cookie) || '');
   const token = cookies[SESSION_COOKIE];
