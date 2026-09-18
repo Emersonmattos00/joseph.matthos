@@ -1,4 +1,4 @@
-```javascript
+javascript
 /* ============================================================
    js/admin/auth.js — Login, logout e sessão do painel
    ------------------------------------------------------------
@@ -523,4 +523,3 @@ function setError(id, message) {
 function clearError(id) {
   setError(id, '');
 }
-```
