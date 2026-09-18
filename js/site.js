@@ -25,6 +25,29 @@ import {
   clone
 } from './utils.js';
 
+// Detecta ?admin na URL e ativa o painel
+function checkAdminTrigger() {
+  var params = new URLSearchParams(window.location.search);
+  if (params.has('admin')) {
+    // Remove o parâmetro da URL (para não poluir histórico / compartilhamento)
+    if (window.history.replaceState) {
+      var clean = window.location.pathname + window.location.hash;
+      window.history.replaceState(null, '', clean);
+    }
+    return true;
+  }
+  return false;
+}
+
+if (checkAdminTrigger()) {
+  // Mostra o painel admin (mesma função que o Ctrl+Shift+A chama)
+  document.getElementById('publicSite').style.display = 'none';
+  document.getElementById('adminSite').style.display = 'block';
+
+  // Se já houver sessão válida, o admin/index.js detecta via /api/admin?action=session
+  // e pula o login. Senão, mostra o formulário.
+}
+
 // ─────────────────────────────────────────────────────────────
 // ESTADO GLOBAL
 // ─────────────────────────────────────────────────────────────
