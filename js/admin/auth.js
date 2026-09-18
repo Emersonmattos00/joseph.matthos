@@ -1,10 +1,16 @@
 /* ============================================================
-   js/admin/editors/socials.js — Editor de redes sociais
+   js/admin/auth.js — Autenticação do painel administrativo
+   ------------------------------------------------------------
+   - Login / logout / sessão do admin
+   - Atalho global Ctrl+Shift+A
+   - Abre o painel quando ?admin está na URL
+   - Propaga erros 401/403/429/503 para o caller
    ============================================================ */
 
-import { AdminState, markDirty } from '../state.js';
-import { getByPath, setByPath, esc } from '../ui/dom.js';
-import { toast } from '../ui/toast.js';
+import { AdminState, markDirty, resetState } from './state.js';
+import { getByPath, setByPath, esc } from './ui/dom.js';
+import { toast } from './ui/toast.js';
+import { apiFetch } from './api.js';
 
 let shortcutsBound = false;
 let loginBound = false;
@@ -75,7 +81,7 @@ export async function openAdminSite() {
       return;
     }
     console.error('[admin-session]', err);
-    
+
     if (err?.status === 403) setError('adminLoginError', 'Acesso rejeitado pelo servidor.');
     else if (err?.status === 503) setError('adminLoginError', 'Painel não configurado no servidor.');
     else if (err?.status >= 500) setError('adminLoginError', 'Servidor indisponível. Tente novamente.');
@@ -96,7 +102,6 @@ export function openPublicSite() {
   document.body.style.paddingBottom = '';
   window.scrollTo(0, 0);
 
-  // Remove o ?admin da URL ao voltar para o site público
   if (window.location.search.includes('admin')) {
     window.history.pushState({}, '', window.location.pathname);
   }
@@ -113,11 +118,7 @@ export function initAdminShortcuts() {
     // Ctrl + Shift + A
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyA') {
       e.preventDefault();
-      
-      // 1. Atualiza a URL para /?admin sem recarregar a página
       window.history.pushState({}, '', '/?admin');
-      
-      // 2. Abre o painel
       openAdminSite();
       return;
     }
@@ -127,13 +128,11 @@ export function initAdminShortcuts() {
     const pub = document.getElementById('publicSite');
     const publicVisible = pub && pub.style.display !== 'none';
 
-    // Espaço = play
     if (e.code === 'Space' && !inField && publicVisible && typeof window.togglePlay === 'function') {
       e.preventDefault();
       window.togglePlay();
     }
 
-    // ESC
     if (e.code === 'Escape') {
       const hadOpenModal = document.querySelector('.modal-overlay.open') !== null;
       document.querySelectorAll('.modal-overlay.open').forEach((modal) => {
@@ -225,7 +224,6 @@ async function onLoginSubmit(e) {
     clearError('adminLoginError');
     form.reset();
 
-    // >>> NOVO: Recarrega o conteúdo do painel agora que estamos autenticados
     if (window.__admin && typeof window.__admin.reload === 'function') {
       await window.__admin.reload();
     }
