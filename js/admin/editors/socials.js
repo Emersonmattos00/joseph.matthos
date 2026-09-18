@@ -1,4 +1,4 @@
-```javascript
+javascript
 /* ============================================================
    js/admin/editors/socials.js — Editor de redes sociais
    ------------------------------------------------------------
@@ -331,4 +331,3 @@ function normalizeExternalUrl(raw) {
     return null;
   }
 }
-```
