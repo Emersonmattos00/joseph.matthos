@@ -1,11 +1,12 @@
 /* ============================================================
-   admin/auth.js — Login, logout e sessão via API
+   js/admin/auth.js — Login, logout e sessão do painel
    ------------------------------------------------------------
    - Sem import circular (usa state.js)
-   - Endpoints consolidados: /api/admin?action=*
-   - Feedback visual consistente (aria-busy)
+   - Endpoints: /api/admin?action=*
+   - CSRF: o backend valida Origin em métodos mutantes
+   - Feedback visual consistente
    - Bind único (protegido contra dupla chamada)
-   - Logout reseta o estado global
+   - Logout reseta estado global via resetState()
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -22,9 +23,7 @@ let loginBound = false;
 // Exibição
 // ─────────────────────────────────────────────────────────────
 export function showAdminLogin() {
-  // Limpa estado do usuário ao voltar para login
   AdminState.user = null;
-
   setDisplay('adminLogin', 'flex');
   setDisplay('adminDashboard', 'none');
   showLoginForm();
@@ -73,18 +72,31 @@ export async function openAdminSite() {
 
   try {
     const session = await apiFetch('session', { method: 'GET' });
+
     if (session && session.ok) {
       AdminState.user = session.user || { user: 'admin' };
       showAdminDashboard();
       return;
     }
+
+    // Sessão inválida
     showAdminLogin();
   } catch (err) {
-    if (err && err.status === 401) {
+    if (err?.status === 401) {
       // 401 é esperado quando não há sessão
       showAdminLogin();
       return;
     }
+
+    if (err?.status === 403) {
+      // CSRF rejeitou — improvável em GET, mas tratamos
+      console.error('[admin-session] 403:', err);
+      setError('adminLoginError', 'Sessão rejeitada pelo servidor.');
+      setDisplay('adminLoginForm', 'block');
+      setDisplay('adminForgotPassword', 'block');
+      return;
+    }
+
     // Erros de rede/5xx
     console.error('[admin-session]', err);
     setError('adminLoginError', 'Não foi possível verificar a sessão. Faça login novamente.');
@@ -141,9 +153,7 @@ function bindLoginElements() {
   loginBound = true;
 
   const loginForm = document.getElementById('adminLoginForm');
-  if (loginForm) {
-    loginForm.addEventListener('submit', onLoginSubmit);
-  }
+  if (loginForm) loginForm.addEventListener('submit', onLoginSubmit);
 
   const forgotBtn = document.getElementById('adminForgotPassword');
   if (forgotBtn) {
@@ -188,10 +198,14 @@ async function onLoginSubmit(e) {
 
   const submitBtn = e.target.querySelector('button[type="submit"]');
   const form = e.target;
+  const originalText = submitBtn ? submitBtn.textContent : '';
 
   setError('adminLoginError', 'Validando...');
   form.setAttribute('aria-busy', 'true');
-  if (submitBtn) submitBtn.disabled = true;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Entrando...';
+  }
 
   try {
     const result = await apiFetch('login', {
@@ -218,6 +232,8 @@ async function onLoginSubmit(e) {
       setError('adminLoginError', serverMsg || 'Muitas tentativas. Aguarde alguns minutos.');
     } else if (err?.status === 401) {
       setError('adminLoginError', serverMsg || 'Usuário ou senha incorretos.');
+    } else if (err?.status === 403) {
+      setError('adminLoginError', serverMsg || 'Origem não permitida.');
     } else if (err?.status === 503) {
       setError('adminLoginError', serverMsg || 'Painel não configurado no servidor.');
     } else {
@@ -225,13 +241,21 @@ async function onLoginSubmit(e) {
     }
   } finally {
     form.removeAttribute('aria-busy');
-    if (submitBtn) submitBtn.disabled = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalText;
+    }
   }
 }
 
 async function onLogout() {
   const logoutBtn = document.getElementById('adminLogout');
-  if (logoutBtn) logoutBtn.disabled = true;
+  const originalText = logoutBtn ? logoutBtn.textContent : '';
+
+  if (logoutBtn) {
+    logoutBtn.disabled = true;
+    logoutBtn.textContent = 'Saindo...';
+  }
 
   try {
     await apiFetch('logout', { method: 'POST' });
@@ -239,7 +263,10 @@ async function onLogout() {
     // Logout é idempotente; mesmo se falhar, seguimos
     console.warn('[admin-logout]', err);
   } finally {
-    if (logoutBtn) logoutBtn.disabled = false;
+    if (logoutBtn) {
+      logoutBtn.disabled = false;
+      logoutBtn.textContent = originalText;
+    }
   }
 
   // Reset completo do estado local
