@@ -609,3 +609,43 @@ grant all on public.auth_audit_log to service_role;
 --  14. reload PostgREST
 -- ═══════════════════════════════════════════════════════════════════════
 notify pgrst, 'reload schema';
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  15. POLICIES para service_role (ESSENCIAL!)
+-- ---------------------------------------------------------------
+--  O service_role NÃO bypassa RLS automaticamente no Supabase.
+--  Sem estas policies, o painel admin retorna 502.
+-- ═══════════════════════════════════════════════════════════════════════
+
+create policy "profiles_service_all" on public.profiles
+  for all to service_role using (true) with check (true);
+
+create policy "albums_service_all" on public.albums
+  for all to service_role using (true) with check (true);
+
+create policy "tracks_service_all" on public.tracks
+  for all to service_role using (true) with check (true);
+
+create policy "subscriptions_service_all" on public.subscriptions
+  for all to service_role using (true) with check (true);
+
+create policy "rentals_service_all" on public.rentals
+  for all to service_role using (true) with check (true);
+
+create policy "site_content_service_all" on public.site_content
+  for all to service_role using (true) with check (true);
+
+create policy "site_content_history_service_all" on public.site_content_history
+  for all to service_role using (true) with check (true);
+
+create policy "payments_attempts_service_all" on public.payments_attempts
+  for all to service_role using (true) with check (true);
+
+create policy "payments_events_service_all" on public.payments_events
+  for all to service_role using (true) with check (true);
+
+create policy "admin_audit_service_all" on public.admin_audit
+  for all to service_role using (true) with check (true);
+
+create policy "auth_audit_log_service_all" on public.auth_audit_log
+  for all to service_role using (true) with check (true);
