@@ -9,7 +9,7 @@
    ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v11';
+const CACHE_VERSION = 'jm-v12';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
