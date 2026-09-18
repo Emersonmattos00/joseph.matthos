@@ -13,15 +13,13 @@
 
 'use strict';
 
-const crypto = require('crypto');
 const {
   sendJson,
   supabaseAdminRequest,
-  getAuthUser
-} = require('./_supabase');
-
-const { checkAndIncrement } = require('./_rate-limit');
-const { audit } = require('./_audit');
+  getAuthUser,
+  checkAndIncrement,
+  audit
+} = require('./_lib');
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
