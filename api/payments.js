@@ -13,12 +13,16 @@
 
 'use strict';
 
+const crypto = require('crypto');
+
 const {
   sendJson,
   supabaseAdminRequest,
   getAuthUser,
   checkAndIncrement,
-  audit
+  audit,
+  parseBody,
+  clientIp
 } = require('./_lib');
 
 // ─────────────────────────────────────────────────────────────
@@ -38,8 +42,6 @@ const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RENTAL_DURATION_HOURS = 48;
 const MAX_TRACK_INDEX = 10000;
 const MAX_ALBUM_ID_LENGTH = 64;
-
-const MAX_RENTALS_PER_USER = 100;
 
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
 
@@ -125,7 +127,6 @@ async function handleSubscription(req, res) {
     return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
   }
 
-  // Já tem assinatura ativa?
   try {
     const activeSub = await getActiveSubscription(user.id);
     if (activeSub) {
@@ -136,7 +137,6 @@ async function handleSubscription(req, res) {
     console.warn('[payments/subscription] check active:', error.message);
   }
 
-  // Idempotência: reaproveita checkout pendente recente
   try {
     const pending = await getPendingSubscriptionAttempt(user.id, plan);
     if (pending?.checkout_url) {
@@ -155,7 +155,6 @@ async function handleSubscription(req, res) {
     console.warn('[payments/subscription] check pending:', error.message);
   }
 
-  // Cria attempt
   const externalRef = generateExternalRef('chk');
   let attemptId = null;
 
@@ -185,7 +184,6 @@ async function handleSubscription(req, res) {
     return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
   }
 
-  // Chama MP
   let mp;
   try {
     mp = await createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user });
@@ -199,7 +197,6 @@ async function handleSubscription(req, res) {
     return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
   }
 
-  // Persiste dados do MP
   try {
     await supabaseAdminRequest(
       `/rest/v1/payments_attempts?id=eq.${encodeURIComponent(attemptId)}`,
@@ -395,7 +392,6 @@ async function handleRental(req, res) {
 
   const unitPrice = Number((priceCents / 100).toFixed(2));
 
-  // Já tem rental ativo?
   try {
     const activeRental = await getActiveRental(user.id, track.id);
     if (activeRental) {
@@ -410,7 +406,6 @@ async function handleRental(req, res) {
     console.warn('[payments/rental] check active:', error.message);
   }
 
-  // Idempotência
   try {
     const pending = await getPendingRentalAttempt(user.id, track.id);
     if (pending?.checkout_url) {
@@ -429,7 +424,6 @@ async function handleRental(req, res) {
     console.warn('[payments/rental] check pending:', error.message);
   }
 
-  // Cria attempt
   const externalRef = generateExternalRef('rnt');
   let attemptId = null;
 
@@ -462,7 +456,6 @@ async function handleRental(req, res) {
     return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
   }
 
-  // Chama MP
   let preference;
   try {
     preference = await createMercadoPagoPreference({
@@ -582,7 +575,6 @@ async function createMercadoPagoPreference({ cfg, user, track, albumId, trackInd
 // WEBHOOK
 // ─────────────────────────────────────────────────────────────
 async function handleWebhook(req, res) {
-  // 1) Validação de assinatura
   const sig = validateMPSignature(req);
   if (!sig.ok) {
     console.warn('[payments/webhook] Assinatura inválida:', sig.reason);
@@ -596,7 +588,6 @@ async function handleWebhook(req, res) {
     return sendJson(res, 503, { ok: false, error: 'Pagamento não configurado.' });
   }
 
-  // 2) Extrai evento
   const event = extractEvent(req);
   if (!event) {
     await audit('payment_webhook', { success: false, reason: 'malformed_event' });
@@ -606,7 +597,6 @@ async function handleWebhook(req, res) {
   const { type, resourceId } = event;
   const providerEvent = `${type}:${resourceId}`;
 
-  // 3) Idempotência
   let eventRow = null;
   try {
     const inserted = await supabaseAdminRequest('/rest/v1/payments_events', {
@@ -636,7 +626,6 @@ async function handleWebhook(req, res) {
     return sendJson(res, 502, { ok: false });
   }
 
-  // 4) Roteia
   try {
     if (type === 'subscription_preapproval' || type === 'preapproval') {
       await applyPreapproval({ resourceId, token });
@@ -674,7 +663,7 @@ async function applyPreapproval({ resourceId, token }) {
   });
 
   if (!preapproval.ok) {
-    if (preapproval.status === 404) return; // sumiu
+    if (preapproval.status === 404) return;
     throw Object.assign(new Error('mp_error'), { code: 'MP_ERROR' });
   }
 
@@ -817,7 +806,7 @@ async function applyPayment({ resourceId, token }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// BANCO — helpers
+// Banco — helpers
 // ─────────────────────────────────────────────────────────────
 async function getActiveSubscription(userId) {
   const r = await supabaseAdminRequest(
@@ -1030,21 +1019,6 @@ function parseType(query) {
   const raw = String(query.type || '').trim().toLowerCase();
   if (!['subscription', 'rental', 'webhook'].includes(raw)) return null;
   return raw;
-}
-
-function parseBody(req) {
-  let b = req.body;
-  if (typeof b === 'string') {
-    try { b = JSON.parse(b || '{}'); } catch { b = {}; }
-  }
-  return b && typeof b === 'object' ? b : {};
-}
-
-function clientIp(req) {
-  const h = req.headers || {};
-  const fwd = h['x-vercel-forwarded-for'] || h['x-real-ip'] || h['x-forwarded-for'];
-  return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
-    .split(',')[0].trim();
 }
 
 function generateExternalRef(prefix) {
