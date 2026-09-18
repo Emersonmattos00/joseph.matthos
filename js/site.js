@@ -4,8 +4,8 @@
    - Conteúdo, faixas e planos vêm de /api/public (1 request)
    - Usuário + aluguéis vêm de /api/auth?action=me
    - Login/signup/logout via /api/auth?action=*
-   - Compra de faixa via /api/payments-rental → MP checkout
-   - Assinatura via /api/payments-subscription → MP checkout
+   - Compra de faixa via /api/payments?type=rental → MP checkout
+   - Assinatura via /api/payments?type=subscription → MP checkout
    - Nenhum localStorage para dados de negócio
    - Sem onclick inline; tudo via data-action + delegação
    ============================================================ */
@@ -598,11 +598,11 @@ async function buyTrack(albumId, trackIndex) {
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=rental', {
-     method: 'POST',
-     credentials: 'same-origin',
-     headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify({ albumId, trackIndex })
-   });
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumId, trackIndex })
+    });
     const json = await r.json();
     if (!r.ok || !json.ok || !json.checkoutUrl) {
       toast(json.error || 'Não foi possível iniciar o pagamento.', '⚠');
@@ -632,11 +632,11 @@ async function subscribe(planId) {
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=subscription', {
-     method: 'POST',
-     credentials: 'same-origin',
-     headers: { 'Content-Type': 'application/json' },
-     body: JSON.stringify({ plan: planId })
-   });
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: planId })
+    });
     const json = await r.json();
     if (!r.ok || !json.ok || !json.checkoutUrl) {
       toast(json.error || 'Pagamento indisponível.', '⚠');
