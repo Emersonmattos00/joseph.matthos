@@ -83,7 +83,6 @@ function sendJson(res, status, body) {
   res.status(status);
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
-  // Só define no-store se ninguém definiu Cache-Control antes
   if (!res.getHeader('Cache-Control')) {
     res.setHeader(
       'Cache-Control',
@@ -308,7 +307,6 @@ function getRedis() {
     throw err;
   }
 
-  // Import dinâmico evita erro quando o pacote não está instalado em dev
   try {
     const { Redis } = require('@upstash/redis');
     _redis = new Redis({ url, token });
@@ -321,7 +319,20 @@ function getRedis() {
   return _redis;
 }
 
-async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000) {
+/**
+ * Verifica e incrementa o contador de rate limit.
+ *
+ * @param {string} bucket - Identificador do bucket (ex: 'admin-login:1.2.3.4')
+ * @param {number} max - Máximo de requisições permitidas na janela
+ * @param {number} windowMs - Tamanho da janela em milissegundos
+ * @param {object} [options]
+ * @param {boolean} [options.failClosed=false] - Se true, bloqueia quando KV
+ *   estiver indisponível. Use para endpoints críticos (login admin).
+ * @returns {Promise<{ limited: boolean, retryAfter: number }>}
+ */
+async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options = {}) {
+  const { failClosed = false } = options;
+
   try {
     const redis = getRedis();
     const key = `rl:${bucket}`;
@@ -330,7 +341,10 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000) {
 
     const pipeline = redis.pipeline();
     pipeline.zremrangebyscore(key, 0, windowStart);
-    pipeline.zadd(key, { score: now, member: `${now}:${Math.random()}` });
+    pipeline.zadd(key, {
+      score: now,
+      member: `${now}:${crypto.randomBytes(8).toString('hex')}`
+    });
     pipeline.zcard(key);
     pipeline.expire(key, Math.ceil(windowMs / 1000));
 
@@ -346,8 +360,14 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000) {
 
     return { limited: false, retryAfter: 0 };
   } catch (err) {
-    // KV indisponível → fail-open (não bloqueia o usuário)
-    console.warn('[_lib] rate limit falhou, permitindo:', err.message);
+    console.warn('[_lib] rate limit falhou:', err.message);
+
+    if (failClosed) {
+      // Bloqueia até o KV voltar (proteção contra brute force)
+      return { limited: true, retryAfter: Math.ceil(windowMs / 1000) };
+    }
+
+    // Fail-open: permite (não bloqueia usuário legítimo se KV cair)
     return { limited: false, retryAfter: 0 };
   }
 }
@@ -401,7 +421,7 @@ async function audit(event, options = {}) {
     }));
   } catch {}
 
-  // Persiste best-effort
+  // Persiste best-effort (não bloqueia)
   try {
     await supabaseAdminRequest('/rest/v1/auth_audit_log', {
       method: 'POST',
@@ -479,7 +499,7 @@ function checkOrigin(req) {
   const method = (req.method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
 
-  // Se ALLOWED_ORIGINS não estiver configurado, permite (fail-open em dev)
+  // Sem ALLOWED_ORIGINS configurado → fail-open (dev local)
   if (ALLOWED_ORIGINS.size === 0) return true;
 
   const origin = req.headers.origin || req.headers.referer;
@@ -494,7 +514,7 @@ function checkOrigin(req) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 9. HELPERS DE AUTENTICAÇÃO INTERNA (HMAC)
+// 9. HMAC — sessão admin
 // ═════════════════════════════════════════════════════════════
 function signHmac(payload, secret) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -527,7 +547,7 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 10. HELPERS DE SENHA — scrypt
+// 10. SENHA — scrypt
 // ═════════════════════════════════════════════════════════════
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
