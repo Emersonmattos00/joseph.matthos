@@ -1,17 +1,24 @@
 /* ============================================================
-   admin/uploads.js — Upload de imagens e áudios para o servidor
+   js/admin/uploads.js — Upload de imagens e áudios
    ------------------------------------------------------------
-   - Envia para /api/admin?action=upload (via apiFetch)
+   - Envia para /api/admin?action=upload
    - Retorna URL pública do Supabase Storage
    - Comprime imagens no cliente antes de enviar
+   - Valida tamanho ANTES de converter para base64
    - Sem IndexedDB, sem Data URLs persistidas
    ============================================================ */
 
 import { apiFetch } from './api.js';
 import { toast } from './ui/toast.js';
 
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_AUDIO_SIZE = 80 * 1024 * 1024;
+// ─────────────────────────────────────────────────────────────
+// Constantes
+// ─────────────────────────────────────────────────────────────
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;   // 5 MB
+const MAX_AUDIO_SIZE = 4 * 1024 * 1024;   // 4 MB (limite Vercel body)
+
+// Base64 inflaciona ~33%. Bloqueia antes de enviar.
+const MAX_BASE64_LENGTH = Math.ceil(MAX_AUDIO_SIZE * 4 / 3) + 1024;
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const ALLOWED_AUDIO_TYPES = ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg'];
@@ -21,27 +28,42 @@ const ALLOWED_AUDIO_TYPES = ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg'
 // ─────────────────────────────────────────────────────────────
 export async function uploadImage(file) {
   if (!file) throw new Error('Arquivo ausente.');
+
   if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
     throw new Error('Formato de imagem não suportado (use JPG, PNG ou WebP).');
   }
+
   if (file.size > MAX_IMAGE_SIZE) {
     throw new Error('Imagem muito grande (máx 5 MB).');
   }
 
   const base64 = await compressImage(file, 1920, 0.82);
+
+  if (base64.length > MAX_BASE64_LENGTH) {
+    throw new Error('Imagem comprimida ainda muito grande. Reduza a resolução.');
+  }
+
   return uploadBase64(base64, file.name || 'image.jpg', 'image/jpeg', 'image');
 }
 
 export async function uploadAudio(file) {
   if (!file) throw new Error('Arquivo ausente.');
+
   if (!ALLOWED_AUDIO_TYPES.includes(file.type)) {
     throw new Error('Formato de áudio não suportado.');
   }
+
   if (file.size > MAX_AUDIO_SIZE) {
-    throw new Error('Áudio muito grande (máx 80 MB).');
+    const maxMb = Math.round(MAX_AUDIO_SIZE / 1024 / 1024);
+    throw new Error(`Áudio muito grande (máx ${maxMb} MB).`);
   }
 
   const base64 = await fileToBase64(file);
+
+  if (base64.length > MAX_BASE64_LENGTH) {
+    throw new Error('Áudio codificado excede o limite permitido.');
+  }
+
   return uploadBase64(base64, file.name || 'audio.mp3', file.type, 'audio');
 }
 
@@ -59,6 +81,7 @@ export function bindUpload(inputId, onUploaded, kind = 'image') {
     if (!file) return;
 
     const label = kind === 'image' ? 'imagem' : 'áudio';
+
     try {
       toast(`Enviando ${label}...`, '⬆');
 
@@ -85,7 +108,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image') {
 // Internos
 // ─────────────────────────────────────────────────────────────
 async function uploadBase64(base64, filename, contentType, kind) {
-  // `apiFetch('upload', ...)` resolve para /api/admin?action=upload
   const result = await apiFetch('upload', {
     method: 'POST',
     body: { kind, filename, contentType, base64 }
@@ -113,6 +135,7 @@ function fileToBase64(file) {
 
 async function compressImage(file, maxWidth, quality) {
   const url = URL.createObjectURL(file);
+
   try {
     const img = await loadImage(url);
     const scale = Math.min(1, maxWidth / img.width);
@@ -122,6 +145,7 @@ async function compressImage(file, maxWidth, quality) {
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
+
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0, w, h);
 
