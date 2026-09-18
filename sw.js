@@ -6,10 +6,10 @@
    - API: nunca cacheada
    - Range requests (áudio): passam direto
    ------------------------------------------------------------
-   ⚠️  Ao fazer deploy de mudanças nos assets, bu mpe CACHE_VERSION
+   ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v8';
+const CACHE_VERSION = 'jm-v9';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
@@ -19,12 +19,22 @@ const CACHE_VERSION = 'jm-v8';
 // precisam estar aqui também (o SW não segue imports).
 // ─────────────────────────────────────────────────────────────
 const CACHE_STATIC = [
+  // Páginas
   '/',
   '/index.html',
+  '/offline.html',
+  '/politica-privacidade.html',
+  '/termos-uso.html',
+
+  // CSS
   '/css/style.css',
+
+  // JS — site público
   '/js/utils.js',
   '/js/config.js',
   '/js/site.js',
+
+  // JS — admin
   '/js/admin/index.js',
   '/js/admin/state.js',
   '/js/admin/api.js',
@@ -35,15 +45,19 @@ const CACHE_STATIC = [
   '/js/admin/users.js',
   '/js/admin/sales.js',
   '/js/admin/backup.js',
+
+  // JS — admin/ui
   '/js/admin/ui/dom.js',
   '/js/admin/ui/format.js',
   '/js/admin/ui/modal.js',
   '/js/admin/ui/toast.js',
+
+  // JS — admin/editors
   '/js/admin/editors/frases.js',
   '/js/admin/editors/albums.js',
   '/js/admin/editors/playlists.js',
   '/js/admin/editors/plans.js',
-  '/js/admin/editors/socials.js'
+  '/js/admin/editors/socials.js',
 
   // Imagens padrão (fallback de layout)
   '/assets/img/tema.webp',
@@ -130,22 +144,21 @@ self.addEventListener('fetch', (event) => {
 async function handleNavigation(req) {
   try {
     const res = await fetch(req);
-    if (res && res.ok) {
+    if (res && res.ok && !res.redirected) {
       const clone = res.clone();
       caches.open(CACHE_VERSION).then((c) => c.put(req, clone)).catch(() => {});
     }
     return res;
   } catch {
-    // Offline: tenta o cache exato, depois index.html, depois offline.html
+    // Offline: tenta cache exato da URL, depois offline.html
     const cached =
       (await caches.match(req)) ||
-      (await caches.match('/index.html')) ||
       (await caches.match('/offline.html'));
 
     if (cached) return cached;
 
     return new Response(
-      '<!DOCTYPE html><html><body><h1>Offline</h1></body></html>',
+      '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Offline</title></head><body><h1>Sem conexão</h1><p>Verifique sua internet e tente novamente.</p></body></html>',
       { headers: { 'Content-Type': 'text/html; charset=utf-8' }, status: 503 }
     );
   }
@@ -177,7 +190,7 @@ async function handleAsset(req) {
   } catch {
     // Offline e não cacheado: fallback para imagens
     if (req.destination === 'image') {
-      const placeholder = await caches.match('/assets/img/placeholder.jpg');
+      const placeholder = await caches.match('/assets/img/placeholder.webp');
       if (placeholder) return placeholder;
     }
 
