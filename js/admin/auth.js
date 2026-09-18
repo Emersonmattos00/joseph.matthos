@@ -1,16 +1,10 @@
 /* ============================================================
-   js/admin/auth.js — Login, logout e sessão do painel
-   ------------------------------------------------------------
-   - Endpoints: /api/admin?action=*
-   - Sessão através de cookie HttpOnly
-   - Atalho Ctrl+Shift+A com atualização de URL (/?admin)
-   - Bind único dos elementos
-   - Tratamento explícito dos erros HTTP
+   js/admin/editors/socials.js — Editor de redes sociais
    ============================================================ */
 
-import { apiFetch } from './api.js';
-import { toast } from './ui/toast.js';
-import { AdminState, resetState } from './state.js';
+import { AdminState, markDirty } from '../state.js';
+import { getByPath, setByPath, esc } from '../ui/dom.js';
+import { toast } from '../ui/toast.js';
 
 let shortcutsBound = false;
 let loginBound = false;
