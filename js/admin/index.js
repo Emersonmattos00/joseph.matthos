@@ -1,9 +1,9 @@
 /* ============================================================
-   admin/index.js — Entrypoint do painel administrativo
+   js/admin/index.js — Entrypoint do painel administrativo
    ------------------------------------------------------------
    - Registra atalho Ctrl+Shift+A antes de qualquer API
    - Binds resilientes (try/catch por editor)
-   - MutationObserver re-binda botões do menu quando o DOM muda
+   - Nav tabs com bind único (MutationObserver só no <nav>)
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -99,7 +99,13 @@ async function bootstrap() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Nav tabs (com MutationObserver)
+// Nav tabs
+// ------------------------------------------------------------
+// Estratégia:
+//  - attach() roda imediatamente (caso os botões já existam)
+//  - MutationObserver observa APENAS o <nav class="admin-nav">
+//    para re-bindar quando os botões aparecerem depois do login
+//  - Guard dataset.bound evita bind duplicado
 // ─────────────────────────────────────────────────────────────
 function bindNavTabs() {
   const attach = () => {
@@ -118,14 +124,30 @@ function bindNavTabs() {
     }
   };
 
+  // 1) Tenta bindar agora
   attach();
 
-  // Re-tenta sempre que o DOM mudar (botões podem aparecer depois do login)
-  if (!window.__adminNavObserver) {
+  // 2) Se o <nav> já existe, observa apenas ele
+  const nav = document.querySelector('.admin-nav');
+  if (nav && !nav.dataset.observed) {
+    nav.dataset.observed = '1';
     const observer = new MutationObserver(attach);
+    observer.observe(nav, { childList: true, subtree: true });
+    console.log('[admin] MutationObserver ativo no .admin-nav');
+  } else if (!nav) {
+    // Se o nav ainda não existe (improvável), observa o body com escopo reduzido
+    const observer = new MutationObserver(() => {
+      const navNow = document.querySelector('.admin-nav');
+      if (navNow && !navNow.dataset.observed) {
+        navNow.dataset.observed = '1';
+        attach();
+        observer.disconnect();
+        const obs2 = new MutationObserver(attach);
+        obs2.observe(navNow, { childList: true, subtree: true });
+        console.log('[admin] nav detectado e observado');
+      }
+    });
     observer.observe(document.body, { childList: true, subtree: true });
-    window.__adminNavObserver = observer;
-    console.log('[admin] MutationObserver ativo');
   }
 }
 
@@ -178,7 +200,6 @@ function loadAllAdminFields() {
 
   ensureContentStructure(content);
 
-  // Campos genéricos
   try {
     document.querySelectorAll('[data-content]').forEach((el) => {
       const val = getByPath(content, el.dataset.content);
@@ -190,14 +211,12 @@ function loadAllAdminFields() {
     console.error('[admin] campos genéricos:', err);
   }
 
-  // Editores — cada um em try/catch
   safeRender('frases', () => renderFrasesEditor(content));
   safeRender('albums', () => renderAlbumsEditor(content));
   safeRender('playlists', () => renderPlaylistsEditor(content));
   safeRender('plans', () => renderPlansEditor(content));
   safeRender('socials', () => renderSocialEditor(content));
 
-  // Previews
   try { updateBgPreview(content); } catch (e) { console.warn('preview bg', e); }
   try { updateVinylPreview(content); } catch (e) { console.warn('preview vinyl', e); }
   try { updateSobrePreview(content); } catch (e) { console.warn('preview sobre', e); }
