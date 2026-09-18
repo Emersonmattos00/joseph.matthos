@@ -230,6 +230,12 @@ async function onLoginSubmit(e) {
     AdminState.user = { user: result.user || user };
     clearError('adminLoginError');
     form.reset();
+
+    // >>> NOVO: Recarrega o conteúdo do painel agora que estamos autenticados
+    if (window.__admin && typeof window.__admin.reload === 'function') {
+      await window.__admin.reload();
+    }
+
     showAdminDashboard();
     toast('Bem-vindo ao painel.', '⚙');
 
