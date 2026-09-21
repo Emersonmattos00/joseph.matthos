@@ -14,7 +14,7 @@
    - Sessão via cookie __Host-jm_admin (HttpOnly + HMAC assinado)
    - ADMIN_SESSION_SECRET exige mínimo de 32 caracteres
    - CSRF: Origin check em todos os métodos mutantes
-   - Rate limit por IP no login
+   - Rate limit por IP no login (fail-closed: bloqueia se KV cair)
    - Auditoria em toda escrita
    ============================================================ */
 
@@ -35,6 +35,7 @@ const {
 
   // Rate limit
   checkAndIncrement,
+  resetBucket,
 
   // Auditoria
   audit,
@@ -192,14 +193,26 @@ async function handleLogin(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
 
+  // ⚠️ failClosed: true → se o KV cair, bloqueia login por segurança.
+  //    Para painel admin, isso é o comportamento correto (evita brute force
+  //    ilimitado quando o Redis está indisponível).
   const rate = await checkAndIncrement(
     `admin-login:${ip}`,
     MAX_LOGIN_ATTEMPTS,
-    LOGIN_WINDOW_MS
+    LOGIN_WINDOW_MS,
+    { failClosed: true }
   );
   if (rate.limited) {
     res.setHeader('Retry-After', String(rate.retryAfter));
-    await audit('admin_login', { ip, userAgent, success: false, reason: 'rate_limited' });
+    console.warn(
+      `[admin-login] rate limited ip=${ip} reason=${rate.reason || 'unknown'} retryAfter=${rate.retryAfter}`
+    );
+    await audit('admin_login', {
+      ip,
+      userAgent,
+      success: false,
+      reason: rate.reason || 'rate_limited'
+    });
     return sendJson(res, 429, {
       ok: false,
       error: 'Muitas tentativas. Tente novamente mais tarde.'
@@ -233,6 +246,10 @@ async function handleLogin(req, res) {
     await audit('admin_login', { ip, userAgent, success: false, reason: 'invalid' });
     return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
   }
+
+  // Login OK → zera o contador de tentativas deste IP.
+  // Sem isso, erros antigos continuam contando na mesma janela.
+  await resetBucket(`admin-login:${ip}`);
 
   const token = signHmac({ user: expectedUser, iat: Date.now() }, secret);
 
