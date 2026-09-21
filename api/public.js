@@ -10,7 +10,8 @@
    - Só GET e HEAD
    - Cache HTTP por recurso
    - Rate limit por IP (opcional)
-   - Nunca expõe dados sensíveis
+   - NUNCA expõe URLs de áudio (vêm via /api/stream)
+   - NUNCA expõe dados sensíveis
    ============================================================ */
 
 'use strict';
@@ -140,13 +141,17 @@ async function fetchContent() {
 
 // ─────────────────────────────────────────────────────────────
 // Tracks
+// ------------------------------------------------------------
+// ⚠️  NÃO retorna full_audio nem preview_audio.
+//     URLs de áudio são resolvidas por /api/stream, que aplica
+//     verificação de permissão (premium ou aluguel ativo) e
+//     gera URLs assinadas com TTL curto para o bucket privado.
 // ─────────────────────────────────────────────────────────────
 async function fetchTracks() {
   const result = await supabaseAdminRequest(
     `/rest/v1/tracks?published=eq.true` +
       `&select=album_id,track_index,title,duration,` +
-      `preview_start,preview_duration,price_cents,for_sale,` +
-      `full_audio,preview_audio,lyrics` +
+      `preview_start,preview_duration,price_cents,for_sale,lyrics` +
       `&order=album_id.asc,track_index.asc` +
       `&limit=${MAX_TRACKS}`,
     { method: 'GET' }
@@ -167,8 +172,7 @@ async function fetchTracks() {
       previewDuration: Number(t.preview_duration) || 30,
       priceCents: Number(t.price_cents) || 0,
       forSale: t.for_sale !== false,
-      fullAudio: safeMediaUrl(t.full_audio),
-      previewAudio: safeMediaUrl(t.preview_audio),
+      // fullAudio / previewAudio: resolvidos em /api/stream
       lyrics: Array.isArray(t.lyrics) ? t.lyrics : []
     }))
   };
@@ -204,14 +208,6 @@ function parseResource(query) {
   const raw = String(query.resource || '').trim().toLowerCase();
   if (!raw || raw === 'all') return null;
   return VALID_RESOURCES.has(raw) ? raw : null;
-}
-
-function safeMediaUrl(url) {
-  if (!url) return '';
-  const s = String(url).trim();
-  if (!s) return '';
-  if (!/^https?:\/\//i.test(s)) return '';
-  return s;
 }
 
 function parsePriceCents(raw) {
