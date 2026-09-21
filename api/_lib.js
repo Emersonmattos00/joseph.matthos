@@ -5,6 +5,16 @@
               _plan.js, _csrf-guard.js
 
    ⚠️  NUNCA importar no cliente. Só serverless functions.
+
+   Dependências obrigatórias (produção):
+     - @upstash/redis (opcional, mas recomendado para rate limit)
+
+   Variáveis de ambiente esperadas:
+     - SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+     - UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN  (opcional)
+       (ou KV_REST_API_URL / KV_REST_API_TOKEN para Vercel KV)
+     - ALLOWED_ORIGINS (CSV)
+     - NODE_ENV=production
    ============================================================ */
 
 'use strict';
@@ -290,9 +300,16 @@ async function getAuthUser(req) {
 // 5. RATE LIMIT — KV (Upstash / Vercel KV)
 // ═════════════════════════════════════════════════════════════
 let _redis = null;
+let _redisInitFailed = false;
 
+/**
+ * Inicializa o cliente Redis (Upstash / Vercel KV).
+ * Retorna null se não configurado ou se a dependência falhar.
+ * Nunca lança — permite fallback gracioso.
+ */
 function getRedis() {
   if (_redis) return _redis;
+  if (_redisInitFailed) return null;
 
   const url =
     process.env.UPSTASH_REDIS_REST_URL ||
@@ -302,21 +319,22 @@ function getRedis() {
     process.env.KV_REST_API_TOKEN;
 
   if (!url || !token) {
-    const err = new Error('KV não configurado.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
+    _redisInitFailed = true;
+    return null;
   }
 
   try {
     const { Redis } = require('@upstash/redis');
     _redis = new Redis({ url, token });
-  } catch {
-    const err = new Error('@upstash/redis não instalado.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
+    return _redis;
+  } catch (err) {
+    console.warn(
+      '[_lib] @upstash/redis não instalado — rate limit desativado.',
+      'Execute: npm install @upstash/redis'
+    );
+    _redisInitFailed = true;
+    return null;
   }
-
-  return _redis;
 }
 
 /**
@@ -324,17 +342,38 @@ function getRedis() {
  *
  * @param {string} bucket - Identificador do bucket (ex: 'admin-login:1.2.3.4')
  * @param {number} max - Máximo de requisições permitidas na janela
- * @param {number} windowMs - Tamanho da janela em milissegundos
+ * @param {number} [windowMs=900000] - Tamanho da janela em ms (padrão: 15 min)
  * @param {object} [options]
- * @param {boolean} [options.failClosed=false] - Se true, bloqueia quando KV
- *   estiver indisponível. Use para endpoints críticos (login admin).
- * @returns {Promise<{ limited: boolean, retryAfter: number }>}
+ * @param {boolean} [options.failClosed=false] - Se true, bloqueia quando o KV
+ *   estiver indisponível. **Use `true` em endpoints críticos (login admin,
+ *   signup, reset de senha).** Se false, permite (fail-open) e depende apenas
+ *   da validação de senha.
+ * @returns {Promise<{ limited: boolean, retryAfter: number, reason?: string }>}
  */
-async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options = {}) {
+async function checkAndIncrement(
+  bucket,
+  max,
+  windowMs = 15 * 60 * 1000,
+  options = {}
+) {
   const { failClosed = false } = options;
 
+  const redis = getRedis();
+
+  // KV não configurado / dependência ausente
+  if (!redis) {
+    if (failClosed) {
+      // Bloqueia por segurança — sem KV, não há como contar tentativas
+      return {
+        limited: true,
+        retryAfter: Math.ceil(windowMs / 1000),
+        reason: 'RATE_LIMIT_UNAVAILABLE'
+      };
+    }
+    return { limited: false, retryAfter: 0, reason: 'KV_NOT_CONFIGURED' };
+  }
+
   try {
-    const redis = getRedis();
     const key = `rl:${bucket}`;
     const now = Date.now();
     const windowStart = now - windowMs;
@@ -355,7 +394,11 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options
       const retryAfter = oldest?.[0]?.score
         ? Math.ceil((oldest[0].score + windowMs - now) / 1000)
         : Math.ceil(windowMs / 1000);
-      return { limited: true, retryAfter: Math.max(retryAfter, 1) };
+      return {
+        limited: true,
+        retryAfter: Math.max(retryAfter, 1),
+        reason: 'TOO_MANY_REQUESTS'
+      };
     }
 
     return { limited: false, retryAfter: 0 };
@@ -363,18 +406,26 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options
     console.warn('[_lib] rate limit falhou:', err.message);
 
     if (failClosed) {
-      // Bloqueia até o KV voltar (proteção contra brute force)
-      return { limited: true, retryAfter: Math.ceil(windowMs / 1000) };
+      // Erro de rede no KV → bloqueia (proteção contra brute force)
+      return {
+        limited: true,
+        retryAfter: Math.ceil(windowMs / 1000),
+        reason: 'RATE_LIMIT_ERROR'
+      };
     }
 
     // Fail-open: permite (não bloqueia usuário legítimo se KV cair)
-    return { limited: false, retryAfter: 0 };
+    return { limited: false, retryAfter: 0, reason: 'KV_ERROR' };
   }
 }
 
+/**
+ * Reseta o bucket de rate limit (útil após login bem-sucedido).
+ */
 async function resetBucket(bucket) {
+  const redis = getRedis();
+  if (!redis) return;
   try {
-    const redis = getRedis();
     await redis.del(`rl:${bucket}`);
   } catch (err) {
     console.warn('[_lib] resetBucket falhou:', err.message);
@@ -450,13 +501,15 @@ async function getPlanForUser(userId) {
   if (!userId) return 'free';
 
   const cacheKey = `plan:${userId}`;
+  const redis = getRedis();
 
   // 1) Cache
-  try {
-    const redis = getRedis();
-    const cached = await redis.get(cacheKey);
-    if (cached && VALID_PLANS.has(cached)) return cached;
-  } catch { /* cache miss ou KV off */ }
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached && VALID_PLANS.has(cached)) return cached;
+    } catch { /* cache miss ou KV off */ }
+  }
 
   // 2) Banco
   let plan = 'free';
@@ -476,18 +529,20 @@ async function getPlanForUser(userId) {
   }
 
   // 3) Cacheia
-  try {
-    const redis = getRedis();
-    await redis.set(cacheKey, plan, { ex: PLAN_CACHE_TTL_SEC });
-  } catch { /* KV off */ }
+  if (redis) {
+    try {
+      await redis.set(cacheKey, plan, { ex: PLAN_CACHE_TTL_SEC });
+    } catch { /* KV off */ }
+  }
 
   return plan;
 }
 
 async function invalidatePlanCache(userId) {
   if (!userId) return;
+  const redis = getRedis();
+  if (!redis) return;
   try {
-    const redis = getRedis();
     await redis.del(`plan:${userId}`);
   } catch {}
 }
@@ -547,7 +602,13 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 10. SENHA — scrypt
+// 10. SENHA — scrypt (nativo do Node)
+// ------------------------------------------------------------
+// Formato do hash armazenado:
+//   scrypt$<salt-em-hex>$<hash-em-hex>
+//
+// Gere com o script `gerar-hash-admin.js` na raiz do projeto:
+//   node gerar-hash-admin.js "sua-senha-forte"
 // ═════════════════════════════════════════════════════════════
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
