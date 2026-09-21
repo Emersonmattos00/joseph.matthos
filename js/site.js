@@ -8,7 +8,7 @@
    - Assinatura via /api/payments?type=subscription → MP checkout
    - Nenhum localStorage para dados de negócio
    - Sem onclick inline; tudo via data-action + delegação
-   - ?admin dispara evento 'jm:admin-open' para o painel
+   - NÃO conhece o painel admin (responsabilidade de admin/index.js)
    ============================================================ */
 
 import { DEFAULT_CONTENT, SOCIAL_LABELS } from './config.js';
@@ -51,27 +51,6 @@ let lastVolume = 0.8;
 let muted = false;
 
 // ─────────────────────────────────────────────────────────────
-// GATILHO ?admin — apenas dispara evento; o painel decide o que fazer
-// ─────────────────────────────────────────────────────────────
-function maybeOpenAdmin() {
-  const params = new URLSearchParams(window.location.search);
-  if (!params.has('admin')) return;
-
-  // Notifica o admin/index.js (que tem sua própria lógica de auth)
-  document.dispatchEvent(new CustomEvent('jm:admin-open'));
-
-  // Limpa o parâmetro da URL sem quebrar o histórico
-  // (o admin já foi notificado via evento, então pode limpar)
-  if (window.history.replaceState) {
-    window.history.replaceState(
-      null,
-      '',
-      window.location.pathname + window.location.hash
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
 // BOOT
 // ─────────────────────────────────────────────────────────────
 async function boot() {
@@ -91,9 +70,6 @@ async function boot() {
     updateCartBadge();
     bindGlobalEvents();
 
-    // Só agora trata o ?admin, com DOM pronto e painel carregado
-    maybeOpenAdmin();
-
     console.log('✅ site.js pronto');
   } catch (err) {
     console.error('❌ Falha no boot:', err);
@@ -107,7 +83,6 @@ async function boot() {
       updateAuthUI();
       updateCartBadge();
       bindGlobalEvents();
-      maybeOpenAdmin();
     } catch (inner) {
       console.error('❌ Fallback também falhou:', inner);
     }
@@ -1755,8 +1730,5 @@ window.__site = {
     await loadUser();
     applyContentToSite();
     renderDiscography();
-  },
-  openAdmin() {
-    maybeOpenAdmin();
   }
 };
