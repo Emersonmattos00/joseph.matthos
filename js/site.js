@@ -1159,6 +1159,7 @@ function initPlayer() {
 
   bindPlayerControls();
   bindMobileTabs();
+  bindFullscreenBtn();
   updateMuteButtons();
 }
 
@@ -1215,6 +1216,75 @@ function bindMobileTabs() {
       player.classList.toggle('mobile-lyrics', isLyrics);
     });
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Botão tela cheia do player (desktop/tablet)
+// ─────────────────────────────────────────────────────────────
+function bindFullscreenBtn() {
+  const btn = document.getElementById('expandedFullscreenBtn');
+  const player = document.querySelector('#expandedPlayerModal .music-player');
+  if (!btn || !player) return;
+  if (btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+
+  // ── Detecção de suporte / iOS
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  const supportsFullscreen = !!(
+    document.fullscreenEnabled ||
+    document.webkitFullscreenEnabled ||
+    document.mozFullScreenEnabled ||
+    document.msFullscreenEnabled
+  );
+
+  if (isIOS || !supportsFullscreen) {
+    btn.style.display = 'none';
+    return;
+  }
+
+  const getFsElement = () =>
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement;
+
+  const requestFs = (el) => {
+    if (el.requestFullscreen) return el.requestFullscreen();
+    if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
+    if (el.mozRequestFullScreen) return el.mozRequestFullScreen();
+    if (el.msRequestFullscreen) return el.msRequestFullscreen();
+  };
+
+  const exitFs = () => {
+    if (document.exitFullscreen) return document.exitFullscreen();
+    if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
+    if (document.mozCancelFullScreen) return document.mozCancelFullScreen();
+    if (document.msExitFullscreen) return document.msExitFullscreen();
+  };
+
+  btn.addEventListener('click', async () => {
+    try {
+      if (getFsElement()) {
+        await exitFs();
+      } else {
+        await requestFs(player);
+      }
+    } catch (err) {
+      console.warn('[fullscreen] falha:', err?.message);
+      toast('Não foi possível ativar a tela cheia.', '⚠');
+    }
+  });
+
+  const onFsChange = () => {
+    const isFs = getFsElement() === player;
+    btn.setAttribute('aria-label', isFs ? 'Sair da tela cheia' : 'Tela cheia');
+    btn.setAttribute('title', isFs ? 'Sair da tela cheia' : 'Tela cheia');
+  };
+
+  document.addEventListener('fullscreenchange', onFsChange);
+  document.addEventListener('webkitfullscreenchange', onFsChange);
+  document.addEventListener('mozfullscreenchange', onFsChange);
+  document.addEventListener('MSFullscreenChange', onFsChange);
 }
 
 async function playFromDiscography(albumId, trackIndex) {
@@ -1680,6 +1750,20 @@ function closeExpandedPlayer() {
   const modal = document.getElementById('expandedPlayerModal');
   if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
+
+  // Se estiver em fullscreen, sai
+  const fsEl =
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement;
+
+  if (fsEl) {
+    if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+    else if (document.msExitFullscreen) document.msExitFullscreen();
+  }
 }
 
 function renderExpandedPlayerActions(albumId, trackIndex) {
