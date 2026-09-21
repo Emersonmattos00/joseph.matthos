@@ -103,7 +103,8 @@ const VALID_ACTIONS = new Set([
   'upload',
   'users',
   'sales',
-  'audit'
+  'audit', 
+  'gen-hash'
 ]);
 
 // ─────────────────────────────────────────────────────────────
