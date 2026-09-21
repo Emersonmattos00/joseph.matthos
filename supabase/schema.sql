@@ -18,6 +18,8 @@
 --    12. view effective_plan
 --    13. grants
 --    14. reload PostgREST
+--    15. policies service_role
+--    16. migração (audio → paths)
 --
 --  Idempotente: pode ser rodado várias vezes sem erro.
 --  ═══════════════════════════════════════════════════════════════════════
@@ -161,6 +163,7 @@ create table if not exists public.albums (
   cover_image text,
   description text default '',
   published   boolean not null default false,
+  order_index int not null default 0,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
@@ -169,6 +172,8 @@ comment on table public.albums is 'Álbuns, EPs e singles.';
 
 create index if not exists idx_albums_published
   on public.albums (published) where published = true;
+create index if not exists idx_albums_published_order
+  on public.albums (published, order_index);
 
 alter table public.albums enable row level security;
 
@@ -195,8 +200,11 @@ create table if not exists public.tracks (
   track_index  int  not null check (track_index >= 0),
   title        text not null,
   duration     text,
-  full_audio   text,
-  preview_audio text,
+  -- Áudio: paths no Supabase Storage
+  --   full_path    → bucket privado  'audio-premium'  (URL assinada via /api/stream)
+  --   preview_path → bucket público  'audio-preview'  (URL direta no /api/stream)
+  full_path    text,
+  preview_path text,
   preview_start int default 0 check (preview_start >= 0),
   preview_duration int default 30 check (preview_duration between 5 and 120),
   price_cents  int  not null check (price_cents > 0 and price_cents <= 1000000),
@@ -210,6 +218,10 @@ create table if not exists public.tracks (
 
 comment on table public.tracks is 'Faixas do catálogo. Preço em centavos.';
 comment on column public.tracks.price_cents is 'Preço em centavos (R$ 4,90 = 490).';
+comment on column public.tracks.full_path is
+  'Nome do arquivo no bucket privado audio-premium. URL assinada gerada em /api/stream.';
+comment on column public.tracks.preview_path is
+  'Nome do arquivo no bucket público audio-preview. URL direta.';
 
 create index if not exists idx_tracks_album
   on public.tracks (album_id, track_index);
@@ -319,7 +331,6 @@ create index if not exists idx_attempts_created
 
 alter table public.payments_attempts enable row level security;
 
--- Nenhuma policy — só service_role acessa
 drop policy if exists "attempts_no_access" on public.payments_attempts;
 create policy "attempts_no_access" on public.payments_attempts
   for all using (false) with check (false);
@@ -379,7 +390,6 @@ create table if not exists public.rentals (
   started_at          timestamptz not null default now(),
   expires_at          timestamptz not null,
   created_at          timestamptz not null default now(),
-  -- Idempotência: 1 payment_id = 1 rental por usuário+faixa
   unique (user_id, track_id, payment_id)
 );
 
@@ -420,17 +430,14 @@ comment on table public.site_content is
 
 alter table public.site_content enable row level security;
 
--- Leitura pública (o site precisa ler para renderizar)
 drop policy if exists "site_content_public_read" on public.site_content;
 create policy "site_content_public_read" on public.site_content
   for select using (true);
 
--- Escrita só via service role
 drop policy if exists "site_content_no_write" on public.site_content;
 create policy "site_content_no_write" on public.site_content
   for all using (false) with check (false);
 
--- Linha inicial
 insert into public.site_content (key, data)
 values ('default', '{}'::jsonb)
 on conflict (key) do nothing;
@@ -557,7 +564,6 @@ left join lateral (
 comment on view public.effective_plan is
   'Plano efetivo do usuário: deriva de subscriptions. Nunca escreve direto.';
 
--- Restringe acesso: só service role lê
 revoke all on public.effective_plan from anon, authenticated;
 grant select on public.effective_plan to service_role;
 
@@ -610,6 +616,7 @@ grant all on public.auth_audit_log to service_role;
 -- ═══════════════════════════════════════════════════════════════════════
 notify pgrst, 'reload schema';
 
+
 -- ═══════════════════════════════════════════════════════════════════════
 --  15. POLICIES para service_role (ESSENCIAL!)
 -- ---------------------------------------------------------------
@@ -617,35 +624,99 @@ notify pgrst, 'reload schema';
 --  Sem estas policies, o painel admin retorna 502.
 -- ═══════════════════════════════════════════════════════════════════════
 
+drop policy if exists "profiles_service_all" on public.profiles;
 create policy "profiles_service_all" on public.profiles
   for all to service_role using (true) with check (true);
 
+drop policy if exists "albums_service_all" on public.albums;
 create policy "albums_service_all" on public.albums
   for all to service_role using (true) with check (true);
 
+drop policy if exists "tracks_service_all" on public.tracks;
 create policy "tracks_service_all" on public.tracks
   for all to service_role using (true) with check (true);
 
+drop policy if exists "subscriptions_service_all" on public.subscriptions;
 create policy "subscriptions_service_all" on public.subscriptions
   for all to service_role using (true) with check (true);
 
+drop policy if exists "rentals_service_all" on public.rentals;
 create policy "rentals_service_all" on public.rentals
   for all to service_role using (true) with check (true);
 
+drop policy if exists "site_content_service_all" on public.site_content;
 create policy "site_content_service_all" on public.site_content
   for all to service_role using (true) with check (true);
 
+drop policy if exists "site_content_history_service_all" on public.site_content_history;
 create policy "site_content_history_service_all" on public.site_content_history
   for all to service_role using (true) with check (true);
 
+drop policy if exists "payments_attempts_service_all" on public.payments_attempts;
 create policy "payments_attempts_service_all" on public.payments_attempts
   for all to service_role using (true) with check (true);
 
+drop policy if exists "payments_events_service_all" on public.payments_events;
 create policy "payments_events_service_all" on public.payments_events
   for all to service_role using (true) with check (true);
 
+drop policy if exists "admin_audit_service_all" on public.admin_audit;
 create policy "admin_audit_service_all" on public.admin_audit
   for all to service_role using (true) with check (true);
 
+drop policy if exists "auth_audit_log_service_all" on public.auth_audit_log;
 create policy "auth_audit_log_service_all" on public.auth_audit_log
   for all to service_role using (true) with check (true);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  16. MIGRAÇÃO — de full_audio/preview_audio para full_path/preview_path
+-- ---------------------------------------------------------------
+--  Bancos criados com versões antigas do schema podem ter as colunas
+--  antigas. Este bloco:
+--    1) Garante que full_path/preview_path existam
+--    2) Migra dados das colunas antigas (se existirem)
+--    3) Remove as colunas antigas (se existirem)
+--
+--  Idempotente: rodar várias vezes não causa erro.
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- 1) Garante que as colunas novas existem
+alter table public.tracks
+  add column if not exists full_path text,
+  add column if not exists preview_path text;
+
+-- 2) Migra dados das colunas antigas (só se existirem)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'tracks'
+      and column_name = 'full_audio'
+  ) then
+    execute $sql$
+      update public.tracks
+      set full_path = regexp_replace(full_audio, '^.*/', '')
+      where full_path is null
+        and full_audio is not null
+        and full_audio <> ''
+    $sql$;
+
+    execute $sql$
+      update public.tracks
+      set preview_path = regexp_replace(preview_audio, '^.*/', '')
+      where preview_path is null
+        and preview_audio is not null
+        and preview_audio <> ''
+    $sql$;
+  end if;
+end $$;
+
+-- 3) Remove as colunas antigas (só se existirem)
+alter table public.tracks
+  drop column if exists full_audio,
+  drop column if exists preview_audio;
+
+-- 4) Reload final
+notify pgrst, 'reload schema';
