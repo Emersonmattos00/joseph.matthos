@@ -4,11 +4,11 @@
    - Login / logout / sessão do admin
    - Atalho global Ctrl+Shift+A
    - Abre o painel quando ?admin está na URL
+   - FLUXO CORRIGIDO: sessão → bootContent → dashboard
    - Propaga erros 401/403/429/503 para o caller
    ============================================================ */
 
-import { AdminState, markDirty, resetState } from './state.js';
-import { getByPath, setByPath, esc } from './ui/dom.js';
+import { AdminState, resetState } from './state.js';
 import { toast } from './ui/toast.js';
 import { apiFetch } from './api.js';
 
@@ -32,6 +32,7 @@ export function showAdminDashboard() {
 
 export function showLoginForm() {
   setDisplay('adminLoginForm', 'block');
+  setDisplay('adminPasswordChangeForm', 'none');
   setDisplay('adminForgotPassword', 'block');
   clearError('adminLoginError');
   const user = document.getElementById('adminUser');
@@ -42,12 +43,20 @@ function showSessionLoading() {
   setDisplay('adminLogin', 'flex');
   setDisplay('adminDashboard', 'none');
   setDisplay('adminLoginForm', 'none');
+  setDisplay('adminPasswordChangeForm', 'none');
   setDisplay('adminForgotPassword', 'none');
   setError('adminLoginError', 'Verificando sessão...');
 }
 
 // ─────────────────────────────────────────────────────────────
-// Abrir painel
+// Abrir painel — orquestrador único
+// ------------------------------------------------------------
+// Fluxo:
+//   showAdminRoot → /session
+//      ├─ 401/403 → showAdminLogin (sem tentar carregar conteúdo)
+//      ├─ erro de rede/5xx → showAdminLogin (fail-safe)
+//      └─ OK → showAdminDashboard → __admin.bootContent()
+//                        (loadContent → applyContent → dashboard)
 // ─────────────────────────────────────────────────────────────
 export async function openAdminSite() {
   setDisplay('publicSite', 'none');
@@ -56,28 +65,51 @@ export async function openAdminSite() {
   window.scrollTo(0, 0);
   showSessionLoading();
 
+  let session = null;
   try {
-    const session = await apiFetch('session', { method: 'GET' });
-    if (session && session.ok) {
-      AdminState.user = session.user || { user: 'admin' };
-      showAdminDashboard();
-      return;
-    }
-    showAdminLogin();
+    session = await apiFetch('session', { method: 'GET' });
   } catch (err) {
-    if (err?.status === 401) {
+    if (err?.status === 401 || err?.status === 403) {
+      // Sem sessão válida → login, sem carregar conteúdo
       showAdminLogin();
       return;
     }
     console.error('[admin-session]', err);
 
-    if (err?.status === 403) setError('adminLoginError', 'Acesso rejeitado pelo servidor.');
-    else if (err?.status === 503) setError('adminLoginError', 'Painel não configurado no servidor.');
-    else if (err?.status >= 500) setError('adminLoginError', 'Servidor indisponível. Tente novamente.');
-    else setError('adminLoginError', 'Não foi possível verificar a sessão.');
+    if (err?.status === 503) {
+      setError('adminLoginError', 'Painel não configurado no servidor.');
+    } else if (err?.status >= 500) {
+      setError('adminLoginError', 'Servidor indisponível. Tente novamente.');
+    } else {
+      setError('adminLoginError', 'Não foi possível verificar a sessão.');
+    }
 
     setDisplay('adminLoginForm', 'block');
+    setDisplay('adminPasswordChangeForm', 'none');
     setDisplay('adminForgotPassword', 'block');
+    return;
+  }
+
+  if (!session || !session.ok) {
+    showAdminLogin();
+    return;
+  }
+
+  // ── Sessão OK → dashboard + carrega conteúdo
+  AdminState.user = session.user || { user: 'admin' };
+  showAdminDashboard();
+
+  // 🔴 CORREÇÃO CRÍTICA: carregar conteúdo após confirmar sessão
+  if (window.__admin && typeof window.__admin.bootContent === 'function') {
+    try {
+      await window.__admin.bootContent();
+    } catch (err) {
+      // bootContent já lida com 401/403 internamente (mostrando login).
+      // Aqui só registramos erros inesperados sem derrubar a UI.
+      console.error('[admin] bootContent falhou:', err);
+    }
+  } else {
+    console.warn('[admin] __admin.bootContent indisponível — conteúdo não carregado.');
   }
 }
 
@@ -171,6 +203,9 @@ function bindLoginElements() {
 
 // ─────────────────────────────────────────────────────────────
 // Login
+// ------------------------------------------------------------
+// Após POST /login bem-sucedido, delega o fluxo completo
+// para openAdminSite() — sessão → bootContent → dashboard.
 // ─────────────────────────────────────────────────────────────
 async function onLoginSubmit(e) {
   e.preventDefault();
@@ -216,11 +251,8 @@ async function onLoginSubmit(e) {
     clearError('adminLoginError');
     form.reset();
 
-    if (window.__admin && typeof window.__admin.reload === 'function') {
-      await window.__admin.reload();
-    }
-
-    showAdminDashboard();
+    // Fluxo único e confiável: sessão → conteúdo → dashboard
+    await openAdminSite();
     toast('Bem-vindo ao painel.', '⚙');
 
   } catch (err) {
