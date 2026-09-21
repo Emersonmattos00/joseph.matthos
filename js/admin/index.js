@@ -3,6 +3,7 @@
    ------------------------------------------------------------
    - Registra atalho Ctrl+Shift+A antes de qualquer API
    - Detecta URL /?admin e abre o painel automaticamente
+   - FLUXO CORRIGIDO: sessão → conteúdo → dashboard
    - Binds resilientes (try/catch por editor)
    - Nav tabs com bind único (MutationObserver só no <nav>)
    ============================================================ */
@@ -48,26 +49,16 @@ const TAB_TITLES = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Bootstrap
+// Bootstrap — NÃO carrega conteúdo. Apenas prepara a UI e,
+// se estivermos na rota admin, delega para openAdminSite().
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
   console.log('[admin] bootstrap iniciado');
 
-  // 1) Atalho SEMPRE primeiro
+  // 1) Atalho SEMPRE primeiro (não depende de sessão)
   initAdminShortcuts();
 
-  // ==========================================================
-  // >>> NOVO: Verifica se a URL contém ?admin e abre o painel
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('admin')) {
-    // setTimeout garante que os binds iniciais da UI já foram registrados
-    setTimeout(() => {
-      openAdminSite();
-    }, 0);
-  }
-  // ==========================================================
-
-  // 2) Binds de navegação e ações ANTES de carregar conteúdo
+  // 2) Binds de navegação e ações (idempotentes, seguros sem sessão)
   bindNavTabs();
   bindContentInputs();
   bindGlobalActions();
@@ -75,7 +66,26 @@ async function bootstrap() {
   bindUploadZones();
   bindRefreshButtons();
 
-  // 3) Carrega conteúdo
+  // 3) Só orquestra o admin se estivermos na rota ?admin
+  //    openAdminSite() verifica a sessão ANTES de carregar conteúdo.
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('admin')) {
+    // setTimeout garante que os binds iniciais da UI já foram registrados
+    setTimeout(() => {
+      openAdminSite();
+    }, 0);
+  }
+
+  console.log('[admin] bootstrap completo');
+}
+
+// ─────────────────────────────────────────────────────────────
+// FLUXO PÓS-LOGIN — chamado por auth.js após autenticar.
+// Exposto em window.__adminBoot para o auth.js invocar.
+// ─────────────────────────────────────────────────────────────
+export async function loadAdminContentAndRender() {
+  console.log('[admin] carregando conteúdo pós-login...');
+
   try {
     const loaded = await loadContent();
     AdminState.content = loaded.data;
@@ -84,30 +94,32 @@ async function bootstrap() {
     console.log('[admin] conteúdo carregado, versão', loaded.version);
   } catch (err) {
     if (err && (err.status === 401 || err.status === 403)) {
-      console.warn('[admin] sessão inválida — Ctrl+Shift+A disponível');
+      console.warn('[admin] sessão inválida ao carregar conteúdo');
+      showAdminLogin();
       return;
     }
     console.error('[admin] loadContent falhou:', err);
+    // Fallback: usa defaults para não travar a UI
     AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
     AdminState.contentVersion = 0;
   }
 
-  // 4) Aplica no site público
+  // Aplica no site público
   safeCall('applyContentToSite', AdminState.content);
   safeCall('refreshFlatPlaylist');
   safeCall('refreshPlanConfig');
   safeCall('updateCartFab');
 
-  // 5) Preenche campos (resiliente)
+  // Preenche campos (resiliente)
   loadAllAdminFields();
 
-  // 6) Dashboard assíncrono
+  // Dashboard assíncrono — não bloqueia
   renderDashboard().catch((err) => {
     if (err && (err.status === 401 || err.status === 403)) return;
     console.warn('[admin] dashboard:', err);
   });
 
-  console.log('[admin] bootstrap completo');
+  console.log('[admin] conteúdo aplicado e dashboard renderizado');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -136,10 +148,8 @@ function bindNavTabs() {
     }
   };
 
-  // 1) Tenta bindar agora
   attach();
 
-  // 2) Se o <nav> já existe, observa apenas ele
   const nav = document.querySelector('.admin-nav');
   if (nav && !nav.dataset.observed) {
     nav.dataset.observed = '1';
@@ -147,7 +157,6 @@ function bindNavTabs() {
     observer.observe(nav, { childList: true, subtree: true });
     console.log('[admin] MutationObserver ativo no .admin-nav');
   } else if (!nav) {
-    // Se o nav ainda não existe (improvável), observa o body com escopo reduzido
     const observer = new MutationObserver(() => {
       const navNow = document.querySelector('.admin-nav');
       if (navNow && !navNow.dataset.observed) {
@@ -625,13 +634,20 @@ Object.defineProperty(window, '__admin', {
       }
     },
     rebind: () => window.__adminRebind(),
+    /**
+     * Recarrega o conteúdo — mas SEMPRE via fluxo validado.
+     * Delega para loadAdminContentAndRender(), que só roda
+     * depois que a sessão já foi confirmada pelo openAdminSite().
+     */
     async reload() {
-      const loaded = await loadContent();
-      AdminState.content = loaded.data;
-      AdminState.contentVersion = loaded.version;
-      loadAllAdminFields();
-      markClean();
-    }
+      await loadAdminContentAndRender();
+    },
+    /**
+     * Exposto para o auth.js chamar após login bem-sucedido.
+     * Mantém o acoplamento fraco: auth.js não precisa importar
+     * este módulo, só invocar window.__admin.reload().
+     */
+    bootContent: () => loadAdminContentAndRender()
   }),
   writable: false,
   configurable: false
