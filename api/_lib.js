@@ -15,6 +15,12 @@
        (ou KV_REST_API_URL / KV_REST_API_TOKEN para Vercel KV)
      - ALLOWED_ORIGINS (CSV)
      - NODE_ENV=production
+
+   Schemas de auditoria:
+     auth_audit_log → id, event, email_hash, user_id, ip, user_agent,
+                      success, reason, created_at
+     admin_audit    → id, actor, action, target, metadata, ip,
+                      user_agent, created_at
    ============================================================ */
 
 'use strict';
@@ -346,8 +352,7 @@ function getRedis() {
  * @param {object} [options]
  * @param {boolean} [options.failClosed=false] - Se true, bloqueia quando o KV
  *   estiver indisponível. **Use `true` em endpoints críticos (login admin,
- *   signup, reset de senha).** Se false, permite (fail-open) e depende apenas
- *   da validação de senha.
+ *   signup, reset de senha).** Se false, permite (fail-open).
  * @returns {Promise<{ limited: boolean, retryAfter: number, reason?: string }>}
  */
 async function checkAndIncrement(
@@ -360,10 +365,8 @@ async function checkAndIncrement(
 
   const redis = getRedis();
 
-  // KV não configurado / dependência ausente
   if (!redis) {
     if (failClosed) {
-      // Bloqueia por segurança — sem KV, não há como contar tentativas
       return {
         limited: true,
         retryAfter: Math.ceil(windowMs / 1000),
@@ -406,7 +409,6 @@ async function checkAndIncrement(
     console.warn('[_lib] rate limit falhou:', err.message);
 
     if (failClosed) {
-      // Erro de rede no KV → bloqueia (proteção contra brute force)
       return {
         limited: true,
         retryAfter: Math.ceil(windowMs / 1000),
@@ -414,14 +416,10 @@ async function checkAndIncrement(
       };
     }
 
-    // Fail-open: permite (não bloqueia usuário legítimo se KV cair)
     return { limited: false, retryAfter: 0, reason: 'KV_ERROR' };
   }
 }
 
-/**
- * Reseta o bucket de rate limit (útil após login bem-sucedido).
- */
 async function resetBucket(bucket) {
   const redis = getRedis();
   if (!redis) return;
@@ -433,55 +431,29 @@ async function resetBucket(bucket) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 6. AUDITORIA
+// 6. AUDITORIA — roteamento entre auth_audit_log e admin_audit
 // ═════════════════════════════════════════════════════════════
-async function audit(event, options = {}) {
-  const {
-    email,
-    userId,
-    ip,
-    userAgent,
-    success,
-    reason,
-    actor,
-    target,
-    metadata
-  } = options;
 
-  const payload = {
-    event: String(event || 'unknown').slice(0, 64),
-    email_hash: email ? hashEmail(email) : null,
-    user_id: userId || null,
-    ip: ip || null,
-    user_agent: userAgent ? String(userAgent).slice(0, 512) : null,
-    success: !!success,
-    reason: reason ? String(reason).slice(0, 200) : null,
-    actor: actor || null,
-    target: target || null,
-    metadata: metadata || null,
-    created_at: new Date().toISOString()
-  };
+/**
+ * Decide em qual tabela o evento será persistido.
+ * - Prefixos `admin_`, `content.`, `upload`, `user.plan` → admin_audit
+ * - Todo o resto → auth_audit_log
+ *
+ * Pode ser sobrescrito via options.table = 'admin' | 'auth'.
+ */
+function resolveAuditTable(event, override) {
+  if (override === 'admin') return 'admin_audit';
+  if (override === 'auth') return 'auth_audit_log';
 
-  // Log estruturado sempre
-  try {
-    console.info('[_lib audit]', JSON.stringify({
-      event: payload.event,
-      success: payload.success,
-      reason: payload.reason,
-      target: payload.target
-    }));
-  } catch {}
+  const e = String(event || '').toLowerCase();
+  if (e.startsWith('admin_')) return 'admin_audit';
+  if (
+    e.startsWith('content.') ||
+    e.startsWith('upload') ||
+    e.startsWith('user.plan')
+  ) return 'admin_audit';
 
-  // Persiste best-effort (não bloqueia)
-  try {
-    await supabaseAdminRequest('/rest/v1/auth_audit_log', {
-      method: 'POST',
-      headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify(payload)
-    });
-  } catch (err) {
-    console.error('[_lib] audit persist falhou:', err.code || err.message);
-  }
+  return 'auth_audit_log';
 }
 
 function hashEmail(email) {
@@ -490,6 +462,111 @@ function hashEmail(email) {
     .update(String(email).toLowerCase())
     .digest('hex')
     .slice(0, 32);
+}
+
+/**
+ * Payload para auth_audit_log.
+ * Schema real:
+ *   id bigint, event text, email_hash text, user_id uuid, ip inet,
+ *   user_agent text, success boolean, reason text, created_at timestamptz
+ */
+function buildAuthAuditPayload(event, opts) {
+  const { email, userId, ip, userAgent, success, reason } = opts;
+  return {
+    event: String(event || 'unknown').slice(0, 64),
+    email_hash: email ? hashEmail(email) : null,
+    user_id: userId || null,
+    ip: ip || null,
+    user_agent: userAgent ? String(userAgent).slice(0, 512) : null,
+    success: !!success,
+    reason: reason ? String(reason).slice(0, 200) : null,
+    created_at: new Date().toISOString()
+  };
+}
+
+/**
+ * Payload para admin_audit.
+ * Schema real:
+ *   id bigint, actor text, action text NOT NULL, target text,
+ *   metadata jsonb, ip inet, user_agent text, created_at timestamptz
+ *
+ * ⚠️ Não existe `event`, `success` nem `reason` — esses dois últimos
+ *    são embutidos em `metadata` para preservar a informação.
+ */
+function buildAdminAuditPayload(event, opts) {
+  const { actor, target, ip, userAgent, success, reason, metadata } = opts;
+
+  const meta = {
+    ...(metadata && typeof metadata === 'object' ? metadata : {}),
+    ...(typeof success === 'boolean' ? { success } : {}),
+    ...(reason ? { reason: String(reason).slice(0, 200) } : {})
+  };
+
+  return {
+    action: String(event || 'unknown').slice(0, 64),
+    actor: actor ? String(actor).slice(0, 120) : null,
+    target: target ? String(target).slice(0, 200) : null,
+    metadata: Object.keys(meta).length ? meta : null,
+    ip: ip || null,
+    user_agent: userAgent ? String(userAgent).slice(0, 512) : null,
+    created_at: new Date().toISOString()
+  };
+}
+
+/**
+ * Persiste um evento de auditoria na tabela correta.
+ * Nunca lança — falhas são logadas mas não interrompem o fluxo.
+ *
+ * @param {string} event - Nome do evento (ex: 'login', 'admin_login', 'content.update')
+ * @param {object} [options]
+ * @param {string} [options.email] - Para auth_audit_log
+ * @param {string} [options.userId] - Para auth_audit_log
+ * @param {string} [options.actor] - Para admin_audit
+ * @param {string} [options.target] - Para admin_audit
+ * @param {string} [options.ip]
+ * @param {string} [options.userAgent]
+ * @param {boolean} [options.success]
+ * @param {string} [options.reason]
+ * @param {object} [options.metadata]
+ * @param {'admin'|'auth'} [options.table] - Força a tabela (opcional)
+ */
+async function audit(event, options = {}) {
+  const table = resolveAuditTable(event, options.table);
+
+  const payload = table === 'admin_audit'
+    ? buildAdminAuditPayload(event, options)
+    : buildAuthAuditPayload(event, options);
+
+  // Log estruturado sempre
+  try {
+    console.info('[_lib audit]', JSON.stringify({
+      table,
+      event: payload.event || payload.action,
+      success: options.success,
+      reason: options.reason
+    }));
+  } catch {}
+
+  // Persiste best-effort
+  try {
+    const result = await supabaseAdminRequest(`/rest/v1/${table}`, {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!result.response.ok) {
+      console.error(
+        `[_lib] audit persist falhou (${table}):`,
+        result.response.status,
+        typeof result.body === 'string'
+          ? result.body.slice(0, 200)
+          : JSON.stringify(result.body).slice(0, 200)
+      );
+    }
+  } catch (err) {
+    console.error(`[_lib] audit persist erro (${table}):`, err.code || err.message);
+  }
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -554,7 +631,6 @@ function checkOrigin(req) {
   const method = (req.method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
 
-  // Sem ALLOWED_ORIGINS configurado → fail-open (dev local)
   if (ALLOWED_ORIGINS.size === 0) return true;
 
   const origin = req.headers.origin || req.headers.referer;
