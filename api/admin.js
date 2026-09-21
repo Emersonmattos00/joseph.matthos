@@ -17,6 +17,10 @@
    - CSRF: Origin check em todos os métodos mutantes
    - Rate limit por IP no login (fail-closed: bloqueia se KV cair)
    - Auditoria em toda escrita
+   - Upload roteia para o bucket correto:
+       image         → site-assets (público)
+       audio-preview → audio-preview (público)
+       audio-full    → audio-premium (privado)
    ============================================================ */
 
 'use strict';
@@ -83,6 +87,13 @@ const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg']);
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const MAX_AUDIO_SIZE = 4 * 1024 * 1024;
+
+// Buckets válidos por tipo de upload
+const BUCKET_BY_KIND = {
+  'image': 'site-assets',
+  'audio-preview': 'audio-preview',
+  'audio-full': 'audio-premium'
+};
 
 const VALID_ACTIONS = new Set([
   'login',
@@ -202,8 +213,6 @@ async function handleLogin(req, res) {
   const userAgent = req.headers['user-agent'] || '';
 
   // ⚠️ failClosed: true → se o KV cair, bloqueia login por segurança.
-  //    Para painel admin, isso é o comportamento correto (evita brute force
-  //    ilimitado quando o Redis está indisponível).
   const rate = await checkAndIncrement(
     `admin-login:${ip}`,
     MAX_LOGIN_ATTEMPTS,
@@ -262,7 +271,6 @@ async function handleLogin(req, res) {
   }
 
   // Login OK → zera o contador de tentativas deste IP.
-  // Sem isso, erros antigos continuam contando na mesma janela.
   await resetBucket(`admin-login:${ip}`);
 
   const token = signHmac({ user: expectedUser, iat: Date.now() }, secret);
@@ -442,6 +450,17 @@ async function handlePutContent(req, res, session) {
 
 // ─────────────────────────────────────────────────────────────
 // UPLOAD
+// ------------------------------------------------------------
+// Direciona para o bucket correto conforme `kind`:
+//   - 'image'          → site-assets     (público)
+//   - 'audio-preview'  → audio-preview   (público)
+//   - 'audio-full'     → audio-premium   (privado)
+//
+// Retorno:
+//   - Buckets públicos → { ok, url, path, bucket }
+//   - Bucket privado   → { ok, url: null, path, bucket }
+//     `path` deve ser gravado em tracks.full_path; a URL é
+//     assinada em runtime pelo /api/stream.
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
@@ -454,11 +473,16 @@ async function handleUpload(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Payload incompleto.' });
   }
 
-  const isImage = kind === 'image';
-  const isAudio = kind === 'audio';
-  if (!isImage && !isAudio) {
-    return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
+  const bucket = BUCKET_BY_KIND[kind];
+  if (!bucket) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Tipo inválido. Use "image", "audio-preview" ou "audio-full".'
+    });
   }
+
+  const isImage = kind === 'image';
+  const isAudio = kind === 'audio-preview' || kind === 'audio-full';
 
   if (isImage && !ALLOWED_IMAGE_TYPES.has(contentType)) {
     return sendJson(res, 415, { ok: false, error: 'Formato de imagem não suportado.' });
@@ -484,29 +508,40 @@ async function handleUpload(req, res, session) {
     });
   }
 
-  const folder = isImage ? 'images' : 'audio';
+  // Nome único do arquivo
   const ext = filename.split('.').pop() || (isImage ? 'jpg' : 'mp3');
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  const path = `${folder}/${uniqueName}`;
 
-  const uploadResult = await supabaseStorageUpload(path, buffer, contentType);
+  // Imagens ficam em subpasta 'images/'; áudio na raiz do bucket
+  const path = isImage ? `images/${uniqueName}` : uniqueName;
+
+  const uploadResult = await supabaseStorageUpload(bucket, path, buffer, contentType);
   if (!uploadResult.ok) {
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
   }
 
-  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/site-assets/${path}`;
+  // URL pública só para buckets públicos
+  const isPublicBucket = bucket !== 'audio-premium';
+  const publicUrl = isPublicBucket
+    ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
+    : null;
 
   await audit('upload', {
     actor: session.user,
-    target: path,
-    metadata: { size: buffer.length, contentType }
+    target: `${bucket}/${path}`,
+    metadata: { size: buffer.length, contentType, bucket }
   });
 
-  return sendJson(res, 200, { ok: true, url: publicUrl, path });
+  return sendJson(res, 200, {
+    ok: true,
+    url: publicUrl,      // null para áudio full (bucket privado)
+    path,                // usar em tracks.preview_path ou tracks.full_path
+    bucket
+  });
 }
 
-async function supabaseStorageUpload(path, buffer, contentType) {
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/site-assets/${path}`;
+async function supabaseStorageUpload(bucket, path, buffer, contentType) {
+  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   const controller = new AbortController();
