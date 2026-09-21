@@ -5,7 +5,10 @@
 
    Fluxo:
      1. Busca a faixa no banco
-     2. Verifica se o usuário tem acesso (premium ou aluguel ativo)
+     2. Verifica permissão:
+        a) premium / anual                → libera
+        b) aluguel de álbum ativo         → libera
+        c) aluguel de faixa ativo         → libera
      3. SEM acesso → retorna previewUrl (público)
      4. COM acesso → retorna fullUrl ASSINADA (expira em 10 min)
    ============================================================ */
@@ -58,7 +61,7 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
   }
 
-  // ── 2) Preview é sempre público (path relativo no bucket público)
+  // ── 2) Preview é sempre público
   const previewUrl = track.preview_path
     ? buildPublicUrl(PREVIEW_BUCKET, track.preview_path)
     : null;
@@ -66,6 +69,7 @@ module.exports = async function handler(req, res) {
   // ── 3) Verificar permissão
   let unlocked = false;
   let reason = 'not_authenticated';
+  let expiresAt = null;   // ISO string quando unlock vem de aluguel
 
   try {
     const user = await getAuthUser(req);
@@ -73,27 +77,54 @@ module.exports = async function handler(req, res) {
     if (user && user.id) {
       reason = 'free_plan';
 
+      // 3.1) Premium?
       const plan = await getPlanForUser(user.id);
       if (plan === 'premium' || plan === 'anual') {
         unlocked = true;
         reason = 'premium';
       } else {
-        // Verifica aluguel ativo
-        const trackKey = `${albumId}:${trackIndex}`;
         const nowIso = new Date().toISOString();
 
-        const r = await supabaseAdminRequest(
+        // 3.2) Aluguel de ÁLBUM ativo?
+        const albumRental = await supabaseAdminRequest(
           `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
-          `&track_key=eq.${encodeURIComponent(trackKey)}` +
+          `&album_id=eq.${encodeURIComponent(albumId)}` +
+          `&scope=eq.album` +
           `&status=eq.active` +
           `&expires_at=gt.${encodeURIComponent(nowIso)}` +
-          `&select=id&limit=1`,
+          `&select=id,expires_at` +
+          `&order=expires_at.desc` +
+          `&limit=1`,
           { method: 'GET' }
         );
 
-        if (r.response.ok && Array.isArray(r.body) && r.body.length > 0) {
+        if (albumRental.response.ok
+            && Array.isArray(albumRental.body)
+            && albumRental.body[0]) {
           unlocked = true;
-          reason = 'rental_active';
+          reason = 'album_rental_active';
+          expiresAt = albumRental.body[0].expires_at || null;
+        } else {
+          // 3.3) Aluguel de FAIXA ativa?
+          const trackRental = await supabaseAdminRequest(
+            `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
+            `&track_id=eq.${track.id}` +
+            `&scope=eq.track` +
+            `&status=eq.active` +
+            `&expires_at=gt.${encodeURIComponent(nowIso)}` +
+            `&select=id,expires_at` +
+            `&order=expires_at.desc` +
+            `&limit=1`,
+            { method: 'GET' }
+          );
+
+          if (trackRental.response.ok
+              && Array.isArray(trackRental.body)
+              && trackRental.body[0]) {
+            unlocked = true;
+            reason = 'track_rental_active';
+            expiresAt = trackRental.body[0].expires_at || null;
+          }
         }
       }
     }
@@ -111,7 +142,8 @@ module.exports = async function handler(req, res) {
       previewUrl,
       previewDuration: track.preview_duration || 30,
       fullUrl: null,
-      expiresIn: null
+      expiresIn: null,
+      rentalExpiresAt: null
     });
   }
 
@@ -125,6 +157,7 @@ module.exports = async function handler(req, res) {
       previewDuration: track.preview_duration || 30,
       fullUrl: null,
       expiresIn: null,
+      rentalExpiresAt: expiresAt,
       warning: 'Áudio completo não cadastrado.'
     });
   }
@@ -142,7 +175,8 @@ module.exports = async function handler(req, res) {
     previewUrl,
     previewDuration: track.preview_duration || 30,
     fullUrl: signedUrl,
-    expiresIn: SIGNED_URL_TTL_SEC
+    expiresIn: SIGNED_URL_TTL_SEC,
+    rentalExpiresAt: expiresAt
   });
 };
 
@@ -186,7 +220,6 @@ async function createSignedUrl(bucket, path, expiresInSec) {
     const json = await r.json();
     if (!json.signedURL) return null;
 
-    // signedURL vem como "/object/sign/bucket/path?token=..."
     const rel = String(json.signedURL).replace(/^\/+/, '');
     return `${url}/storage/v1/${rel}`;
   } catch (err) {
