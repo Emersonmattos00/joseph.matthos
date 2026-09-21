@@ -32,7 +32,8 @@ import {
 // ─────────────────────────────────────────────────────────────
 export const SITE = {
   content: null,
-  tracks: {},
+  albums: [],        // ← NOVO: catálogo vem do Supabase via /api/public
+  tracks: {},        // índice flat: "albumId:trackIndex" → metadados da faixa
   plans: {},
   user: null,
   rentals: [],
@@ -100,6 +101,7 @@ async function loadPublicData() {
 
     if (!json || !json.ok) {
       SITE.content = clone(DEFAULT_CONTENT);
+      SITE.albums = [];
       SITE.tracks = {};
       SITE.plans = {};
       return;
@@ -110,6 +112,13 @@ async function loadPublicData() {
         ? json.content
         : clone(DEFAULT_CONTENT);
 
+    // ── Álbuns (vêm do banco: tabela `albums` + faixas agregadas)
+    SITE.albums = [];
+    if (Array.isArray(json.albums)) {
+      SITE.albums = json.albums;
+    }
+
+    // ── Índice flat de faixas (para lookup rápido: preço, forSale, etc.)
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -127,6 +136,7 @@ async function loadPublicData() {
   } catch (err) {
     console.warn('[public] falha, usando DEFAULT_CONTENT:', err?.message);
     SITE.content = clone(DEFAULT_CONTENT);
+    SITE.albums = [];
     SITE.tracks = {};
     SITE.plans = {};
   }
@@ -191,6 +201,10 @@ function ownsTrack(albumId, trackIndex) {
 
 function isLocked(albumId, trackIndex) {
   return !isPremium() && !ownsTrack(albumId, trackIndex);
+}
+
+function findAlbum(albumId) {
+  return SITE.albums.find((a) => a.id === albumId) || null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -386,12 +400,14 @@ function renderPlans() {
 
 // ─────────────────────────────────────────────────────────────
 // DISCOGRAFIA
+// ------------------------------------------------------------
+// Fonte de verdade: SITE.albums (vem do /api/public → banco)
 // ─────────────────────────────────────────────────────────────
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
   if (!container) return;
 
-  const albums = SITE.content?.discografia?.albums || [];
+  const albums = SITE.albums;
   const filtered =
     SITE.filter === 'all'
       ? albums
@@ -408,13 +424,14 @@ function renderDiscography() {
 
   const html = filtered
     .map((album) => {
-      const tracks = album.tracks
+      const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+      const tracks = albumTracks
         .map((track, trackIndex) => ({ track, trackIndex }))
         .filter(
           ({ track }) =>
             !q ||
-            track.title.toLowerCase().includes(q) ||
-            album.title.toLowerCase().includes(q)
+            (track.title || '').toLowerCase().includes(q) ||
+            (album.title || '').toLowerCase().includes(q)
         );
 
       if (!tracks.length && q) return '';
@@ -429,7 +446,7 @@ function renderDiscography() {
                 ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
                 : ''
             }>
-              ${album.coverImage ? '' : esc(album.cover || '♪')}
+              ${album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪')}
             </div>
             <div class="album-info">
               <div class="album-title">
@@ -493,7 +510,9 @@ function renderTrackCard(album, track, trackIndex) {
   const coverStyle = album.coverImage
     ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
     : '';
-  const coverText = album.coverImage ? '' : esc(album.cover || '♪');
+  const coverText = album.coverImage
+    ? ''
+    : esc(album.coverInitials || album.cover || '♪');
 
   const priceHTML = premium
     ? '<div class="discography-track-price">✓<small>Premium ativo</small></div>'
@@ -576,14 +595,15 @@ function renderPlaylists() {
 }
 
 function resolvePlaylistTracks(playlist) {
-  const albums = SITE.content?.discografia?.albums || [];
   return (playlist?.tracks || [])
     .map((ref) => {
       const [albumId, idxStr] = String(ref).split(':');
-      const album = albums.find((a) => a.id === albumId);
+      const album = findAlbum(albumId);
       const idx = Number(idxStr);
-      if (!album || !Number.isInteger(idx) || !album.tracks[idx]) return null;
-      return { album, track: album.tracks[idx], trackIndex: idx };
+      if (!album || !Number.isInteger(idx)) return null;
+      const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+      if (!albumTracks[idx]) return null;
+      return { album, track: albumTracks[idx], trackIndex: idx };
     })
     .filter(Boolean);
 }
@@ -1172,11 +1192,10 @@ function bindPlayerControls() {
 }
 
 async function playFromDiscography(albumId, trackIndex) {
-  const album = SITE.content?.discografia?.albums?.find(
-    (a) => a.id === albumId
-  );
+  const album = findAlbum(albumId);
   if (!album) return;
-  const track = album.tracks[trackIndex];
+  const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+  const track = albumTracks[trackIndex];
   if (!track) return;
 
   // 1) Pede URL ao backend (com verificação de permissão)
@@ -1282,14 +1301,15 @@ function togglePlay() {
 
 function nextTrack() {
   if (!currentTrackIdentity) return;
-  const albums = SITE.content?.discografia?.albums || [];
+  const albums = SITE.albums;
   for (const album of albums) {
-    for (let i = 0; i < album.tracks.length; i++) {
+    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+    for (let i = 0; i < albumTracks.length; i++) {
       const isCurrent =
         currentTrackIdentity.albumId === album.id &&
         currentTrackIdentity.trackIndex === i;
       if (isCurrent) {
-        if (i + 1 < album.tracks.length) {
+        if (i + 1 < albumTracks.length) {
           return playFromDiscography(album.id, i + 1);
         }
         return;
@@ -1304,9 +1324,10 @@ function prevTrack() {
     audio.currentTime = 0;
     return;
   }
-  const albums = SITE.content?.discografia?.albums || [];
+  const albums = SITE.albums;
   for (const album of albums) {
-    for (let i = 0; i < album.tracks.length; i++) {
+    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+    for (let i = 0; i < albumTracks.length; i++) {
       const isCurrent =
         currentTrackIdentity.albumId === album.id &&
         currentTrackIdentity.trackIndex === i;
@@ -1604,10 +1625,9 @@ function renderExpandedPlayerActions(albumId, trackIndex) {
   const wrap = document.getElementById('expandedPlayerActions');
   if (!wrap) return;
 
-  const album = SITE.content?.discografia?.albums?.find(
-    (a) => a.id === albumId
-  );
-  const track = album && album.tracks[trackIndex];
+  const album = findAlbum(albumId);
+  const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
+  const track = albumTracks[trackIndex];
   if (!track) {
     wrap.innerHTML = '';
     return;
@@ -1656,7 +1676,7 @@ function syncExpandedPlayer(track, album, unlocked) {
       cover.textContent = '';
     } else {
       cover.style.backgroundImage = '';
-      cover.textContent = album.cover || '♪';
+      cover.textContent = album.coverInitials || album.cover || '♪';
     }
   }
   if (badge) badge.classList.toggle('visible', !unlocked);
