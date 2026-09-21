@@ -234,32 +234,109 @@
     <div id="lyricsContent" class="lyrics-content"><p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p></div>
   </div>
 
-  <!-- Player expandido -->
+  <!-- ═══════════════════════════════════════════════════════════
+       PLAYER EXPANDIDO — Desktop 2 colunas / Mobile Spotify-like
+       ═══════════════════════════════════════════════════════════ -->
   <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
-    <div class="expanded-player">
-      <button class="modal-close" id="closeExpandedPlayer" aria-label="Fechar player">×</button>
-      <div class="expanded-player-main">
-        <div class="expanded-player-cover" id="expandedPlayerCover"></div>
-        <div class="expanded-player-meta">
-          <span class="now-label">TOCANDO AGORA <span class="preview-badge" id="expandedPreviewBadge">PRÉVIA</span></span>
-          <h2 id="expandedPlayerTitle">Nenhuma faixa selecionada</h2>
-          <p id="expandedPlayerAlbum">Joseph Matthos</p>
-          <div class="expanded-player-actions" id="expandedPlayerActions"></div>
+    <div class="music-player">
+
+      <!-- Botão fechar -->
+      <button class="player-close" id="closeExpandedPlayer" aria-label="Fechar player">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+        </svg>
+      </button>
+
+      <!-- Grid: 2 colunas no desktop, 1 no mobile -->
+      <div class="player-grid">
+
+        <!-- ══════════ COLUNA ESQUERDA: PLAYER ══════════ -->
+        <div class="player-col">
+
+          <!-- Capa -->
+          <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
+
+          <!-- Info -->
+          <div class="track-info">
+            <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
+            <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
+          </div>
+
+          <!-- Badge de prévia -->
+          <div class="preview-badge" id="expandedPreviewBadge">PRÉVIA 30s</div>
+
+          <!-- Progresso -->
+          <div class="progress-container">
+            <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+              <div class="progress" id="expandedProgressFill"></div>
+            </div>
+            <div class="time-info">
+              <span id="expandedCurrentTime">0:00</span>
+              <span id="expandedDuration">0:00</span>
+            </div>
+          </div>
+
+          <!-- Controles principais -->
+          <div class="controls">
+            <button class="control-btn" id="expandedPrevBtn" title="Anterior" aria-label="Faixa anterior">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+              </svg>
+            </button>
+
+            <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
+              <svg viewBox="0 0 24 24" id="expandedPlayIcon">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+            </button>
+
+            <button class="control-btn" id="expandedNextBtn" title="Próxima" aria-label="Próxima faixa">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Extras -->
+          <div class="extra-controls">
+            <button class="extra-btn" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+              </svg>
+            </button>
+
+            <button class="extra-btn" id="expandedDownloadBtn" title="Baixar" aria-label="Baixar faixa">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Ações (comprar / assinar) -->
+          <div class="player-actions" id="expandedPlayerActions"></div>
+
         </div>
+        <!-- ══════════ FIM DA COLUNA ESQUERDA ══════════ -->
+
+        <!-- ══════════ COLUNA DIREITA: LETRA ══════════ -->
+        <div class="lyrics-col">
+          <div class="lyrics-header">
+            <h3>Letra</h3>
+          </div>
+          <div class="lyrics-scroll" id="expandedLyricsContent">
+            <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
+          </div>
+        </div>
+        <!-- ══════════ FIM DA COLUNA DIREITA ══════════ -->
+
       </div>
-      <div class="expanded-controls">
-        <button class="ctrl" id="expandedPrevBtn" title="Faixa anterior" aria-label="Faixa anterior">⏮</button>
-        <button class="ctrl ctrl-play" id="expandedPlayBtn" title="Reproduzir ou pausar" aria-label="Reproduzir ou pausar">▶</button>
-        <button class="ctrl" id="expandedNextBtn" title="Próxima faixa" aria-label="Próxima faixa">⏭</button>
-        <button class="ctrl" id="expandedMuteBtn" title="Ativar ou desativar som" aria-label="Ativar ou desativar som">🔊</button>
-        <button class="ctrl" id="expandedDownloadBtn" title="Baixar faixa" aria-label="Baixar faixa">⬇</button>
+
+      <!-- Toggle mobile: Música / Letra -->
+      <div class="mobile-tabs" role="tablist">
+        <button class="mobile-tab active" data-tab="music" role="tab" aria-selected="true">Música</button>
+        <button class="mobile-tab" data-tab="lyrics" role="tab" aria-selected="false">Letra</button>
       </div>
-      <div class="expanded-progress">
-        <span id="expandedCurrentTime">0:00</span>
-        <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso da faixa ampliado" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0"><div class="progress-fill" id="expandedProgressFill"></div></div>
-        <span id="expandedDuration">0:00</span>
-      </div>
-      <div class="expanded-lyrics" id="expandedLyricsContent"><p class="lyrics-empty">Cadastre uma letra sincronizada para esta faixa.</p></div>
+
     </div>
   </div>
 
@@ -328,9 +405,6 @@
       <div class="plans-grid" id="plansGrid"></div>
     </div>
   </div>
-
-  <!-- NOTA: os modais subscribeModal e checkoutModal foram REMOVIDOS.
-       O checkout é hospedado no Mercado Pago via checkoutUrl. -->
 
 </div>
 
@@ -610,9 +684,6 @@
 
 <!-- ============================================================
      ENTRYPOINTS (ES modules)
-     ------------------------------------------------------------
-     - site.js       → site público
-     - admin/index.js → painel administrativo
      ============================================================ -->
 <script type="module" src="js/site.js"></script>
 <script type="module" src="js/admin/index.js"></script>
