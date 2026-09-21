@@ -9,21 +9,22 @@
 
    ✅ Pode conter:
      - textos, branding, SEO
-     - estrutura de álbuns e faixas (títulos, descrições)
+     - títulos de seção
      - IDs de planos (mas NÃO preços)
      - redes sociais, aparência
 
    🎯 Este arquivo é apenas FALLBACK:
      - Quando /api/public falha, o site usa o conteúdo daqui.
      - Quando o backend funciona, o site lê do banco
-       (`site_content`, `tracks`, `effective_plan`).
-     - Áudios e imagens reais devem ser cadastrados pelo painel
-       admin (Supabase Storage), NÃO aqui.
+       (`site_content`, `albums`, `tracks`, `effective_plan`).
 
-   🚫 Áudios:
-     As faixas abaixo têm `fullAudio: ""` de propósito — não há
-     áudio real cadastrado em produção. O player mostrará
-     "Faixa sem áudio cadastrado" até o admin subir os arquivos.
+   📦 Fonte de verdade (produção):
+     - `albums` + `tracks`   → estrutura da discografia
+     - `site_content`        → textos, hero, sobre, filosofia, planos, contato, aparência
+     - env vars (MP_*)       → preços dos planos
+
+   🚫 Áudios e álbuns NÃO moram aqui.
+     Eles vêm de /api/public (albums + tracks) e /api/stream (URLs).
 
    📦 Uso:
      - Módulos ES:   import { DEFAULT_CONTENT } from './config.js';
@@ -31,10 +32,13 @@
    ============================================================ */
 
 // Bump quando a estrutura mudar de forma incompatível
-export const CONTENT_SCHEMA_VERSION = 1;
+export const CONTENT_SCHEMA_VERSION = 2;
 
 // ─────────────────────────────────────────────────────────────
 // Conteúdo padrão
+// ------------------------------------------------------------
+// ⚠️ NÃO incluir `discografia.albums` aqui.
+//    Álbuns e faixas vêm de `albums` + `tracks` no Supabase.
 // ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
@@ -96,158 +100,9 @@ export const DEFAULT_CONTENT = {
 
   discografia: {
     title: "Disco<span class=\"gold\">grafia</span>",
-    subtitle: "Explore álbuns, EPs e singles. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads.",
-
-    // ⚠️ SEM `price` — preço sempre vem de `tracks.price_cents` no banco.
-    // ⚠️ SEM `fullAudio` real — o admin cadastra os áudios pelo painel.
-    albums: [
-      {
-        id: "album-bbb",
-        type: "album",
-        title: "Boom, Boom, Bàp",
-        year: 2026,
-        cover: "BBB",
-        coverImage: "assets/img/boomboombap.webp",
-        description: "O álbum da maturidade. Palavras que viram rumor, rumor que vira verdade, verdade que vira legado.",
-        tracks: [
-          {
-            id: "album-bbb:0",
-            title: "Palavras",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 30,
-            previewDuration: 30,
-            duration: "3:58"
-          },
-          {
-            id: "album-bbb:1",
-            title: "Rumor",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 45,
-            previewDuration: 30,
-            duration: "4:12"
-          },
-          {
-            id: "album-bbb:2",
-            title: "Verdade",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 20,
-            previewDuration: 30,
-            duration: "4:45"
-          },
-          {
-            id: "album-bbb:3",
-            title: "Legado",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 60,
-            previewDuration: 30,
-            duration: "5:20"
-          }
-        ]
-      },
-
-      {
-        id: "album-1",
-        type: "album",
-        title: "Silêncio Fértil",
-        year: 2024,
-        cover: "SF",
-        coverImage: "",
-        description: "Álbum de estreia. Reflexões sobre identidade, fé e resistência.",
-        tracks: [
-          {
-            id: "album-1:0",
-            title: "Silêncio Fértil",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 30,
-            previewDuration: 30,
-            duration: "6:12"
-          },
-          {
-            id: "album-1:1",
-            title: "Fé Inversa",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 45,
-            previewDuration: 30,
-            duration: "5:01"
-          },
-          {
-            id: "album-1:2",
-            title: "Cálice de Verso",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 20,
-            previewDuration: 30,
-            duration: "4:48"
-          },
-          {
-            id: "album-1:3",
-            title: "Ponte para o Nada",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 60,
-            previewDuration: 30,
-            duration: "4:15"
-          }
-        ]
-      },
-
-      {
-        id: "ep-1",
-        type: "ep",
-        title: "Interlúdio",
-        year: 2023,
-        cover: "IN",
-        coverImage: "",
-        description: "EP experimental entre o sagrado e o profano.",
-        tracks: [
-          {
-            id: "ep-1:0",
-            title: "Oração Urbana",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 30,
-            previewDuration: 30,
-            duration: "4:20"
-          },
-          {
-            id: "ep-1:1",
-            title: "Cinzas e Versos",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 40,
-            previewDuration: 30,
-            duration: "3:55"
-          }
-        ]
-      },
-
-      {
-        id: "single-1",
-        type: "single",
-        title: "Vozes na Madrugada",
-        year: 2025,
-        cover: "VM",
-        coverImage: "",
-        description: "Single mais recente. Uma conversa com o silêncio às 3h da manhã.",
-        tracks: [
-          {
-            id: "single-1:0",
-            title: "Vozes na Madrugada",
-            previewAudio: "",
-            fullAudio: "",
-            previewStart: 35,
-            previewDuration: 30,
-            duration: "4:02"
-          }
-        ]
-      }
-    ]
+    subtitle: "Explore álbuns, EPs e singles. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads."
+    // ⚠️ `albums` foi movido para o Supabase (tabelas `albums` + `tracks`).
+    //    Vem via /api/public → SITE.albums
   },
 
   playlists: [
