@@ -24,7 +24,7 @@ const {
   getConfig
 } = require('./_lib');
 
-const SIGNED_URL_TTL_SEC = 600;          // 10 min
+const SIGNED_URL_TTL_SEC = 600;
 const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
 
@@ -34,8 +34,7 @@ module.exports = async function handler(req, res) {
   }
 
   const albumId = String(req.query?.albumId || '').trim();
-  const trackIndexRaw = req.query?.trackIndex;
-  const trackIndex = Number(trackIndexRaw);
+  const trackIndex = Number(req.query?.trackIndex);
 
   if (!albumId || !Number.isInteger(trackIndex) || trackIndex < 0) {
     return sendJson(res, 400, { ok: false, error: 'Parâmetros inválidos.' });
@@ -69,7 +68,7 @@ module.exports = async function handler(req, res) {
   // ── 3) Verificar permissão
   let unlocked = false;
   let reason = 'not_authenticated';
-  let expiresAt = null;   // ISO string quando unlock vem de aluguel
+  let rentalExpiresAt = null;
 
   try {
     const user = await getAuthUser(req);
@@ -103,9 +102,9 @@ module.exports = async function handler(req, res) {
             && albumRental.body[0]) {
           unlocked = true;
           reason = 'album_rental_active';
-          expiresAt = albumRental.body[0].expires_at || null;
+          rentalExpiresAt = albumRental.body[0].expires_at || null;
         } else {
-          // 3.3) Aluguel de FAIXA ativa?
+          // 3.3) Aluguel de FAIXA ativo?
           const trackRental = await supabaseAdminRequest(
             `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
             `&track_id=eq.${track.id}` +
@@ -123,14 +122,13 @@ module.exports = async function handler(req, res) {
               && trackRental.body[0]) {
             unlocked = true;
             reason = 'track_rental_active';
-            expiresAt = trackRental.body[0].expires_at || null;
+            rentalExpiresAt = trackRental.body[0].expires_at || null;
           }
         }
       }
     }
   } catch (err) {
     console.warn('[stream] erro ao verificar permissão:', err.message);
-    // fail-safe: mantém unlocked=false
   }
 
   // ── 4) Sem acesso → só preview
@@ -157,7 +155,7 @@ module.exports = async function handler(req, res) {
       previewDuration: track.preview_duration || 30,
       fullUrl: null,
       expiresIn: null,
-      rentalExpiresAt: expiresAt,
+      rentalExpiresAt,
       warning: 'Áudio completo não cadastrado.'
     });
   }
@@ -176,7 +174,7 @@ module.exports = async function handler(req, res) {
     previewDuration: track.preview_duration || 30,
     fullUrl: signedUrl,
     expiresIn: SIGNED_URL_TTL_SEC,
-    rentalExpiresAt: expiresAt
+    rentalExpiresAt
   });
 };
 
