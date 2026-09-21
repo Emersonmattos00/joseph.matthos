@@ -1,22 +1,24 @@
 /* ============================================================
    SERVICE WORKER — Joseph Matthos
    ------------------------------------------------------------
-   - Cache estático para assets (CSS, JS, imagens)
+   - Cache estático para assets (CSS, JS público, imagens)
    - HTML: network-first (fallback offline.html)
+   - JS do admin: network-first (NUNCA cacheado — muda com frequência)
    - API: nunca cacheada
    - Range requests (áudio): passam direto
    ------------------------------------------------------------
    ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
+   ⚠️  Arquivos em /js/admin/** NÃO entram no cache — sempre frescos
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v12';
+const CACHE_VERSION = 'jm-v13';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
 // ------------------------------------------------------------
 // Liste TODOS os arquivos que precisam estar disponíveis offline.
-// Módulos ES importados pelo site.js e pelo admin/index.js
-// precisam estar aqui também (o SW não segue imports).
+// ⚠️  NÃO incluir arquivos de /js/admin/** aqui — eles usam
+//     network-first e nunca são cacheados.
 // ─────────────────────────────────────────────────────────────
 const CACHE_STATIC = [
   // Páginas
@@ -33,31 +35,6 @@ const CACHE_STATIC = [
   '/js/utils.js',
   '/js/config.js',
   '/js/site.js',
-
-  // JS — admin
-  '/js/admin/index.js',
-  '/js/admin/state.js',
-  '/js/admin/api.js',
-  '/js/admin/auth.js',
-  '/js/admin/content.js',
-  '/js/admin/uploads.js',
-  '/js/admin/dashboard.js',
-  '/js/admin/users.js',
-  '/js/admin/sales.js',
-  '/js/admin/backup.js',
-
-  // JS — admin/ui
-  '/js/admin/ui/dom.js',
-  '/js/admin/ui/format.js',
-  '/js/admin/ui/modal.js',
-  '/js/admin/ui/toast.js',
-
-  // JS — admin/editors
-  '/js/admin/editors/frases.js',
-  '/js/admin/editors/albums.js',
-  '/js/admin/editors/playlists.js',
-  '/js/admin/editors/plans.js',
-  '/js/admin/editors/socials.js',
 
   // Imagens padrão (fallback de layout)
   '/assets/img/tema.webp',
@@ -134,7 +111,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // ── Assets (CSS, JS, imagens, fontes locais)
+  // ── JS do admin: NUNCA cacheia (network-first puro)
+  if (url.pathname.startsWith('/js/admin/')) {
+    event.respondWith(handleAdminAsset(req));
+    return;
+  }
+
+  // ── Assets (CSS, JS público, imagens, fontes locais)
   event.respondWith(handleAsset(req));
 });
 
@@ -161,6 +144,25 @@ async function handleNavigation(req) {
       '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Offline</title></head><body><h1>Sem conexão</h1><p>Verifique sua internet e tente novamente.</p></body></html>',
       { headers: { 'Content-Type': 'text/html; charset=utf-8' }, status: 503 }
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Estratégia: admin assets — network-first, NUNCA cacheia
+// ------------------------------------------------------------
+// Motivo: arquivos do painel mudam com frequência durante
+// manutenção. Cachear causa "corrigi mas não mudou nada".
+// Se a rede falhar, ainda tenta o cache como último recurso.
+// ─────────────────────────────────────────────────────────────
+async function handleAdminAsset(req) {
+  try {
+    return await fetch(req);
+  } catch {
+    // Offline: se por acaso estiver em cache, usa; senão, erro
+    const cached = await caches.match(req);
+    if (cached) return cached;
+
+    return new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
