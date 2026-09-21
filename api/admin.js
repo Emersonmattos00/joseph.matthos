@@ -251,35 +251,13 @@ async function handleLogin(req, res) {
     return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
   }
 
-  if (!expectedUser) {
-    console.error('[admin/login] ADMIN_USER ausente');
-    return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
-  }
-
-  // ═══════════════════════════════════════════════════════════
-  // ⚠️ TEMPORÁRIO — senha em texto puro via ADMIN_PASSWORD_PLAIN
-  // -----------------------------------------------------------
-  // Se a env ADMIN_PASSWORD_PLAIN existir, compara direto com a
-  // senha digitada. Caso contrário, cai no fluxo normal (scrypt).
-  //
-  // REMOVER ESTE BLOCO após gerar o ADMIN_PASSWORD_HASH de verdade.
-  // ═══════════════════════════════════════════════════════════
-  const plainPassword = String(process.env.ADMIN_PASSWORD_PLAIN || '').trim();
-
-  if (!plainPassword && !hash) {
-    console.error('[admin/login] ADMIN_PASSWORD_HASH ausente e ADMIN_PASSWORD_PLAIN ausente');
+  if (!expectedUser || !hash) {
+    console.error('[admin/login] ADMIN_USER ou ADMIN_PASSWORD_HASH ausente');
     return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
   }
 
   const userOk = timingSafeEq(user, expectedUser);
-
-  let passOk = false;
-  if (plainPassword) {
-    passOk = timingSafeEq(pass, plainPassword);
-  } else {
-    passOk = await verifyScrypt(pass, hash);
-  }
-  // ═══════════════ FIM DO BLOCO TEMPORÁRIO ═══════════════════
+  const passOk = await verifyScrypt(pass, hash);
 
   if (!userOk || !passOk) {
     await audit('admin_login', {
