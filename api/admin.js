@@ -201,6 +201,10 @@ module.exports = async function handler(req, res) {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
       return handleGetAudit(req, res);
 
+    case 'gen-hash':
+      if (method !== 'GET') return methodNotAllowed(res, 'GET');
+      return handleGenHash(req, res, session);
+
     default:
       return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
   }
@@ -909,6 +913,44 @@ function parseTotalFromHeaders(headers) {
   if (!m || m[1] === '*') return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// GEN-HASH — TEMPORÁRIO
+// ------------------------------------------------------------
+// Gera um hash scrypt de uma senha. Requer sessão de admin.
+//
+// GET /api/admin?action=gen-hash&password=XXXX
+//
+// ⚠️ REMOVER ESTA FUNÇÃO após gerar o hash novo.
+// ─────────────────────────────────────────────────────────────
+async function handleGenHash(req, res, session) {
+  const password = String(req.query?.password || '');
+
+  if (!password || password.length < 12) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Senha deve ter pelo menos 12 caracteres.'
+    });
+  }
+
+  try {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(password, salt, 64);
+    const encoded = 'scrypt$' + salt.toString('hex') + '$' + hash.toString('hex');
+
+    await audit('admin_gen_hash', {
+      actor: session.user,
+      ip: clientIp(req),
+      userAgent: req.headers['user-agent'] || '',
+      success: true
+    });
+
+    return sendJson(res, 200, { ok: true, hash: encoded });
+  } catch (err) {
+    console.error('[admin/gen-hash]', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro ao gerar hash.' });
+  }
 }
 
 function isUuid(s) {
