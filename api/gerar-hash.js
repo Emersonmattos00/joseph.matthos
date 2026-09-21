@@ -4,8 +4,7 @@
 const crypto = require('crypto');
 
 module.exports = (req, res) => {
-  // Token secreto — troque por algo aleatório só seu
-  const TOKEN = 'jm-9f3a2c1d';
+  const TOKEN = 'jm-troque-por-algo-unico-2026';
 
   if (req.query.token !== TOKEN) {
     return res.status(403).json({ error: 'forbidden' });
@@ -22,4 +21,4 @@ module.exports = (req, res) => {
   res.json({
     hash: 'scrypt$' + salt.toString('hex') + '$' + hash.toString('hex')
   });
-};
+};  temp: api gerar-hash
