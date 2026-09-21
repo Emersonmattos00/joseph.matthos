@@ -18,8 +18,10 @@
 --    12. view effective_plan
 --    13. grants
 --    14. reload PostgREST
---    15. policies service_role
---    16. migração (audio → paths)
+--    15. policies service_role (tabelas)
+--    16. migração de áudio (full_audio → full_path)
+--    17. STORAGE — buckets e policies
+--    18. reload PostgREST (final)
 --
 --  Idempotente: pode ser rodado várias vezes sem erro.
 --  ═══════════════════════════════════════════════════════════════════════
@@ -618,7 +620,7 @@ notify pgrst, 'reload schema';
 
 
 -- ═══════════════════════════════════════════════════════════════════════
---  15. POLICIES para service_role (ESSENCIAL!)
+--  15. POLICIES para service_role (tabelas) — ESSENCIAL!
 -- ---------------------------------------------------------------
 --  O service_role NÃO bypassa RLS automaticamente no Supabase.
 --  Sem estas policies, o painel admin retorna 502.
@@ -718,5 +720,66 @@ alter table public.tracks
   drop column if exists full_audio,
   drop column if exists preview_audio;
 
--- 4) Reload final
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  17. STORAGE — buckets e policies (idempotente)
+-- ---------------------------------------------------------------
+--  Três buckets com finalidades distintas:
+--    site-assets   → público (imagens: capas, vinil, sobre, fundos)
+--    audio-preview → público (previews de 30s)
+--    audio-premium → PRIVADO (áudios completos, acesso via signed URL)
+--
+--  O bucket privado audio-premium é acessado apenas via /api/stream,
+--  que gera signed URLs de curta duração (10 min) para usuários com
+--  permissão (premium ou aluguel ativo).
+--
+--  Rodar várias vezes não causa erro (usa "on conflict do nothing").
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- 17.1. Cria os 3 buckets
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values
+  ('site-assets',   'site-assets',   true,  10485760,
+   array['image/jpeg','image/png','image/webp','image/gif']),
+  ('audio-preview', 'audio-preview', true,  10485760,
+   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg']),
+  ('audio-premium', 'audio-premium', false, 52428800,
+   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg'])
+on conflict (id) do nothing;
+
+-- 17.2. Policies de RLS para storage.objects
+
+-- site-assets: leitura pública (imagens)
+drop policy if exists "site_assets_public_read" on storage.objects;
+create policy "site_assets_public_read"
+  on storage.objects for select
+  using (bucket_id = 'site-assets');
+
+-- audio-preview: leitura pública (previews)
+drop policy if exists "audio_preview_public_read" on storage.objects;
+create policy "audio_preview_public_read"
+  on storage.objects for select
+  using (bucket_id = 'audio-preview');
+
+-- audio-premium: NENHUMA policy de SELECT pública.
+--   O bucket é privado. O acesso é feito via signed URLs geradas pelo
+--   /api/stream (usando a service_role key, que ignora RLS).
+
+-- service_role: acesso total a todos os buckets
+--   Necessário para uploads via /api/admin?action=upload
+drop policy if exists "storage_service_role_all" on storage.objects;
+create policy "storage_service_role_all"
+  on storage.objects for all
+  to service_role
+  using (true)
+  with check (true);
+
+-- 17.3. Comentários (documentação)
+comment on table storage.buckets is
+  'Buckets do Supabase Storage. Gerenciados por schema.sql.';
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  18. reload PostgREST (final)
+-- ═══════════════════════════════════════════════════════════════════════
 notify pgrst, 'reload schema';
