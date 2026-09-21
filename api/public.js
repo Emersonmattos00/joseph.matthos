@@ -1,8 +1,9 @@
 /* ============================================================
    api/public.js — Endpoints públicos consolidados
    ------------------------------------------------------------
-   GET /api/public                    → { ok, content, tracks, plans }
+   GET /api/public                    → { ok, content, albums, tracks, plans }
    GET /api/public?resource=content   → { ok, data, version, updatedAt }
+   GET /api/public?resource=albums    → { ok, albums: [...] }
    GET /api/public?resource=tracks    → { ok, tracks: [...] }
    GET /api/public?resource=plans     → { ok, currency, plans: [...] }
    HEAD /api/public[?resource=...]    → mesmos headers, sem body
@@ -24,7 +25,8 @@ const {
 } = require('./_lib');
 
 const CONTENT_KEY = 'default';
-const MAX_TRACKS = 1000;
+const MAX_ALBUMS = 200;
+const MAX_TRACKS = 2000;
 
 const RATE_MAX_REQUESTS = 120;
 const RATE_WINDOW_MS = 60_000;
@@ -32,7 +34,7 @@ const RATE_WINDOW_MS = 60_000;
 const CACHE_AGGREGATE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
 const CACHE_PLANS = 'public, max-age=300, s-maxage=300, stale-while-revalidate=3600';
 
-const VALID_RESOURCES = new Set(['content', 'tracks', 'plans']);
+const VALID_RESOURCES = new Set(['content', 'albums', 'tracks', 'plans']);
 
 module.exports = async function handler(req, res) {
   res.setHeader('Allow', 'GET, HEAD');
@@ -63,21 +65,23 @@ module.exports = async function handler(req, res) {
 
   try {
     if (!resource) {
-      const [content, tracks, plans] = await Promise.all([
+      // ── Agregado: content + albums (com tracks) + tracks flat + plans
+      const [content, catalog, plans] = await Promise.all([
         fetchContent(),
-        fetchTracks(),
+        fetchAlbumsWithTracks(),
         fetchPlans()
       ]);
 
       if (!content.ok) return fail(res, method, 502, 'Conteúdo indisponível.');
-      if (!tracks.ok) return fail(res, method, 502, 'Catálogo indisponível.');
+      if (!catalog.ok) return fail(res, method, 502, 'Catálogo indisponível.');
 
       const payload = {
         ok: true,
         content: content.data,
         contentVersion: content.version,
         contentUpdatedAt: content.updatedAt,
-        tracks: tracks.tracks,
+        albums: catalog.albums,       // ← NOVO: álbuns com tracks[] dentro
+        tracks: catalog.tracks,       // ← flat (compatibilidade)
         plans: plans.plans,
         currency: plans.currency
       };
@@ -94,6 +98,12 @@ module.exports = async function handler(req, res) {
         version: r.version,
         updatedAt: r.updatedAt
       });
+    }
+
+    if (resource === 'albums') {
+      const r = await fetchAlbumsWithTracks();
+      if (!r.ok) return fail(res, method, 502, 'Catálogo indisponível.');
+      return respond(res, method, { ok: true, albums: r.albums });
     }
 
     if (resource === 'tracks') {
@@ -140,12 +150,72 @@ async function fetchContent() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Tracks
+// Albums + Tracks (agregado)
+// ------------------------------------------------------------
+// Busca álbuns publicados e suas faixas publicadas, retornando
+// a estrutura hierárquica esperada pelo site.js:
+//   [{ id, title, type, year, coverImage, description, tracks: [...] }]
+//
+// ⚠️  NÃO retorna full_path nem preview_path.
+//     URLs de áudio vêm via /api/stream (com verificação de permissão).
+// ─────────────────────────────────────────────────────────────
+async function fetchAlbumsWithTracks() {
+  const [albumsRes, tracksRes] = await Promise.all([
+    supabaseAdminRequest(
+      `/rest/v1/albums?published=eq.true` +
+        `&select=id,title,artist,year,type,cover_initials,cover_image,description,order_index` +
+        `&order=order_index.asc,id.asc` +
+        `&limit=${MAX_ALBUMS}`,
+      { method: 'GET' }
+    ),
+    supabaseAdminRequest(
+      `/rest/v1/tracks?published=eq.true` +
+        `&select=album_id,track_index,title,duration,preview_start,preview_duration,price_cents,for_sale,lyrics` +
+        `&order=album_id.asc,track_index.asc` +
+        `&limit=${MAX_TRACKS}`,
+      { method: 'GET' }
+    )
+  ]);
+
+  if (!albumsRes.response.ok || !tracksRes.response.ok) {
+    return { ok: false };
+  }
+
+  const albumRows = Array.isArray(albumsRes.body) ? albumsRes.body : [];
+  const trackRows = Array.isArray(tracksRes.body) ? tracksRes.body : [];
+
+  // Agrupa tracks por album_id
+  const byAlbum = new Map();
+  for (const t of trackRows) {
+    if (!byAlbum.has(t.album_id)) byAlbum.set(t.album_id, []);
+    byAlbum.get(t.album_id).push(t);
+  }
+
+  const albums = albumRows.map((a) => ({
+    id: a.id,
+    title: a.title || '',
+    artist: a.artist || 'Joseph Matthos',
+    year: a.year,
+    type: a.type || 'album',
+    cover: a.cover_initials || '',
+    coverInitials: a.cover_initials || '',
+    coverImage: a.cover_image || '',
+    description: a.description || '',
+    orderIndex: Number(a.order_index) || 0,
+    tracks: (byAlbum.get(a.id) || []).map((t) => mapTrack(t))
+  }));
+
+  // Também retorna a lista flat (compatibilidade com consumidores antigos)
+  const flatTracks = trackRows.map((t) => mapTrack(t));
+
+  return { ok: true, albums, tracks: flatTracks };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tracks (flat)
 // ------------------------------------------------------------
 // ⚠️  NÃO retorna full_audio nem preview_audio.
-//     URLs de áudio são resolvidas por /api/stream, que aplica
-//     verificação de permissão (premium ou aluguel ativo) e
-//     gera URLs assinadas com TTL curto para o bucket privado.
+//     URLs de áudio vêm via /api/stream.
 // ─────────────────────────────────────────────────────────────
 async function fetchTracks() {
   const result = await supabaseAdminRequest(
@@ -163,18 +233,25 @@ async function fetchTracks() {
 
   return {
     ok: true,
-    tracks: rows.map((t) => ({
-      albumId: t.album_id,
-      trackIndex: t.track_index,
-      title: t.title || '',
-      duration: t.duration || '',
-      previewStart: Number(t.preview_start) || 0,
-      previewDuration: Number(t.preview_duration) || 30,
-      priceCents: Number(t.price_cents) || 0,
-      forSale: t.for_sale !== false,
-      // fullAudio / previewAudio: resolvidos em /api/stream
-      lyrics: Array.isArray(t.lyrics) ? t.lyrics : []
-    }))
+    tracks: rows.map((t) => mapTrack(t))
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mapeia uma linha de `tracks` para o formato do cliente
+// ─────────────────────────────────────────────────────────────
+function mapTrack(t) {
+  return {
+    albumId: t.album_id,
+    trackIndex: t.track_index,
+    title: t.title || '',
+    duration: t.duration || '',
+    previewStart: Number(t.preview_start) || 0,
+    previewDuration: Number(t.preview_duration) || 30,
+    priceCents: Number(t.price_cents) || 0,
+    forSale: t.for_sale !== false,
+    // fullAudio / previewAudio: resolvidos em /api/stream
+    lyrics: Array.isArray(t.lyrics) ? t.lyrics : []
   };
 }
 
