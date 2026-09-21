@@ -20,11 +20,22 @@
 --    14. reload PostgREST
 --    15. policies service_role (tabelas)
 --    16. migração de áudio (full_audio → full_path)
---    17. STORAGE — buckets e policies
+--    17. STORAGE — policies (buckets via Dashboard)
 --    18. reload PostgREST (final)
 --
 --  Idempotente: pode ser rodado várias vezes sem erro.
---  ═══════════════════════════════════════════════════════════════════════
+--
+--  ⚠️  IMPORTANTE — BUCKETS DE STORAGE
+--  ---------------------------------------------------------------
+--  Os 3 buckets (site-assets, audio-preview, audio-premium) NÃO
+--  são criados por este SQL. A role do SQL Editor não tem permissão
+--  de owner sobre `storage.buckets` (essa tabela pertence à role
+--  interna `supabase_storage_admin`).
+--
+--  Crie-os manualmente pelo Dashboard do Supabase:
+--     Storage → New bucket
+--  Veja a seção 17 para os parâmetros exatos.
+-- ═══════════════════════════════════════════════════════════════════════
 
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -722,32 +733,40 @@ alter table public.tracks
 
 
 -- ═══════════════════════════════════════════════════════════════════════
---  17. STORAGE — buckets e policies (idempotente)
+--  17. STORAGE — policies (buckets devem ser criados pelo Dashboard)
 -- ---------------------------------------------------------------
---  Três buckets com finalidades distintas:
---    site-assets   → público (imagens: capas, vinil, sobre, fundos)
---    audio-preview → público (previews de 30s)
---    audio-premium → PRIVADO (áudios completos, acesso via signed URL)
+--  ⚠️  IMPORTANTE
 --
---  O bucket privado audio-premium é acessado apenas via /api/stream,
---  que gera signed URLs de curta duração (10 min) para usuários com
---  permissão (premium ou aluguel ativo).
+--  Os 3 buckets NÃO são criados via SQL porque a role do SQL Editor
+--  não tem permissão de owner sobre `storage.buckets` (essa tabela
+--  pertence à role interna `supabase_storage_admin`).
 --
---  Rodar várias vezes não causa erro (usa "on conflict do nothing").
+--  Tentar rodar `insert into storage.buckets (...)` resulta em:
+--     ERROR: 42501: must be owner of table buckets
+--
+--  Crie os buckets manualmente pelo Dashboard do Supabase:
+--     Storage → New bucket
+--
+--  Parâmetros exatos:
+--
+--  ┌────────────────┬──────────┬────────────┬─────────────────────────────────────────────────────┐
+--  │ Nome           │ Público? │ Limite     │ MIME types permitidos                               │
+--  ├────────────────┼──────────┼────────────┼─────────────────────────────────────────────────────┤
+--  │ site-assets    │ ✅ Sim   │ 10 MB      │ image/jpeg, image/png, image/webp, image/gif        │
+--  │ audio-preview  │ ✅ Sim   │ 10 MB      │ audio/mpeg, audio/mp4, audio/wav, audio/ogg         │
+--  │ audio-premium  │ ❌ Não   │ 50 MB      │ audio/mpeg, audio/mp4, audio/wav, audio/ogg         │
+--  └────────────────┴──────────┴────────────┴─────────────────────────────────────────────────────┘
+--
+--  ⚠️  ATENÇÃO: `audio-premium` deve ser PRIVADO. Se você marcar como
+--  público, o sistema de signed URLs perde a proteção — qualquer pessoa
+--  com a URL direta consegue baixar o áudio completo.
+--
+--  Depois de criar os buckets, as policies abaixo configuram o acesso.
+--  Elas PODEM ser criadas via SQL Editor (a role tem permissão em
+--  `storage.objects`).
 -- ═══════════════════════════════════════════════════════════════════════
 
--- 17.1. Cria os 3 buckets
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values
-  ('site-assets',   'site-assets',   true,  10485760,
-   array['image/jpeg','image/png','image/webp','image/gif']),
-  ('audio-preview', 'audio-preview', true,  10485760,
-   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg']),
-  ('audio-premium', 'audio-premium', false, 52428800,
-   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg'])
-on conflict (id) do nothing;
-
--- 17.2. Policies de RLS para storage.objects
+-- 17.1. Policies de RLS para storage.objects
 
 -- site-assets: leitura pública (imagens)
 drop policy if exists "site_assets_public_read" on storage.objects;
@@ -762,8 +781,7 @@ create policy "audio_preview_public_read"
   using (bucket_id = 'audio-preview');
 
 -- audio-premium: NENHUMA policy de SELECT pública.
---   O bucket é privado. O acesso é feito via signed URLs geradas pelo
---   /api/stream (usando a service_role key, que ignora RLS).
+--   O bucket é privado. Acesso via signed URLs geradas pelo /api/stream.
 
 -- service_role: acesso total a todos os buckets
 --   Necessário para uploads via /api/admin?action=upload
@@ -773,10 +791,6 @@ create policy "storage_service_role_all"
   to service_role
   using (true)
   with check (true);
-
--- 17.3. Comentários (documentação)
-comment on table storage.buckets is
-  'Buckets do Supabase Storage. Gerenciados por schema.sql.';
 
 
 -- ═══════════════════════════════════════════════════════════════════════
