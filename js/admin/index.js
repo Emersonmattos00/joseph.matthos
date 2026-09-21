@@ -6,6 +6,7 @@
    - FLUXO CORRIGIDO: sessão → conteúdo → dashboard
    - Binds resilientes (try/catch por editor)
    - Nav tabs com bind único (MutationObserver só no <nav>)
+   - Uploads roteiam para o bucket correto via `kind`
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -21,7 +22,7 @@ import { renderUsersTable, invalidateUsersCache } from './users.js';
 import { renderSales, invalidateSalesCache } from './sales.js';
 import { bindUpload } from './uploads.js';
 import { renderFrasesEditor } from './editors/frases.js';
-import { renderAlbumsEditor, bindAlbumsAddButton } from './editors/albums.js';
+import { renderAlbumsEditor } from './editors/albums.js';
 import { renderPlaylistsEditor, bindPlaylistsAddButton } from './editors/playlists.js';
 import { renderPlansEditor } from './editors/plans.js';
 import { renderSocialEditor, bindSocialsAddButton } from './editors/socials.js';
@@ -81,7 +82,7 @@ async function bootstrap() {
 
 // ─────────────────────────────────────────────────────────────
 // FLUXO PÓS-LOGIN — chamado por auth.js após autenticar.
-// Exposto em window.__adminBoot para o auth.js invocar.
+// Exposto em window.__admin.bootContent para o auth.js invocar.
 // ─────────────────────────────────────────────────────────────
 export async function loadAdminContentAndRender() {
   console.log('[admin] carregando conteúdo pós-login...');
@@ -255,6 +256,8 @@ function ensureContentStructure(content) {
   if (!content.filosofia) content.filosofia = {};
   if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
 
+  // `discografia.albums` não é mais usado — mantido só para compatibilidade
+  // caso algum componente antigo ainda leia. O site lê de SITE.albums.
   if (!content.discografia) content.discografia = {};
   if (!Array.isArray(content.discografia.albums)) content.discografia.albums = [];
 
@@ -300,9 +303,11 @@ function bindContentInputs() {
 
 // ─────────────────────────────────────────────────────────────
 // Botões dos editores
+// ------------------------------------------------------------
+// Nota: bindAlbumsAddButton foi removido — editor de álbuns
+// agora é apenas informativo (álbuns vivem no Supabase).
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
-  try { bindAlbumsAddButton(); } catch (e) { console.warn(e); }
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
   try { bindSocialsAddButton(); } catch (e) { console.warn(e); }
 
@@ -325,6 +330,10 @@ function bindEditorButtons() {
 
 // ─────────────────────────────────────────────────────────────
 // Upload zones
+// ------------------------------------------------------------
+// Uploads agora retornam { url, path, bucket }.
+// - Imagens e previews → usar `url` (bucket público)
+// - Áudio full        → usar `path` (bucket privado)
 // ─────────────────────────────────────────────────────────────
 function bindUploadZones() {
   document.querySelectorAll('[data-upload-target]').forEach((zone) => {
@@ -351,19 +360,23 @@ function bindUploadZones() {
     });
   });
 
+  // ── Imagem de fundo
   try {
-    bindUpload('bgUpload', (url) => {
+    bindUpload('bgUpload', ({ url }) => {
+      if (!url) return;
       if (!AdminState.content.branding) AdminState.content.branding = {};
       AdminState.content.branding.bgImage = url;
       markDirty();
       updateBgPreview(AdminState.content);
       safeCall('applyContentToSite', AdminState.content);
       toast('Imagem de fundo atualizada.', '🖼');
-    });
+    }, 'image');
   } catch (e) { console.warn(e); }
 
+  // ── Imagem do vinil
   try {
-    bindUpload('vinylUpload', (url) => {
+    bindUpload('vinylUpload', ({ url }) => {
+      if (!url) return;
       if (!AdminState.content.hero) AdminState.content.hero = {};
       if (!AdminState.content.hero.vinyl) AdminState.content.hero.vinyl = {};
       AdminState.content.hero.vinyl.image = url;
@@ -371,18 +384,41 @@ function bindUploadZones() {
       updateVinylPreview(AdminState.content);
       safeCall('applyContentToSite', AdminState.content);
       toast('Imagem do vinil atualizada.', '🖼');
-    });
+    }, 'image');
   } catch (e) { console.warn(e); }
 
+  // ── Imagem da seção Sobre
   try {
-    bindUpload('sobreUpload', (url) => {
+    bindUpload('sobreUpload', ({ url }) => {
+      if (!url) return;
       if (!AdminState.content.sobre) AdminState.content.sobre = {};
       AdminState.content.sobre.image = url;
       markDirty();
       updateSobrePreview(AdminState.content);
       safeCall('applyContentToSite', AdminState.content);
       toast('Imagem da seção Sobre atualizada.', '🖼');
-    });
+    }, 'image');
+  } catch (e) { console.warn(e); }
+
+  // ── Uploads de áudio (opcionais — só funcionam se os inputs existirem no HTML)
+  // Se o painel tiver <input id="previewUpload"> ou <input id="fullUpload">,
+  // eles serão ligados aqui e os `path`s ficam disponíveis em window.__*.
+  // O CRUD de faixas (fase 2) vai consumir esses valores.
+
+  try {
+    bindUpload('previewUpload', ({ path }) => {
+      if (!path) return;
+      window.__lastPreviewPath = path;
+      toast('Preview enviado. Copie o path em tracks.preview_path.', '🎵');
+    }, 'audio-preview');
+  } catch (e) { console.warn(e); }
+
+  try {
+    bindUpload('fullUpload', ({ path }) => {
+      if (!path) return;
+      window.__lastFullPath = path;
+      toast('Áudio completo enviado. Copie o path em tracks.full_path.', '🎵');
+    }, 'audio-full');
   } catch (e) { console.warn(e); }
 }
 
@@ -644,8 +680,6 @@ Object.defineProperty(window, '__admin', {
     },
     /**
      * Exposto para o auth.js chamar após login bem-sucedido.
-     * Mantém o acoplamento fraco: auth.js não precisa importar
-     * este módulo, só invocar window.__admin.reload().
      */
     bootContent: () => loadAdminContentAndRender()
   }),
