@@ -8,8 +8,6 @@
       no backend e reescrever este editor para consumir a API.
    ============================================================ */
 
-import { esc } from '../ui/dom.js';
-
 export function renderAlbumsEditor() {
   const wrap = document.getElementById('albumsEditor');
   if (!wrap) return;
