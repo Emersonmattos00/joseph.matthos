@@ -49,4 +49,4 @@ module.exports = (req, res) => {
       })
     );
   }
-};fix: gerar-hash compatível com Vercel runtime
+};
