@@ -32,7 +32,7 @@ import {
 // ─────────────────────────────────────────────────────────────
 export const SITE = {
   content: null,
-  albums: [],        // ← NOVO: catálogo vem do Supabase via /api/public
+  albums: [],        // catálogo vem do Supabase via /api/public
   tracks: {},        // índice flat: "albumId:trackIndex" → metadados da faixa
   plans: {},
   user: null,
@@ -112,13 +112,11 @@ async function loadPublicData() {
         ? json.content
         : clone(DEFAULT_CONTENT);
 
-    // ── Álbuns (vêm do banco: tabela `albums` + faixas agregadas)
     SITE.albums = [];
     if (Array.isArray(json.albums)) {
       SITE.albums = json.albums;
     }
 
-    // ── Índice flat de faixas (para lookup rápido: preço, forSale, etc.)
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -1160,6 +1158,7 @@ function initPlayer() {
   audio.addEventListener('loadedmetadata', syncExpandedProgress);
 
   bindPlayerControls();
+  bindMobileTabs();
   updateMuteButtons();
 }
 
@@ -1189,6 +1188,33 @@ function bindPlayerControls() {
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tabs mobile do player (Música / Letra)
+// ─────────────────────────────────────────────────────────────
+function bindMobileTabs() {
+  const player = document.querySelector('#expandedPlayerModal .music-player');
+  const tabs = document.querySelectorAll('#expandedPlayerModal .mobile-tab');
+  if (!player || !tabs.length) return;
+
+  tabs.forEach((tab) => {
+    if (tab.dataset.bound === '1') return;
+    tab.dataset.bound = '1';
+
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab;
+      const isLyrics = target === 'lyrics';
+
+      tabs.forEach((t) => {
+        const active = t.dataset.tab === target;
+        t.classList.toggle('active', active);
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+
+      player.classList.toggle('mobile-lyrics', isLyrics);
+    });
+  });
 }
 
 async function playFromDiscography(albumId, trackIndex) {
@@ -1353,6 +1379,7 @@ function toggleMute() {
 }
 
 function updateMuteButtons() {
+  // Barra fixa do rodapé — usa emoji/texto
   const icon =
     muted || audio?.volume === 0
       ? '🔇'
@@ -1361,8 +1388,18 @@ function updateMuteButtons() {
       : '🔊';
   const btn = document.getElementById('muteBtn');
   if (btn) btn.textContent = icon;
-  const exp = document.getElementById('expandedMuteBtn');
-  if (exp) exp.textContent = icon;
+
+  // Player expandido — troca o SVG
+  const expBtn = document.getElementById('expandedMuteBtn');
+  if (expBtn) {
+    const svg = expBtn.querySelector('svg');
+    if (svg) {
+      const isMuted = muted || audio?.volume === 0;
+      svg.innerHTML = isMuted
+        ? '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>'
+        : '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>';
+    }
+  }
 }
 
 function updateVolumeFill() {
@@ -1552,8 +1589,10 @@ function updateLyricsPosition() {
     if (!lines.length) continue;
 
     let active = -1;
+    const t = audio?.currentTime || 0;
+
     lines.forEach((line, index) => {
-      if (Number(line.dataset.lyricTime) <= (audio?.currentTime || 0)) {
+      if (Number(line.dataset.lyricTime) <= t) {
         active = index;
       }
     });
@@ -1576,8 +1615,13 @@ function onPlay() {
   if (btn) btn.textContent = '⏸';
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.add('spinning');
-  const expanded = document.getElementById('expandedPlayBtn');
-  if (expanded) expanded.textContent = '⏸';
+
+  // Player expandido: troca ícone do SVG
+  const expandedBtn = document.getElementById('expandedPlayBtn');
+  const expandedIcon = document.getElementById('expandedPlayIcon');
+  if (expandedBtn) expandedBtn.classList.add('playing');
+  if (expandedIcon) expandedIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+
   updateMuteButtons();
 }
 
@@ -1586,8 +1630,12 @@ function onPause() {
   if (btn) btn.textContent = '▶';
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.remove('spinning');
-  const expanded = document.getElementById('expandedPlayBtn');
-  if (expanded) expanded.textContent = '▶';
+
+  // Player expandido: volta ao ícone play
+  const expandedBtn = document.getElementById('expandedPlayBtn');
+  const expandedIcon = document.getElementById('expandedPlayIcon');
+  if (expandedBtn) expandedBtn.classList.remove('playing');
+  if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
 }
 
 function onError(e) {
@@ -1611,6 +1659,19 @@ function openExpandedPlayer(albumId, trackIndex) {
   if (!modal) return;
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
+
+  // Reset: volta pra tab "Música" no mobile
+  const player = modal.querySelector('.music-player');
+  const musicTab = modal.querySelector('.mobile-tab[data-tab="music"]');
+  if (player && musicTab) {
+    player.classList.remove('mobile-lyrics');
+    modal.querySelectorAll('.mobile-tab').forEach((t) => {
+      const isMusic = t.dataset.tab === 'music';
+      t.classList.toggle('active', isMusic);
+      t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
+    });
+  }
+
   playFromDiscography(albumId, trackIndex);
   renderExpandedPlayerActions(albumId, trackIndex);
 }
