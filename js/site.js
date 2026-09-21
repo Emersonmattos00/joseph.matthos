@@ -2,6 +2,7 @@
    SITE.JS — Joseph Matthos
    ------------------------------------------------------------
    - Conteúdo, faixas e planos vêm de /api/public (1 request)
+   - URLs de áudio vêm de /api/stream (com verificação)
    - Usuário + aluguéis vêm de /api/auth?action=me
    - Login/signup/logout via /api/auth?action=*
    - Compra de faixa via /api/payments?type=rental → MP checkout
@@ -27,7 +28,7 @@ import {
 } from './utils.js';
 
 // ─────────────────────────────────────────────────────────────
-// ESTADO GLOBAL — declarado no TOPO para evitar TDZ
+// ESTADO GLOBAL
 // ─────────────────────────────────────────────────────────────
 export const SITE = {
   content: null,
@@ -41,7 +42,7 @@ export const SITE = {
   shopSearch: ''
 };
 
-// Estado do player — movido para cá (era declarado no fim do arquivo)
+// Estado do player
 let audio = null;
 let currentTrackIdentity = null;
 let previewState = { active: false, start: 0, end: Infinity };
@@ -199,7 +200,6 @@ function applyContentToSite() {
   const c = SITE.content;
   if (!c) return;
 
-  // Branding
   document.title = c.branding?.meta?.title || 'Joseph Matthos';
   const metaDesc = document.querySelector('meta[name="description"]');
   if (metaDesc && c.branding?.meta?.description) {
@@ -1179,35 +1179,56 @@ async function playFromDiscography(albumId, trackIndex) {
   const track = album.tracks[trackIndex];
   if (!track) return;
 
-  const unlocked = isPremium() || isRented(albumId, trackIndex);
-  const cfg = computePlaybackConfig(track, unlocked);
-  if (!cfg.src) {
+  // 1) Pede URL ao backend (com verificação de permissão)
+  let streamData;
+  try {
+    const r = await fetch(
+      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${trackIndex}`,
+      { credentials: 'same-origin' }
+    );
+    streamData = await r.json();
+
+    if (!r.ok || !streamData?.ok) {
+      toast(streamData?.error || 'Faixa indisponível.', '⚠');
+      return;
+    }
+  } catch (err) {
+    console.error('[player] stream fetch:', err);
+    toast('Erro de rede ao carregar faixa.', '⚠');
+    return;
+  }
+
+  const unlocked = !!streamData.unlocked;
+  const src = unlocked ? streamData.fullUrl : streamData.previewUrl;
+
+  if (!src) {
     toast('Faixa sem áudio cadastrado.', '⚠');
     return;
   }
 
+  // 2) Configura identidade + preview state
   currentTrackIdentity = {
     albumId,
     trackIndex,
     trackTitle: track.title,
     identity: `${albumId}:${trackIndex}`
   };
-  previewState = { active: cfg.isPreview, start: cfg.start, end: cfg.end };
+
+  previewState = unlocked
+    ? { active: false, start: 0, end: Infinity }
+    : {
+        active: true,
+        start: 0,
+        end: Number(streamData.previewDuration) || 30
+      };
+
   previewNoticeTrackKey = '';
 
-  audio.src = cfg.src;
+  // 3) Carrega áudio
+  audio.src = src;
   audio.load();
 
-  const onLoaded = () => {
-    if (previewState.active && previewState.start > 0) {
-      try {
-        audio.currentTime = previewState.start;
-      } catch {}
-    }
-    audio.removeEventListener('loadedmetadata', onLoaded);
-  };
-  audio.addEventListener('loadedmetadata', onLoaded);
-
+  // 4) Atualiza UI
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
@@ -1245,21 +1266,6 @@ async function playFromDiscography(albumId, trackIndex) {
   } catch (err) {
     console.debug('[player] autoplay bloqueado:', err?.message);
   }
-}
-
-function computePlaybackConfig(track, unlocked) {
-  if (unlocked && track.fullAudio) {
-    return { src: track.fullAudio, isPreview: false, start: 0, end: Infinity };
-  }
-  const dur = Math.max(5, parseInt(track.previewDuration) || 30);
-  if (track.previewAudio) {
-    return { src: track.previewAudio, isPreview: true, start: 0, end: dur };
-  }
-  if (track.fullAudio) {
-    const start = Math.max(0, parseInt(track.previewStart) || 0);
-    return { src: track.fullAudio, isPreview: true, start, end: start + dur };
-  }
-  return { src: '', isPreview: true, start: 0, end: 0 };
 }
 
 function togglePlay() {
@@ -1349,35 +1355,38 @@ function updateVolumeFill() {
   }
 }
 
-function onDownloadClick() {
+async function onDownloadClick() {
   if (!currentTrackIdentity) {
     toast('Toque uma faixa primeiro.', 'ℹ');
     return;
   }
-  const unlocked =
-    isPremium() ||
-    isRented(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
-  if (!unlocked) {
-    toast('Compre ou assine para baixar.', '🔒');
-    return;
+
+  try {
+    const r = await fetch(
+      `/api/stream?albumId=${encodeURIComponent(currentTrackIdentity.albumId)}` +
+      `&trackIndex=${currentTrackIdentity.trackIndex}`,
+      { credentials: 'same-origin' }
+    );
+    const data = await r.json();
+
+    if (!r.ok || !data?.ok || !data.unlocked || !data.fullUrl) {
+      toast('Compre ou assine para baixar.', '🔒');
+      return;
+    }
+
+    const a = document.createElement('a');
+    a.href = data.fullUrl;
+    a.download = `Joseph Matthos - ${currentTrackIdentity.trackTitle}.mp3`;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast('Download iniciado.', '⬇');
+  } catch (err) {
+    console.error('[download]', err);
+    toast('Erro ao baixar.', '⚠');
   }
-  const album = SITE.content?.discografia?.albums?.find(
-    (a) => a.id === currentTrackIdentity.albumId
-  );
-  const track = album && album.tracks[currentTrackIdentity.trackIndex];
-  if (!track?.fullAudio) {
-    toast('Faixa sem áudio completo.', '⚠');
-    return;
-  }
-  const a = document.createElement('a');
-  a.href = track.fullAudio;
-  a.download = `Joseph Matthos - ${track.title}.mp3`;
-  a.target = '_blank';
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  toast('Download iniciado.', '⬇');
 }
 
 function bindProgressBar(id) {
