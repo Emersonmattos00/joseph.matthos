@@ -10,6 +10,7 @@
    GET  /api/admin?action=users      → lista usuários + planos
    PATCH /api/admin?action=users     → altera plano manualmente
    GET  /api/admin?action=sales      → assinaturas + rentals + eventos
+   GET  /api/admin?action=audit      → eventos de auditoria
 
    - Sessão via cookie __Host-jm_admin (HttpOnly + HMAC assinado)
    - ADMIN_SESSION_SECRET exige mínimo de 32 caracteres
@@ -75,6 +76,8 @@ const MAX_CONTENT_BYTES = 2_000_000;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 1000;
 const SALES_LIMIT = 500;
+const AUDIT_LIMIT = 100;
+const AUDIT_MAX_LIMIT = 500;
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg']);
@@ -88,7 +91,8 @@ const VALID_ACTIONS = new Set([
   'content',
   'upload',
   'users',
-  'sales'
+  'sales',
+  'audit'
 ]);
 
 // ─────────────────────────────────────────────────────────────
@@ -115,7 +119,7 @@ function getSessionSecret() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Handler
+// Handler principal
 // ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Vary', 'Cookie');
@@ -181,6 +185,10 @@ module.exports = async function handler(req, res) {
       if (method !== 'GET') return methodNotAllowed(res, 'GET');
       return handleGetSales(req, res);
 
+    case 'audit':
+      if (method !== 'GET') return methodNotAllowed(res, 'GET');
+      return handleGetAudit(req, res);
+
     default:
       return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
   }
@@ -243,7 +251,13 @@ async function handleLogin(req, res) {
   const passOk = await verifyScrypt(pass, hash);
 
   if (!userOk || !passOk) {
-    await audit('admin_login', { ip, userAgent, success: false, reason: 'invalid' });
+    await audit('admin_login', {
+      ip,
+      userAgent,
+      success: false,
+      reason: 'invalid',
+      target: user
+    });
     return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
   }
 
@@ -263,7 +277,12 @@ async function handleLogin(req, res) {
 
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; ${cookieAttrs}`);
 
-  await audit('admin_login', { ip, userAgent, success: true });
+  await audit('admin_login', {
+    actor: expectedUser,
+    ip,
+    userAgent,
+    success: true
+  });
 
   return sendJson(res, 200, { ok: true, user: expectedUser });
 }
@@ -758,6 +777,50 @@ function countBy(arr, key) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// AUDIT — leitura do histórico de eventos
+// ------------------------------------------------------------
+// GET /api/admin?action=audit&source=admin|auth&limit=100
+//
+// - source=admin (padrão) → lê de `admin_audit`
+//   Colunas: id, action, actor, target, metadata, ip, user_agent, created_at
+//
+// - source=auth → lê de `auth_audit_log`
+//   Colunas: id, event, email_hash, user_id, ip, user_agent, success, reason, created_at
+// ─────────────────────────────────────────────────────────────
+async function handleGetAudit(req, res) {
+  const source = String(req.query?.source || 'admin').toLowerCase();
+  const isAdminSource = source !== 'auth';
+  const table = isAdminSource ? 'admin_audit' : 'auth_audit_log';
+  const limit = clampAuditLimit(req.query?.limit);
+
+  const select = isAdminSource
+    ? 'id,action,actor,target,metadata,ip,user_agent,created_at'
+    : 'id,event,email_hash,user_id,ip,user_agent,success,reason,created_at';
+
+  try {
+    const r = await supabaseAdminRequest(
+      `/rest/v1/${table}?select=${select}&order=created_at.desc&limit=${limit}`,
+      { method: 'GET' }
+    );
+
+    if (!r.response.ok) {
+      console.error(`[admin/audit] Supabase erro (${table}):`, r.response.status);
+      return sendJson(res, 502, { ok: false, error: 'Falha ao ler auditoria.' });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      source: isAdminSource ? 'admin' : 'auth',
+      limit,
+      events: Array.isArray(r.body) ? r.body : []
+    });
+  } catch (err) {
+    console.error('[admin/audit] erro:', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // SESSÃO
 // ─────────────────────────────────────────────────────────────
 function verifySession(req) {
@@ -789,6 +852,12 @@ function clampLimit(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
   return Math.min(Math.floor(n), MAX_LIMIT);
+}
+
+function clampAuditLimit(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return AUDIT_LIMIT;
+  return Math.min(Math.floor(n), AUDIT_MAX_LIMIT);
 }
 
 function parseDays(raw) {
