@@ -6,12 +6,14 @@
      - SERVICE_ROLE_KEY, JWT_SECRET, MP_ACCESS_TOKEN
      - senhas administrativas
      - chaves de API privadas
+     - PREÇOS (vivem nas envs do servidor)
 
    ✅ Pode conter:
      - textos, branding, SEO
      - títulos de seção
      - IDs de planos (mas NÃO preços)
      - redes sociais, aparência
+     - metadata de exibição dos planos de aluguel (label, days, popular)
 
    🎯 Este arquivo é apenas FALLBACK:
      - Quando /api/public falha, o site usa o conteúdo daqui.
@@ -21,7 +23,8 @@
    📦 Fonte de verdade (produção):
      - `albums` + `tracks`   → estrutura da discografia
      - `site_content`        → textos, hero, sobre, filosofia, planos, contato, aparência
-     - env vars (MP_*)       → preços dos planos
+     - env vars (MP_*)       → preços dos planos de assinatura
+     - env vars (RENTAL_*)   → preços dos planos de aluguel
 
    🚫 Áudios e álbuns NÃO moram aqui.
      Eles vêm de /api/public (albums + tracks) e /api/stream (URLs).
@@ -32,13 +35,16 @@
    ============================================================ */
 
 // Bump quando a estrutura mudar de forma incompatível
-export const CONTENT_SCHEMA_VERSION = 2;
+export const CONTENT_SCHEMA_VERSION = 3;
 
 // ─────────────────────────────────────────────────────────────
 // Conteúdo padrão
 // ------------------------------------------------------------
 // ⚠️ NÃO incluir `discografia.albums` aqui.
 //    Álbuns e faixas vêm de `albums` + `tracks` no Supabase.
+//
+// ⚠️ NÃO incluir preços nos planos.
+//    Preços vêm de /api/public (envs do servidor).
 // ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
@@ -111,7 +117,10 @@ export const DEFAULT_CONTENT = {
       title: "O começo",
       description: "Uma seleção para entrar no universo de Joseph.",
       cover: "JM",
-      tracks: ["album-bbb:0", "album-bbb:1", "album-1:0"]
+      // ⚠️ IDs são resolvidos via /api/public (tracks.id).
+      //    Este fallback usa referências simbólicas que o site
+      //    resolve em runtime; se não existirem, são ignoradas.
+      tracks: []
     }
   ],
 
@@ -126,7 +135,8 @@ export const DEFAULT_CONTENT = {
   planos: {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
-    // ⚠️ SEM `price` — preço sempre de /api/plans (envs MP_PREMIUM_*).
+    // ⚠️ SEM `price` — preço sempre de /api/public (envs MP_PREMIUM_*).
+    //    Aqui só vivem textos, features e flags visuais.
     plans: [
       {
         id: "free",
@@ -207,18 +217,35 @@ export const DEFAULT_CONTENT = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Planos de aluguel — duração + preço
+// Planos de aluguel — APENAS METADATA DE EXIBIÇÃO
 // ------------------------------------------------------------
-// ⚠️ Os preços são validados no backend antes de criar
-//    o checkout. Aqui é só para exibição e escolha.
+// ⚠️ PREÇOS NÃO FICAM AQUI.
+//
+// Fonte de verdade: `/api/public` (campo `rentalPlans[]`).
+// O backend lê das envs:
+//   RENTAL_PRICE_24H
+//   RENTAL_PRICE_48H
+//   RENTAL_PRICE_3D
+//   RENTAL_PRICE_5D
+//   RENTAL_PRICE_10D
+//   RENTAL_PRICE_15D
+//
+// Aqui só vivem:
+//   - id      → chave estável (NUNCA mude)
+//   - label   → texto exibido
+//   - days    → duração em dias
+//   - popular → flag visual (pode ser ajustada)
+//
+// Este array é usado APENAS como fallback quando /api/public
+// falha ou ainda não carregou. NUNCA exibe `price` daqui.
 // ─────────────────────────────────────────────────────────────
-export const RENTAL_PLANS = [
-  { id: '24h', label: '24 horas', days: 1,  price: 2.90,  popular: false },
-  { id: '48h', label: '48 horas', days: 2,  price: 4.90,  popular: true  },
-  { id: '3d',  label: '3 dias',   days: 3,  price: 6.90,  popular: false },
-  { id: '5d',  label: '5 dias',   days: 5,  price: 9.90,  popular: false },
-  { id: '10d', label: '10 dias',  days: 10, price: 14.90, popular: false },
-  { id: '15d', label: '15 dias',  days: 15, price: 19.90, popular: false }
+export const RENTAL_PLANS_FALLBACK = [
+  { id: '24h', label: '24 horas', days: 1,  popular: false },
+  { id: '48h', label: '48 horas', days: 2,  popular: true  },
+  { id: '3d',  label: '3 dias',   days: 3,  popular: false },
+  { id: '5d',  label: '5 dias',   days: 5,  popular: false },
+  { id: '10d', label: '10 dias',  days: 10, popular: false },
+  { id: '15d', label: '15 dias',  days: 15, popular: false }
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -270,7 +297,7 @@ function deepFreeze(obj) {
 }
 
 deepFreeze(DEFAULT_CONTENT);
-deepFreeze(RENTAL_PLANS);
+deepFreeze(RENTAL_PLANS_FALLBACK);
 deepFreeze(SOCIAL_LABELS);
 deepFreeze(NETWORKS_ORDER);
 
@@ -279,7 +306,8 @@ deepFreeze(NETWORKS_ORDER);
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
-  window.RENTAL_PLANS = RENTAL_PLANS;
+  window.RENTAL_PLANS = RENTAL_PLANS_FALLBACK;      // alias legado
+  window.RENTAL_PLANS_FALLBACK = RENTAL_PLANS_FALLBACK;
   window.SOCIAL_LABELS = SOCIAL_LABELS;
   window.NETWORKS_ORDER = NETWORKS_ORDER;
   window.PRICE_FORMATTER = PRICE_FORMATTER;
