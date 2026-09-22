@@ -3265,3 +3265,24 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   text-transform: uppercase;
   font-weight: 600;
 }
+
+/* ============================================================
+   ADMIN — Editor de planos
+   ============================================================ */
+.plans-editor__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.plans-editor__count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
