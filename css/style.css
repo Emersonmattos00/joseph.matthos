@@ -44,6 +44,9 @@
    39. RESPONSIVO — site público
    40. RESPONSIVO — admin
    41. CORREÇÃO — z-index de modais acima do player
+   42. CAPA QUADRADA NO PLAYER
+   43. DISCOGRAFIA — LISTA ESTILO FILA
+   44. MODAL DE ALUGUEL
    ============================================================ */
 
 
@@ -241,13 +244,6 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 .nav-cart-badge.hidden { display: none; }
-
-@keyframes navCartPop {
-  0%   { transform: scale(1); }
-  45%  { transform: scale(1.35); }
-  100% { transform: scale(1); }
-}
-nav .nav-cart.pop { animation: navCartPop 0.35s ease; }
 
 
 /* ============================================================
@@ -572,55 +568,60 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 
 
 /* ============================================================
-   10. DISCOGRAFIA — CARDS HORIZONTAIS
+   10. DISCOGRAFIA — (legado, mantido para compatibilidade)
    ============================================================ */
 .discography-scroll {
   display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 0.85rem;
-  overflow-x: auto !important;
-  overflow-y: hidden !important;
-  padding: 0.3rem 0.2rem 0.9rem;
-  scroll-snap-type: x proximity;
-  scroll-behavior: smooth;
-  scrollbar-width: thin;
-  scrollbar-color: var(--accent-dark) transparent;
-  align-items: flex-start !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  overflow: visible !important;
+  padding: 0 !important;
 }
-.discography-scroll::-webkit-scrollbar { height: 6px; }
-.discography-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.03); border-radius: 4px; }
-.discography-scroll::-webkit-scrollbar-thumb { background: var(--accent-dark); border-radius: 4px; }
-.discography-scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
 .discography-track-card {
-  flex: 0 0 180px !important;
-  width: 180px !important;
-  min-width: 180px !important;
-  max-width: 180px !important;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  transition: 0.3s;
-  position: relative;
-  scroll-snap-align: start;
+  display: grid !important;
+  grid-template-columns: 24px 40px 1fr auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+  padding: 8px 10px !important;
+  width: 100% !important;
+  min-width: 100% !important;
+  max-width: 100% !important;
+  border-radius: 8px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  transition: background 0.18s, border-color 0.18s !important;
+  cursor: pointer !important;
 }
 .discography-track-card:hover {
-  border-color: rgba(212, 175, 55, 0.4);
-  transform: translateY(-3px);
-  box-shadow: 0 12px 25px rgba(0, 0, 0, 0.4);
+  background: rgba(212, 175, 55, 0.08) !important;
+  border-color: rgba(212, 175, 55, 0.2) !important;
+  transform: none !important;
+  box-shadow: none !important;
 }
 .discography-track-card.playing {
-  border-color: var(--accent);
-  box-shadow: 0 0 20px var(--accent-glow);
+  background: rgba(212, 175, 55, 0.14) !important;
+  border-color: rgba(212, 175, 55, 0.35) !important;
 }
 
-.discography-track-cover {
-  width: 100%;
-  aspect-ratio: 1/1;
+.discography-track-card .discography-track-cover::after { display: none !important; }
+
+.discography-track-card .track-index {
+  font-size: 0.8rem;
+  color: rgba(212, 175, 55, 0.5);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-sans);
+}
+.discography-track-card.playing .track-index {
+  color: #f0d98f;
+  font-weight: 700;
+}
+
+.discography-track-card .track-cover {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   background-size: cover;
   background-position: center;
@@ -628,284 +629,80 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   align-items: center;
   justify-content: center;
   font-family: var(--font-serif);
-  font-size: 1.8rem;
-  color: rgba(212, 175, 55, 0.4);
-  font-weight: 900;
-  position: relative;
-  cursor: pointer;
+  font-size: 0.8rem;
+  color: rgba(212, 175, 55, 0.45);
+  font-weight: 700;
+  flex-shrink: 0;
+  overflow: hidden;
 }
-.discography-track-cover::after {
-  content: "▶";
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  color: var(--accent);
-  font-size: 2rem;
-  opacity: 0;
-  transition: 0.3s;
-}
-.discography-track-card:hover .discography-track-cover::after { opacity: 1; }
 
-.discography-track-body {
-  padding: 0.75rem 0.8rem 0.85rem;
+.discography-track-card .track-info {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  flex: 1;
+  min-width: 0;
+  gap: 2px;
 }
-.discography-track-title {
-  font-size: 0.92rem;
-  font-weight: 600;
-  line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+.discography-track-card .track-title {
+  font-size: 0.9rem;
+  color: #eee9e0;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  display: block !important;
+  -webkit-line-clamp: unset !important;
 }
-.discography-track-meta {
+.discography-track-card.playing .track-title {
+  font-weight: 700;
+  color: #f0d98f;
+}
+.discography-track-card .track-duration {
+  font-size: 0.72rem;
+  color: rgba(212, 175, 55, 0.55);
+  font-family: var(--font-sans);
+}
+
+.discography-track-card .track-right {
   display: flex;
-  gap: 0.4rem;
   align-items: center;
-  font-size: 0.65rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-top: 0.1rem;
+  gap: 8px;
+  flex-shrink: 0;
 }
-
-.discography-track-footer {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.45rem;
-  margin-top: auto;
-  padding-top: 0.7rem;
-  border-top: 1px solid var(--border);
-}
-.discography-track-price {
-  font-family: var(--font-serif);
-  font-size: 1.15rem;
-  font-weight: 900;
-  color: var(--accent);
-  line-height: 1;
-  text-align: center;
-}
-.discography-track-price small {
-  font-size: 0.6rem;
-  color: var(--text-dim);
+.discography-track-card .track-state {
+  font-size: 0.72rem;
+  color: rgba(212, 175, 55, 0.6);
   font-family: var(--font-sans);
-  font-weight: 400;
-  display: block;
-  margin-top: 0.1rem;
+  white-space: nowrap;
+}
+.discography-track-card.playing .track-state {
+  color: #f0d98f;
 }
 
-.discography-track-btn {
-  width: 100%;
-  padding: 0.5rem 0.7rem;
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-weight: 700;
-  font-family: var(--font-sans);
-  border-radius: 30px;
-  cursor: pointer;
-  background: var(--accent);
-  color: var(--bg);
-  border: 1px solid var(--accent);
-  transition: 0.2s;
-}
-.discography-track-btn:hover {
-  background: transparent;
-  color: var(--accent);
-  box-shadow: 0 0 15px var(--accent-glow);
-}
-.discography-track-btn.owned {
-  background: transparent;
-  color: var(--success);
-  border-color: rgba(74, 222, 128, 0.4);
-  cursor: default;
-  pointer-events: none;
-}
-.discography-track-btn.in-cart {
-  background: transparent;
-  color: var(--info);
-  border-color: rgba(96, 165, 250, 0.4);
-}
-.discography-track-btn.locked {
-  background: transparent;
-  color: var(--text-dim);
-  border-color: var(--border);
-}
-
-.discography-owned-badge {
-  position: absolute;
-  top: 0.55rem;
-  right: 0.55rem;
-  background: var(--success);
-  color: #0b0a0c;
-  font-size: 0.55rem;
-  letter-spacing: 0.08em;
-  font-weight: 700;
-  padding: 0.2rem 0.5rem;
-  border-radius: 20px;
-  text-transform: uppercase;
-  z-index: 2;
-}
-
-.track-actions { display: flex; align-items: center; gap: 0.35rem; justify-content: center; }
-.track-action-icon {
-  position: relative;
+.discography-track-card .track-action-icon {
+  width: 28px;
+  height: 28px;
+  font-size: 0.8rem;
+  border-radius: 50%;
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--text);
+  border: 1px solid rgba(212, 175, 55, 0.25);
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 50%;
+  color: #d4af37;
   cursor: pointer;
-  font-size: 0.9rem;
+  transition: all 0.18s;
 }
-.track-action-icon:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-glow);
+.discography-track-card .track-action-icon:hover {
+  background: rgba(212, 175, 55, 0.15);
+  border-color: #d4af37;
 }
-.track-action-icon::after {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.45rem);
-  z-index: 20;
-  width: max-content;
-  max-width: 180px;
-  padding: 0.35rem 0.5rem;
-  color: var(--text);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  content: attr(data-tooltip);
-  font-size: 0.65rem;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(3px);
-  transition: 0.15s;
-}
-.track-action-icon:hover::after,
-.track-action-icon:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-.track-action-icon.in-cart { color: var(--success); cursor: default; }
-.track-owned-label { color: var(--success); font-size: 0.75rem; }
+.discography-track-card .track-action-icon::after { display: none; }
 
-.view-mode-buttons { display: flex; gap: 0.35rem; margin-left: auto; }
-.view-mode-btn {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--text-dim);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.view-mode-btn.active,
-.view-mode-btn:hover { color: var(--accent); border-color: var(--accent); }
+.discography-track-card .discography-owned-badge { display: none; }
 
 
 /* ============================================================
-   11. DISCOGRAFIA — MODO LISTA
-   ============================================================ */
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-scroll,
-#discographyContainer.view-list .album-block.expanded .discography-scroll {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.4rem !important;
-  padding: 0 !important;
-  overflow: visible !important;
-  counter-reset: track-index;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-card,
-#discographyContainer.view-list .album-block.expanded .discography-track-card {
-  display: grid !important;
-  grid-template-columns: 36px minmax(0, 1fr) auto !important;
-  width: 100% !important;
-  min-width: 100% !important;
-  max-width: 100% !important;
-  padding: 0.6rem 0.8rem !important;
-  border-radius: 8px !important;
-  transition: background 0.2s !important;
-}
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-card:hover,
-#discographyContainer.view-list .album-block.expanded .discography-track-card:hover {
-  background: rgba(212, 175, 55, 0.04) !important;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-card::before,
-#discographyContainer.view-list .album-block.expanded .discography-track-card::before {
-  counter-increment: track-index;
-  content: counter(track-index);
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-cover,
-#discographyContainer.view-list .album-block.expanded .discography-track-cover { display: none !important; }
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-body,
-#discographyContainer.view-list .album-block.expanded .discography-track-body {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: 0.8rem !important;
-  padding: 0 !important;
-  border: none !important;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-title,
-#discographyContainer.view-list .album-block.expanded .discography-track-title {
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  -webkit-line-clamp: unset !important;
-  -webkit-box-orient: unset !important;
-  display: block !important;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-footer,
-#discographyContainer.view-list .album-block.expanded .discography-track-footer {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  justify-content: flex-end !important;
-  gap: 1rem !important;
-  margin-top: 0 !important;
-  padding-top: 0 !important;
-  border-top: none !important;
-  min-width: 150px !important;
-}
-
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-btn,
-#discographyContainer.view-list .album-block.expanded .discography-track-btn {
-  width: auto !important;
-  padding: 0.4rem 0.9rem !important;
-  white-space: nowrap !important;
-}
-
-
-/* ============================================================
-   12. MODAIS GERAIS
+   11. MODAIS GERAIS
    ============================================================ */
 .modal-overlay {
   position: fixed;
@@ -973,7 +770,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 
 
 /* ============================================================
-   13. FORMULÁRIOS
+   12. FORMULÁRIOS
    ============================================================ */
 .form-group { margin-bottom: 1rem; }
 .form-group label {
@@ -1007,13 +804,11 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   box-shadow: 0 0 15px var(--accent-glow);
 }
 .form-error { color: var(--danger); font-size: 0.8rem; margin-top: 0.3rem; min-height: 1em; }
-.form-hint { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.3rem; font-style: italic; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
 
 
 /* ============================================================
-   14. SOBRE / FILOSOFIA / CONTATO
+   13. SOBRE / FILOSOFIA / CONTATO
    ============================================================ */
 .sobre-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 4rem; align-items: center; }
 .sobre-img {
@@ -1104,7 +899,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 
 
 /* ============================================================
-   15. FOOTER + LINKS LEGAIS
+   14. FOOTER + LINKS LEGAIS
    ============================================================ */
 footer {
   padding: 3rem 0;
@@ -1114,7 +909,6 @@ footer {
   border-top: 1px solid var(--border);
 }
 footer .gold { color: var(--accent); }
-
 footer .footer-nav {
   display: flex;
   justify-content: center;
@@ -1135,16 +929,14 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   16. PLAYER FIXO (OCULTO)
+   15. PLAYER FIXO (OCULTO)
    ============================================================ */
 .player { display: none !important; }
 
 
 /* ============================================================
-   17. PLAYER EXPANDIDO — ESTILO SPOTIFY + FILA + MARCA D'ÁGUA
+   16. PLAYER EXPANDIDO — ESTILO SPOTIFY + FILA + MARCA D'ÁGUA
    ============================================================ */
-
-/* ── Overlay com marca d'água tema.webp ───────────────────── */
 .player-modal-overlay {
   z-index: 700;
   padding: 1rem;
@@ -1155,7 +947,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   backdrop-filter: blur(8px);
 }
 
-/* ── Container principal ──────────────────────────────────── */
 .music-player {
   position: relative;
   width: 100%;
@@ -1171,8 +962,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   flex-direction: column;
   overflow: hidden;
 }
-
-/* Marca d'água tema.webp dentro do player */
 .music-player::before {
   content: "";
   position: absolute;
@@ -1185,12 +974,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   z-index: 0;
   border-radius: 20px;
 }
-.music-player > * {
-  position: relative;
-  z-index: 1;
-}
+.music-player > * { position: relative; z-index: 1; }
 
-/* ── Botão fechar ─────────────────────────────────────────── */
 .player-close {
   position: absolute;
   top: 16px;
@@ -1218,7 +1003,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   fill: currentColor;
 }
 
-/* ── Botão tela cheia ─────────────────────────────────────── */
 .player-fullscreen {
   position: absolute;
   top: 16px;
@@ -1251,14 +1035,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .music-player:fullscreen .player-fullscreen .icon-exit { display: block; }
 .music-player:-webkit-full-screen .player-fullscreen .icon-enter { display: none; }
 .music-player:-webkit-full-screen .player-fullscreen .icon-exit { display: block; }
-.music-player:-moz-full-screen .player-fullscreen .icon-enter { display: none; }
-.music-player:-moz-full-screen .player-fullscreen .icon-exit { display: block; }
 
 @media (min-width: 769px) {
   .player-fullscreen { display: flex; }
 }
 
-/* ── Grid principal ──────────────────────────────────────── */
 .player-grid {
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
@@ -1267,7 +1048,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow: hidden;
 }
 
-/* ── Coluna esquerda ─────────────────────────────────────── */
 .player-col {
   padding: 3rem 2rem 2rem;
   display: flex;
@@ -1290,16 +1070,19 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   flex: 1;
 }
 
-/* ── Capa quadrada grande ────────────────────────────────── */
+/* ── Capa quadrada grande — com <img> dentro ── */
 .music-player .album-cover {
-  width: 100%;
-  max-width: 340px;
-  aspect-ratio: 1 / 1;
-  margin: 0 auto 1.5rem;
-  border-radius: 12px;
+  width: 100% !important;
+  max-width: 340px !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin: 0 auto 1.5rem !important;
+  border-radius: 12px !important;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  background-size: cover;
-  background-position: center;
+  background-size: cover !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1309,9 +1092,19 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   flex-shrink: 0;
   border: 1px solid rgba(212, 175, 55, 0.12);
+  overflow: hidden;
+  position: relative;
 }
+.music-player .album-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+.music-player .album-cover::before,
+.music-player .album-cover::after { display: none !important; }
 
-/* ── Info ─────────────────────────────────────────────────── */
 .track-info { text-align: center; margin-bottom: 0.8rem; }
 .track-title {
   font-family: 'Georgia', serif;
@@ -1329,7 +1122,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-style: italic;
 }
 
-/* ── Badge prévia ────────────────────────────────────────── */
 .preview-badge {
   display: none;
   text-align: center;
@@ -1347,7 +1139,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .preview-badge.visible { display: block; }
 
-/* ── Progresso ────────────────────────────────────────────── */
 .progress-container { margin-bottom: 1.5rem; }
 .progress-container .progress-bar {
   height: 4px;
@@ -1373,7 +1164,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Controles ────────────────────────────────────────────── */
 .controls {
   display: flex;
   align-items: center;
@@ -1422,7 +1212,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   fill: #1a1a1a;
 }
 
-/* ── Shuffle ──────────────────────────────────────────────── */
 .control-btn-shuffle {
   opacity: 0.45;
   position: relative;
@@ -1443,11 +1232,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-radius: 50%;
   background: #f0d98f;
 }
-.control-btn-shuffle[hidden] {
-  display: none !important;
-}
+.control-btn-shuffle[hidden] { display: none !important; }
 
-/* ── Extras ───────────────────────────────────────────────── */
 .extra-controls {
   display: flex;
   justify-content: center;
@@ -1476,7 +1262,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .extra-btn svg { width: 20px; height: 20px; fill: currentColor; }
 
-/* ── Ações (Alugar / Assinar Premium) ─────────────────────── */
 .player-actions {
   display: flex;
   gap: 0.6rem;
@@ -1515,16 +1300,13 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 0.5rem;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   FILA DE FAIXAS
-   ══════════════════════════════════════════════════════════════ */
+/* Fila de faixas */
 .player-queue {
   margin-top: 1.5rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(212, 175, 55, 0.18);
 }
 .player-queue[hidden] { display: none; }
-
 .player-queue-header {
   display: flex;
   justify-content: space-between;
@@ -1545,7 +1327,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: rgba(212, 175, 55, 0.6);
   font-variant-numeric: tabular-nums;
 }
-
 .player-queue-list {
   display: flex;
   flex-direction: column;
@@ -1561,7 +1342,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: rgba(212, 175, 55, 0.3);
   border-radius: 3px;
 }
-
 .queue-track {
   display: grid;
   grid-template-columns: 24px 40px 1fr auto;
@@ -1578,13 +1358,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font: inherit;
   width: 100%;
 }
-.queue-track:hover {
-  background: rgba(212, 175, 55, 0.08);
-}
-.queue-track.playing {
-  background: rgba(212, 175, 55, 0.14);
-}
-
+.queue-track:hover { background: rgba(212, 175, 55, 0.08); }
+.queue-track.playing { background: rgba(212, 175, 55, 0.14); }
 .queue-track-index {
   font-size: 0.8rem;
   color: rgba(212, 175, 55, 0.5);
@@ -1595,7 +1370,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: #f0d98f;
   font-weight: 700;
 }
-
 .queue-track-cover {
   width: 40px;
   height: 40px;
@@ -1612,7 +1386,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 700;
   flex-shrink: 0;
 }
-
 .queue-track-info { min-width: 0; }
 .queue-track-title {
   font-size: 0.9rem;
@@ -1638,13 +1411,9 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-size: 0.85rem;
   color: rgba(212, 175, 55, 0.5);
 }
-.queue-track.playing .queue-track-lock {
-  color: #d4af37;
-}
+.queue-track.playing .queue-track-lock { color: #d4af37; }
 
-/* ══════════════════════════════════════════════════════════════
-   COLUNA DIREITA — LETRA
-   ══════════════════════════════════════════════════════════════ */
+/* Coluna direita: letra */
 .lyrics-col {
   display: flex;
   flex-direction: column;
@@ -1685,7 +1454,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: rgba(212, 175, 55, 0.3);
   border-radius: 3px;
 }
-
 .lyrics-scroll .lyric-line {
   display: block;
   width: 100%;
@@ -1718,89 +1486,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 2rem 0;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   TABS MOBILE
-   ══════════════════════════════════════════════════════════════ */
 .mobile-tabs { display: none; }
 
 
-/* ══════════════════════════════════════════════════════════════
-   FULLSCREEN
-   ══════════════════════════════════════════════════════════════ */
-.music-player:fullscreen,
-.music-player:-webkit-full-screen {
-  width: 100vw;
-  height: 100vh;
-  max-width: none;
-  max-height: none;
-  border-radius: 0;
-  border: none;
-  background: linear-gradient(135deg, #1a1a1a 0%, #2d2420 50%, #1a1a1a 100%);
-}
-.music-player:fullscreen .player-grid,
-.music-player:-webkit-full-screen .player-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  height: 100vh;
-}
-.music-player:fullscreen .player-col,
-.music-player:-webkit-full-screen .player-col {
-  padding: 48px 40px;
-  justify-content: center;
-}
-.music-player:fullscreen .album-cover,
-.music-player:-webkit-full-screen .album-cover {
-  max-width: none;
-  max-height: 55vh;
-  width: 100%;
-  aspect-ratio: 1;
-  margin-bottom: 32px;
-  border-radius: 18px;
-}
-.music-player:fullscreen .track-title,
-.music-player:-webkit-full-screen .track-title {
-  font-size: 2.2rem;
-}
-.music-player:fullscreen .lyrics-col,
-.music-player:-webkit-full-screen .lyrics-col {
-  padding: 48px 48px 48px 24px;
-}
-.music-player:fullscreen .lyrics-scroll,
-.music-player:-webkit-full-screen .lyrics-scroll {
-  font-size: 1.35rem;
-  line-height: 2;
-}
-.music-player:fullscreen .lyrics-scroll .lyric-line.active,
-.music-player:-webkit-full-screen .lyrics-scroll .lyric-line.active {
-  font-size: 1.5rem;
-}
-.music-player:fullscreen .player-close,
-.music-player:-webkit-full-screen .player-close {
-  top: 20px;
-  right: 20px;
-  width: 48px;
-  height: 48px;
-}
-.music-player:fullscreen .player-close svg,
-.music-player:-webkit-full-screen .player-close svg {
-  width: 26px;
-  height: 26px;
-}
-.music-player:fullscreen .player-fullscreen,
-.music-player:-webkit-full-screen .player-fullscreen {
-  top: 20px;
-  right: 80px;
-  width: 48px;
-  height: 48px;
-}
-.music-player:fullscreen .player-fullscreen svg,
-.music-player:-webkit-full-screen .player-fullscreen svg {
-  width: 26px;
-  height: 26px;
-}
-
-
 /* ============================================================
-   18. TOAST GLOBAL
+   17. TOAST GLOBAL
    ============================================================ */
 .toast {
   position: fixed;
@@ -1828,239 +1518,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   19. CARRINHO
-   ============================================================ */
-.cart-item {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0.9rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.cart-item:last-child { border-bottom: none; }
-.cart-item-cover {
-  width: 50px;
-  height: 50px;
-  border-radius: 6px;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  background-size: cover;
-  background-position: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-serif);
-  font-size: 1rem;
-  color: rgba(212, 175, 55, 0.4);
-  font-weight: 900;
-  flex-shrink: 0;
-}
-.cart-item-info { flex: 1; min-width: 0; }
-.cart-item-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cart-item-album {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.cart-item-price {
-  font-family: var(--font-serif);
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--accent);
-  white-space: nowrap;
-}
-.cart-item-remove {
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 1rem;
-  padding: 0.3rem;
-  border-radius: 50%;
-  transition: 0.2s;
-}
-.cart-item-remove:hover { color: var(--danger); background: rgba(248, 113, 113, 0.1); }
-
-.cart-totals {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 2px solid var(--border);
-}
-.cart-total-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.4rem 0;
-  font-size: 0.9rem;
-  color: var(--text-dim);
-}
-.cart-total-row strong { color: var(--text); font-weight: 600; }
-.cart-total-final {
-  margin-top: 0.5rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--border);
-  font-size: 1.1rem !important;
-}
-.cart-total-final strong {
-  font-family: var(--font-serif);
-  font-size: 1.5rem;
-  color: var(--accent);
-  font-weight: 900;
-}
-.cart-empty { text-align: center; padding: 2rem 1rem; color: var(--text-dim); }
-
-
-/* ============================================================
-   20. CHECKOUT
-   ============================================================ */
-.checkout-summary {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem 1.2rem;
-  margin-bottom: 1.2rem;
-  max-height: 200px;
-  overflow-y: auto;
-}
-.checkout-summary-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.4rem 0;
-  font-size: 0.85rem;
-}
-.checkout-summary-item span { color: var(--text-dim); }
-.checkout-summary-item strong { color: var(--text); }
-.checkout-summary-total {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 0.8rem;
-  margin-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  font-family: var(--font-serif);
-  font-size: 1.3rem;
-  font-weight: 900;
-  color: var(--accent);
-}
-
-
-/* ============================================================
-   21. MINHAS COMPRAS
-   ============================================================ */
-.purchase-item {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0.9rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.purchase-item:last-child { border-bottom: none; }
-.purchase-info { flex: 1; min-width: 0; }
-.purchase-title { font-size: 0.95rem; font-weight: 600; }
-.purchase-date { font-size: 0.7rem; color: var(--text-dim); }
-.purchase-actions { display: flex; gap: 0.4rem; }
-
-
-/* ============================================================
-   22. REDES SOCIAIS
-   ============================================================ */
-.social-links { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
-
-.ad-social-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: var(--card);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  text-decoration: none;
-  font-size: 1.2rem;
-  transition: transform 0.25s ease, color 0.25s ease, background 0.25s ease,
-              border-color 0.25s ease, box-shadow 0.25s ease;
-}
-.ad-social-icon i,
-.ad-social-icon svg { transition: transform 0.25s ease; line-height: 1; }
-.ad-social-icon:hover { transform: translateY(-4px); color: #ffffff; border-color: transparent; }
-.ad-social-icon:hover i,
-.ad-social-icon:hover svg { transform: scale(1.15); }
-.ad-social-icon::before {
-  content: attr(data-label);
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
-  background: var(--bg-elev);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 0.4rem 0.75rem;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-.ad-social-icon::after {
-  content: "";
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid var(--border);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
-}
-.ad-social-icon:hover::before,
-.ad-social-icon:hover::after {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
-.ad-social-icon.spotify:hover  { background: #1DB954; box-shadow: 0 6px 20px rgba(29, 185, 84, 0.5); }
-.ad-social-icon.youtube:hover  { background: #FF0000; box-shadow: 0 6px 20px rgba(255, 0, 0, 0.5); }
-.ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 6px 20px rgba(255, 153, 0, 0.5); }
-.ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 6px 20px rgba(24, 119, 242, 0.5); }
-.ad-social-icon.tiktok:hover   { background: #010101; border-color: #00f2ea; box-shadow: 0 6px 20px rgba(0, 242, 234, 0.4); }
-.ad-social-icon.apple:hover    { background: linear-gradient(135deg, #FA243C 0%, #FF5E7D 100%); box-shadow: 0 6px 20px rgba(250, 36, 60, 0.5); }
-.ad-social-icon.audiomack:hover{ background: #FFA200; box-shadow: 0 6px 20px rgba(255, 162, 0, 0.5); }
-.ad-social-icon.itunes:hover   { background: linear-gradient(135deg, #FC3C44 0%, #FF6B7A 100%); box-shadow: 0 6px 20px rgba(252, 60, 68, 0.5); }
-.ad-social-icon svg { width: 1em; height: 1em; fill: currentColor; display: block; }
-.ad-social-icon i[class*="fa-"] {
-  font-size: 1.15em;
-  line-height: 1;
-  width: 1.15em;
-  height: 1.15em;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-.ad-social-icon i,
-.ad-social-icon svg { color: inherit; }
-
-
-/* ============================================================
-   23. MODAL DE PLANOS
+   18. MODAL DE PLANOS
    ============================================================ */
 .plans-grid {
   display: grid;
@@ -2139,7 +1597,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   24. PLAYLISTS
+   19. PLAYLISTS
    ============================================================ */
 .playlists-panel { margin-top: 2.5rem; }
 .playlists-heading h3 { font-family: var(--font-serif); font-size: 1.5rem; }
@@ -2182,17 +1640,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .playlist-info small,
 .playlist-info em { color: var(--text-dim); font-size: 0.72rem; font-style: normal; }
 .playlist-play { margin-left: auto; color: var(--accent); font-size: 1.1rem; }
-.playlist-track-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.45rem 0;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 0.8rem;
-}
-.playlist-track-row:last-child { border-bottom: 0; }
 .album-empty {
   width: 100%;
   padding: 1rem;
@@ -2200,6 +1647,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-size: 0.85rem;
   text-align: center;
 }
+
 .lyrics-drawer {
   position: fixed;
   right: 1rem;
@@ -2249,7 +1697,70 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   25. ADMIN — BASE
+   20. REDES SOCIAIS
+   ============================================================ */
+.social-links { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+.ad-social-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 1.2rem;
+  transition: transform 0.25s ease, color 0.25s ease, background 0.25s ease,
+              border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.ad-social-icon i,
+.ad-social-icon svg { transition: transform 0.25s ease; line-height: 1; }
+.ad-social-icon:hover { transform: translateY(-4px); color: #ffffff; border-color: transparent; }
+.ad-social-icon:hover i,
+.ad-social-icon:hover svg { transform: scale(1.15); }
+.ad-social-icon::before {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 0.4rem 0.75rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.ad-social-icon:hover::before { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ad-social-icon svg { width: 1em; height: 1em; fill: currentColor; display: block; }
+.ad-social-icon i[class*="fa-"] {
+  font-size: 1.15em;
+  line-height: 1;
+  width: 1.15em;
+  height: 1.15em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+.ad-social-icon i,
+.ad-social-icon svg { color: inherit; }
+
+
+/* ============================================================
+   21. ADMIN — BASE
    ============================================================ */
 .admin-layout { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
 .admin-sidebar {
@@ -2299,7 +1810,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-left-color: var(--accent);
 }
 .admin-nav button .ico { font-size: 1rem; width: 18px; text-align: center; }
-
 .admin-main { padding: 2rem; max-width: 1100px; }
 .admin-topbar {
   display: flex;
@@ -2315,7 +1825,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .admin-topbar .actions { display: flex; gap: 0.7rem; flex-wrap: wrap; }
 .admin-section { display: none; }
 .admin-section.active { display: block; }
-
 .admin-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -2342,7 +1851,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 400;
   letter-spacing: 0.05em;
 }
-
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2373,7 +1881,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   line-height: 1;
 }
 .stat-card .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.4rem; }
-
 .admin-table { width: 100%; border-collapse: collapse; }
 .admin-table th,
 .admin-table td {
@@ -2391,7 +1898,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 600;
 }
 .admin-table tr:hover td { background: rgba(212, 175, 55, 0.03); }
-
 .admin-img-preview {
   width: 100%;
   max-width: 260px;
@@ -2434,30 +1940,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   gap: 0.5rem;
 }
 .track-editor .track-head strong { font-size: 0.9rem; color: var(--accent); }
-
-.audio-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.7rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 20px;
-  background: rgba(74, 222, 128, 0.12);
-  color: var(--success);
-  border: 1px solid rgba(74, 222, 128, 0.35);
-  font-weight: 600;
-}
-.audio-chip.remote {
-  background: rgba(96, 165, 250, 0.12);
-  color: var(--info);
-  border-color: rgba(96, 165, 250, 0.35);
-}
-.audio-chip.none {
-  background: rgba(248, 113, 113, 0.10);
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.3);
-}
-
 .admin-modal-overlay {
   position: fixed;
   inset: 0;
@@ -2485,7 +1967,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   position: relative;
 }
 .admin-modal h3 { font-family: var(--font-serif); font-size: 1.4rem; margin-bottom: 1rem; }
-
 .admin-login-wrap {
   min-height: 100vh;
   display: flex;
@@ -2526,7 +2007,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   26. ADMIN — BOTÃO SALVAR
+   22. ADMIN — BOTÃO SALVAR (DIRTY)
    ============================================================ */
 #adminSaveBtn.is-dirty {
   background: linear-gradient(135deg, var(--accent), #f0c95c);
@@ -2545,7 +2026,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   27. ADMIN — ESTADOS
+   23. ADMIN — ESTADOS
    ============================================================ */
 .admin-loading {
   display: flex;
@@ -2567,7 +2048,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   animation: adminSpin 0.8s linear infinite;
 }
 @keyframes adminSpin { to { transform: rotate(360deg); } }
-
 .admin-error-box {
   background: rgba(248, 113, 113, 0.08);
   border: 1px solid rgba(248, 113, 113, 0.3);
@@ -2577,7 +2057,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin: 1rem 0;
 }
 .admin-error-box p { color: #f0a5a5; font-size: 0.9rem; margin-bottom: 0.9rem; }
-
 .admin-empty {
   padding: 2.5rem 1rem;
   text-align: center;
@@ -2586,19 +2065,9 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-style: italic;
 }
 
-.admin-truncation-warning {
-  background: rgba(240, 161, 0, 0.08);
-  border: 1px solid rgba(240, 161, 0, 0.3);
-  border-radius: 8px;
-  padding: 0.65rem 1rem;
-  color: #f0b95c;
-  font-size: 0.8rem;
-  margin-bottom: 1rem;
-}
-
 
 /* ============================================================
-   28. ADMIN — BADGES
+   24. ADMIN — BADGES
    ============================================================ */
 .badge-mini {
   display: inline-block;
@@ -2616,14 +2085,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   color: var(--bg);
 }
-.badge-mini.badge-pending { background: rgba(96, 165, 250, 0.15); color: var(--info); }
-.badge-mini.badge-canceled,
-.badge-mini.badge-cancelled { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
-.badge-mini.badge-paused { background: rgba(176, 169, 160, 0.15); color: var(--text-dim); }
 
 
 /* ============================================================
-   29. ADMIN — BACKUP GRID
+   25. ADMIN — BACKUP GRID
    ============================================================ */
 .backup-grid {
   display: grid;
@@ -2636,9 +2101,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
-  transition: 0.2s;
 }
-.backup-card:hover { border-color: rgba(212, 175, 55, 0.4); }
 .backup-card .label {
   color: var(--text-dim);
   font-size: 0.7rem;
@@ -2658,125 +2121,23 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   30. ADMIN — MODAL DE PLANO
+   26. ADMIN — MODAL (LARGURAS)
    ============================================================ */
-.plan-change-header {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.9rem 1.1rem;
-  margin-bottom: 1.2rem;
-}
-.plan-change-header strong { display: block; color: var(--text); font-size: 0.95rem; margin-bottom: 0.2rem; }
-.plan-change-header span { color: var(--text-dim); font-size: 0.85rem; }
-.plan-change-hint {
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  padding: 0.7rem 0.9rem;
-  background: rgba(212, 175, 55, 0.05);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  margin-top: 0.9rem;
-}
-.plan-change-hint code {
-  background: rgba(0, 0, 0, 0.3);
-  padding: 0.05rem 0.35rem;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  color: var(--accent);
-}
-
-
-/* ============================================================
-   31. ADMIN — TABELAS
-   ============================================================ */
-.admin-table .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
-.admin-table td .badge-mini { vertical-align: middle; }
-.admin-table td:last-child { text-align: right; white-space: nowrap; }
-.admin-table tr.is-loading td { opacity: 0.5; pointer-events: none; }
-
-.sales-group-title {
-  font-family: var(--font-serif);
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--accent);
-  margin: 1.5rem 0 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-.sales-group-title:first-child { margin-top: 0; }
-
-
-/* ============================================================
-   32. ADMIN — UPLOAD
-   ============================================================ */
-.admin-modal .upload-zone { padding: 0.9rem; font-size: 0.8rem; margin-top: 0.5rem; }
-.admin-modal .upload-zone:hover { background: rgba(212, 175, 55, 0.05); }
-.admin-modal .admin-img-preview { max-width: 100%; height: 180px; margin-top: 0.75rem; }
-.audio-chip-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 0.4rem;
-}
-.audio-remove-btn {
-  background: transparent;
-  color: var(--danger);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  padding: 0.35rem 0.75rem;
-  font-size: 0.7rem;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: 0.2s;
-}
-.audio-remove-btn:hover { background: rgba(248, 113, 113, 0.1); }
-
-
-/* ============================================================
-   33. ADMIN — EDITORES DE LISTA
-   ============================================================ */
-.playlist-track-row .btn-ghost {
-  padding: 0.25rem 0.45rem;
-  font-size: 0.75rem;
-  line-height: 1;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-}
-.playlist-track-row .btn-ghost:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: rgba(212, 175, 55, 0.06);
-}
-.playlist-track-row span:last-child { display: flex; gap: 0.3rem; flex-shrink: 0; }
-.track-editor:focus-within {
-  border-color: rgba(212, 175, 55, 0.35);
-  background: rgba(212, 175, 55, 0.02);
-}
-
-
-/* ============================================================
-   34. ADMIN — REDES SOCIAIS
-   ============================================================ */
-#socialEditor { display: flex; flex-direction: column; gap: 0.75rem; }
-#socialEditor .track-editor { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
-#socialEditor .form-row { grid-template-columns: 1fr 1fr; gap: 1rem; }
-
-.social-editor-item {
+.admin-modal.modal-wide { width: min(720px, 100%); }
+.admin-modal.modal-xl { width: min(1100px, 96%); }
+.admin-modal .form-row-3 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 1rem;
-  align-items: start;
 }
 @media (max-width: 600px) {
-  .social-editor-item { grid-template-columns: 1fr; }
+  .admin-modal .form-row,
+  .admin-modal .form-row-3 { grid-template-columns: 1fr; }
 }
 
 
 /* ============================================================
-   35. ADMIN — TOAST
+   27. ADMIN — TOAST
    ============================================================ */
 .admin-toast {
   position: fixed;
@@ -2794,43 +2155,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  animation: adminToastIn 0.25s ease;
-}
-@keyframes adminToastIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.admin-toast.is-error { border-color: rgba(248, 113, 113, 0.5); }
-.admin-toast.is-success { border-color: rgba(74, 222, 128, 0.5); }
-.admin-toast.is-warning { border-color: rgba(240, 161, 0, 0.5); }
-
-
-/* ============================================================
-   36. ADMIN — MODAL (LARGURAS)
-   ============================================================ */
-.admin-modal.modal-wide { width: min(720px, 100%); }
-.admin-modal.modal-xl { width: min(1100px, 96%); }
-.admin-modal .form-row-3 {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1rem;
-}
-@media (max-width: 600px) {
-  .admin-modal .form-row,
-  .admin-modal .form-row-3 { grid-template-columns: 1fr; }
 }
 
 
 /* ============================================================
-   37. ADMIN — EDITOR DE PLANOS
-   ============================================================ */
-#pmFeatures { display: flex; flex-direction: column; gap: 0.6rem; }
-#pmFeatures .track-editor { padding: 0.75rem 1rem; }
-#pmFeatures .track-head strong { font-size: 0.8rem; color: var(--text-dim); font-weight: 500; }
-
-
-/* ============================================================
-   38. ADMIN — ACESSIBILIDADE
+   28. ADMIN — ACESSIBILIDADE
    ============================================================ */
 form[aria-busy="true"] { opacity: 0.75; pointer-events: none; }
 form[aria-busy="true"] button[type="submit"] { cursor: wait; }
@@ -2844,7 +2173,7 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 
 
 /* ============================================================
-   39. RESPONSIVO — SITE PÚBLICO
+   29. RESPONSIVO — SITE PÚBLICO
    ============================================================ */
 @media (max-width: 900px) {
   .hero .container { grid-template-columns: 1fr; text-align: center; }
@@ -2856,29 +2185,19 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .contato-grid { grid-template-columns: 1fr; gap: 3rem; }
   nav { gap: 1rem; }
   nav a { font-size: 0.7rem; }
-  .form-row,
-  .form-row-3 { grid-template-columns: 1fr; }
-
-  .discography-track-card {
-    flex: 0 0 165px !important;
-    width: 165px !important;
-    min-width: 165px !important;
-    max-width: 165px !important;
-  }
-  .discography-track-title { font-size: 0.85rem; }
+  .form-row { grid-template-columns: 1fr; }
   .filter-bar { flex-direction: column; align-items: stretch; }
   .filter-bar .shop-search-wrap { flex: 1 1 auto; max-width: 100%; }
 }
 
 @media (max-width: 768px) {
-  /* ── PLAYER EXPANDIDO — Mobile estilo Spotify ── */
+  /* Player expandido — mobile Spotify */
   .player-modal-overlay {
     padding: 0;
     align-items: stretch;
     justify-content: stretch;
     background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
   }
-
   .music-player {
     max-width: 100%;
     max-height: 100vh;
@@ -2888,35 +2207,28 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border: none;
     box-shadow: none;
   }
-
   .music-player::before { border-radius: 0; }
-
   .player-grid {
     grid-template-columns: 1fr;
     overflow-y: auto;
     padding-top: 48px;
   }
-
   .player-col {
     padding: 16px 20px 24px;
     border-right: none;
     border-bottom: none;
     overflow-y: visible;
   }
-
   .music-player .album-cover {
-    max-width: 100%;
-    max-height: 42vh;
-    width: auto;
-    aspect-ratio: 1;
-    margin: 0 auto 24px;
-    border-radius: 12px;
+    max-width: 100% !important;
+    max-height: 42vh !important;
+    width: auto !important;
+    aspect-ratio: 1 !important;
+    margin: 0 auto 24px !important;
+    border-radius: 12px !important;
   }
-
   .music-player .track-title { font-size: 1.5rem; }
-
   .music-player .controls { padding: 0; gap: 8px; }
-
   .music-player .play-btn { width: 64px; height: 64px; }
   .music-player .play-btn svg { width: 28px; height: 28px; }
 
@@ -2930,10 +2242,8 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     flex-direction: column;
     border: none;
   }
-
   .music-player.mobile-lyrics .lyrics-col { display: flex; }
   .music-player.mobile-lyrics .player-col { display: none; }
-
   .lyrics-scroll {
     font-size: 1.3rem;
     line-height: 2;
@@ -2955,7 +2265,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     bottom: 0;
     z-index: 25;
   }
-
   .mobile-tab {
     flex: 1;
     max-width: 160px;
@@ -2972,7 +2281,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-bottom: 2px solid transparent;
     transition: all 0.2s;
   }
-
   .mobile-tab.active {
     color: #d4af37;
     border-bottom-color: #d4af37;
@@ -2991,6 +2299,17 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     font-size: 0.78rem;
     padding: 0.6rem 0.9rem;
   }
+
+  /* Discografia lista — mobile */
+  .discography-track-card {
+    grid-template-columns: 20px 36px 1fr auto !important;
+    gap: 8px !important;
+    padding: 6px 8px !important;
+  }
+  .discography-track-card .track-cover { width: 36px; height: 36px; }
+  .discography-track-card .track-title { font-size: 0.85rem; }
+  .discography-track-card .track-duration { font-size: 0.68rem; }
+  .discography-track-card .track-state { display: none; }
 }
 
 @media (max-width: 600px) {
@@ -3006,61 +2325,17 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .album-title { font-size: 1.1rem; }
   .modal { padding: 1.5rem; }
   .modal h2 { font-size: 1.5rem; }
-  .ad-social-icon { width: 42px; height: 42px; font-size: 1.1rem; }
-  .ad-social-icon::before { font-size: 0.65rem; padding: 0.35rem 0.65rem; }
-  .social-links { gap: 0.6rem; }
-
-  .discography-track-card {
-    flex: 0 0 155px !important;
-    width: 155px !important;
-    min-width: 155px !important;
-    max-width: 155px !important;
-  }
-  .discography-track-title { font-size: 0.82rem; }
-  .discography-track-price { font-size: 1rem; }
-  .album-block .album-header { padding: 0.6rem 0.7rem; }
-  .album-toggle { width: 28px; height: 28px; font-size: 0.8rem; }
-
   .modal.modal-xl { padding: 1.5rem 1rem; }
   .modal.modal-xl h2 { font-size: 1.6rem; }
   .modal.modal-xl .plans-grid { grid-template-columns: 1fr; }
-
-  #discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-card,
-  #discographyContainer.view-list .album-block.expanded .discography-track-card {
-    grid-template-columns: 28px 1fr !important;
-    gap: 0.5rem !important;
-    padding: 0.8rem 0.6rem !important;
-  }
-  #discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-body,
-  #discographyContainer.view-list .album-block.expanded .discography-track-body {
-    flex-direction: column !important;
-    align-items: flex-start !important;
-    gap: 0.3rem !important;
-  }
-  #discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-footer,
-  #discographyContainer.view-list .album-block.expanded .discography-track-footer {
-    grid-column: 1 / -1 !important;
-    justify-content: space-between !important;
-    margin-top: 0.4rem !important;
-    padding-top: 0.4rem !important;
-    border-top: 1px solid var(--border) !important;
-    min-width: 100% !important;
-  }
-
-  nav .nav-cart { padding: 0.4rem 0.6rem; }
-  nav .nav-cart i { font-size: 0.95rem; }
-
+  .ad-social-icon { width: 42px; height: 42px; font-size: 1.1rem; }
+  .social-links { gap: 0.6rem; }
   footer .footer-nav { gap: 0.5rem; font-size: 0.75rem; }
-
-  .view-mode-buttons { margin-left: 0; }
-  #discographyContainer.view-list .discography-track-card { grid-template-columns: 28px minmax(0, 1fr); }
-  #discographyContainer.view-list .discography-track-body { display: block; }
-  #discographyContainer.view-list .discography-track-footer { justify-content: space-between; margin-top: 0.35rem; }
 }
 
 
 /* ============================================================
-   40. RESPONSIVO — ADMIN
+   30. RESPONSIVO — ADMIN
    ============================================================ */
 @media (max-width: 900px) {
   .admin-layout { grid-template-columns: 1fr; }
@@ -3072,7 +2347,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-bottom: 3px solid transparent;
   }
   .admin-nav button.active { border-left: none; border-bottom-color: var(--accent); }
-
   .admin-table {
     display: block;
     overflow-x: auto;
@@ -3083,7 +2357,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .admin-topbar h1 { font-size: 1.4rem; }
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 }
-
 @media (max-width: 600px) {
   .admin-main { padding: 1rem; }
   .admin-sidebar .brand h2 { font-size: 1.1rem; }
@@ -3094,26 +2367,22 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 
 
 /* ============================================================
-   41. CORREÇÃO — Z-INDEX DE MODAIS ACIMA DO PLAYER
+   31. Z-INDEX DE MODAIS ACIMA DO PLAYER
    ============================================================ */
-
-/* Modais genéricos ficam ACIMA do player expandido (700) */
 #plansModal,
+#rentModal,
 #loginModal,
 #signupModal,
 #accountModal {
   z-index: 800;
 }
-
-/* Quando o player está aberto, garante que os modais fiquem por cima */
 #expandedPlayerModal.open ~ #plansModal.open,
+#expandedPlayerModal.open ~ #rentModal.open,
 #expandedPlayerModal.open ~ #loginModal.open,
 #expandedPlayerModal.open ~ #signupModal.open,
 #expandedPlayerModal.open ~ #accountModal.open {
   z-index: 900;
 }
-
-/* Botões de ação dentro do player — garantir clique */
 .player-actions {
   position: relative;
   z-index: 5;
@@ -3127,4 +2396,124 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 .player-actions .btn:disabled {
   pointer-events: none;
   cursor: not-allowed;
+}
+
+
+/* ============================================================
+   32. MODAL DE ALUGUEL — opções de duração
+   ============================================================ */
+#rentModal .rent-track-info {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.9rem 1rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 1.2rem;
+}
+#rentModal .rent-track-cover {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  color: rgba(212, 175, 55, 0.4);
+  font-weight: 900;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+#rentModal .rent-track-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+#rentModal .rent-track-meta { min-width: 0; }
+#rentModal .rent-track-title {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#rentModal .rent-track-album {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+#rentModal .rent-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+#rentModal .rent-option {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  cursor: pointer;
+  transition: all 0.18s;
+  position: relative;
+}
+#rentModal .rent-option:hover {
+  border-color: rgba(212, 175, 55, 0.4);
+  background: rgba(212, 175, 55, 0.04);
+}
+#rentModal .rent-option.selected {
+  border-color: var(--accent);
+  background: rgba(212, 175, 55, 0.08);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+#rentModal .rent-option input[type="radio"] {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+#rentModal .rent-option-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+#rentModal .rent-option-sub {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+  font-weight: 400;
+}
+#rentModal .rent-option-price {
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+  font-weight: 900;
+  color: var(--accent);
+  white-space: nowrap;
+}
+#rentModal .rent-option .popular-tag {
+  position: absolute;
+  top: -8px;
+  right: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 0.2rem 0.6rem;
+  border-radius: 20px;
 }
