@@ -10,7 +10,7 @@
         b) aluguel de álbum ativo         → libera
         c) aluguel de faixa ativo         → libera
      3. SEM acesso → retorna previewUrl (público)
-     4. COM acesso → retorna fullUrl ASSINADA (expira em 10 min)
+     4. COM acesso → retorna fullUrl ASSINADA (expira em TTL configurável)
 
    🛡️ SEGURANÇA
    ------------------------------------------------------------
@@ -19,6 +19,7 @@
    - Referrer-Policy: no-referrer (não vaza URL assinada)
    - X-Content-Type-Options: nosniff
    - URLs assinadas NUNCA vão para CDN/browser cache
+   - TTL configurável via env, com clamp entre 60s e 3600s
    ============================================================ */
 
 'use strict';
@@ -32,7 +33,20 @@ const {
   getConfig
 } = require('./_lib');
 
-const SIGNED_URL_TTL_SEC = 600;
+// ─────────────────────────────────────────────────────────────
+// TTL da URL assinada
+// ------------------------------------------------------------
+// Default: 10 minutos (600s) — folgado para streaming contínuo
+// Mínimo:  1 minuto  (60s)   — evita configuração absurda
+// Máximo:  1 hora    (3600s) — evita link quase permanente
+//
+// Env opcional:
+//   SIGNED_URL_TTL_SEC=600
+// ─────────────────────────────────────────────────────────────
+const DEFAULT_SIGNED_URL_TTL_SEC = 600;
+const MIN_SIGNED_URL_TTL_SEC = 60;
+const MAX_SIGNED_URL_TTL_SEC = 3600;
+
 const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
 
@@ -177,7 +191,8 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const signedUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, SIGNED_URL_TTL_SEC);
+  const ttl = getSignedUrlTtl();
+  const signedUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, ttl);
 
   if (!signedUrl) {
     return sendJson(res, 502, { ok: false, error: 'Falha ao gerar URL de áudio.' });
@@ -190,10 +205,37 @@ module.exports = async function handler(req, res) {
     previewUrl,
     previewDuration: track.preview_duration || 30,
     fullUrl: signedUrl,
-    expiresIn: SIGNED_URL_TTL_SEC,
+    expiresIn: ttl,
     rentalExpiresAt
   });
 };
+
+// ─────────────────────────────────────────────────────────────
+// TTL configurável com clamp
+// ─────────────────────────────────────────────────────────────
+function getSignedUrlTtl() {
+  const raw = Number(process.env.SIGNED_URL_TTL_SEC);
+
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_SIGNED_URL_TTL_SEC;
+  }
+
+  if (raw < MIN_SIGNED_URL_TTL_SEC) {
+    console.warn(
+      `[stream] SIGNED_URL_TTL_SEC=${raw} abaixo do mínimo (${MIN_SIGNED_URL_TTL_SEC}); usando ${MIN_SIGNED_URL_TTL_SEC}`
+    );
+    return MIN_SIGNED_URL_TTL_SEC;
+  }
+
+  if (raw > MAX_SIGNED_URL_TTL_SEC) {
+    console.warn(
+      `[stream] SIGNED_URL_TTL_SEC=${raw} acima do máximo (${MAX_SIGNED_URL_TTL_SEC}); usando ${MAX_SIGNED_URL_TTL_SEC}`
+    );
+    return MAX_SIGNED_URL_TTL_SEC;
+  }
+
+  return raw;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
