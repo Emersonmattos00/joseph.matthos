@@ -3286,3 +3286,201 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   letter-spacing: 0.06em;
   font-weight: 600;
 }
+
+/* ============================================================
+   ADMIN — Editor de playlists v2
+   ============================================================ */
+.playlists-editor__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.playlists-editor__count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.playlists-editor__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.playlist-editor__order {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.playlist-order-btn {
+  width: 26px;
+  height: 26px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.playlist-order-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.playlist-order-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.playlist-editor__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.5rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: var(--bg);
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 0.75rem;
+  border-radius: 6px;
+}
+.playlist-editor__actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+.playlist-editor__desc {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: 0.4rem 0;
+}
+.playlist-editor__stats {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin: 0.4rem 0;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.playlist-preview {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.playlist-preview__track {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 20px;
+  color: var(--text);
+}
+.playlist-preview__more {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Busca de faixas */
+.playlist-search-results {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.playlist-search-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "title add" "album add";
+  gap: 2px 12px;
+  width: 100%;
+  padding: 0.6rem 0.8rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.playlist-search-result:last-child { border-bottom: none; }
+.playlist-search-result:hover:not(:disabled) { background: rgba(212, 175, 55, 0.08); }
+.playlist-search-result:disabled { cursor: default; opacity: 0.6; }
+.playlist-search-result__title {
+  grid-area: title;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.playlist-search-result__album {
+  grid-area: album;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.playlist-search-result__add {
+  grid-area: add;
+  align-self: center;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.playlist-search-result__added {
+  grid-area: add;
+  align-self: center;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+/* Lista de faixas dentro do modal */
+.playlist-tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 0.8rem;
+}
+.playlist-track-item {
+  display: grid;
+  grid-template-columns: 60px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 0.5rem 0.7rem;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.playlist-track-item.is-missing {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.06);
+}
+.playlist-track-item__order {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.playlist-track-item__info { min-width: 0; }
+.playlist-track-item__title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.playlist-track-item__meta {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
