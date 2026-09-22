@@ -13,6 +13,9 @@
      scrypt$<salt-hex>$<hash-hex>
 
    Compatível com `verifyScrypt` de api/_lib.js.
+
+   ⚠️  Este é o ÚNICO gerador oficial de hash admin.
+       Não crie scripts duplicados — mantenha este.
    ============================================================ */
 
 'use strict';
@@ -23,8 +26,12 @@ const readline = require('readline');
 // ─────────────────────────────────────────────────────────────
 // Parâmetros do scrypt
 // ─────────────────────────────────────────────────────────────
+// ⚠️  Estes valores DEVEM ser idênticos aos usados em
+//     verifyScrypt() no api/_lib.js.
+//
 // N = 16384 → ~16 MB de memória, ~50-100 ms em hardware moderno.
 // É o padrão recomendado pela OWASP para scrypt (2024).
+// ─────────────────────────────────────────────────────────────
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
@@ -108,6 +115,11 @@ async function runSingle(password, { interactive = false } = {}) {
   console.log('⏳  Gerando hash...');
 
   const hash = await hashPassword(password);
+
+  // ── Auto-verificação de formato
+  if (!validateHashFormat(hash)) {
+    fail('Hash gerado em formato inesperado. Verifique parâmetros do scrypt.');
+  }
 
   console.log('');
   console.log('✅  Hash gerado com sucesso.');
@@ -199,6 +211,28 @@ function hashPassword(password) {
       }
     );
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Validação do formato do hash gerado
+// ─────────────────────────────────────────────────────────────
+function validateHashFormat(hash) {
+  if (typeof hash !== 'string') return false;
+
+  const parts = hash.split('$');
+  if (parts.length !== 3) return false;
+  if (parts[0] !== 'scrypt') return false;
+
+  const saltHex = parts[1];
+  const hashHex = parts[2];
+
+  if (saltHex.length !== SALT_BYTES * 2) return false;
+  if (!/^[0-9a-f]+$/i.test(saltHex)) return false;
+
+  if (hashHex.length !== SCRYPT_KEYLEN * 2) return false;
+  if (!/^[0-9a-f]+$/i.test(hashHex)) return false;
+
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────
