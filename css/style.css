@@ -1,58 +1,8 @@
 /* ============================================================
    JOSEPH MATTHOS — style.css
-   ------------------------------------------------------------
-   ÍNDICE
-   ------------------------------------------------------------
-   01. Reset + variáveis
-   02. Acessibilidade e scrollbar
-   03. Layout base
-   04. Header + navegação
-   05. Botões
-   06. Hero
-   07. Seções
-   08. Discografia — filter bar
-   09. Discografia — álbuns retráteis
-   10. Discografia — cards horizontais
-   11. Discografia — modo lista
-   12. Modais gerais
-   13. Formulários
-   14. Sobre / Filosofia / Contato
-   15. Footer + links legais
-   16. Player fixo (oculto)
-   17. Player expandido (estilo Spotify + fila + marca d'água)
-   18. Toast global
-   19. Carrinho (modal + nav)
-   20. Checkout
-   21. Minhas compras
-   22. Redes sociais (ícones)
-   23. Modal de planos
-   24. Playlists
-   25. ADMIN — base
-   26. ADMIN — botão salvar (dirty)
-   27. ADMIN — estados
-   28. ADMIN — badges
-   29. ADMIN — backup grid
-   30. ADMIN — modal de plano
-   31. ADMIN — tabelas
-   32. ADMIN — upload no modal
-   33. ADMIN — editores de lista
-   34. ADMIN — redes sociais (editor)
-   35. ADMIN — toast
-   36. ADMIN — modal (larguras)
-   37. ADMIN — editor de planos
-   38. ADMIN — acessibilidade
-   39. RESPONSIVO — site público
-   40. RESPONSIVO — admin
-   41. CORREÇÃO — z-index de modais acima do player
-   42. CAPA QUADRADA NO PLAYER
-   43. DISCOGRAFIA — LISTA ESTILO FILA
-   44. MODAL DE ALUGUEL
    ============================================================ */
 
-
-/* ============================================================
-   01. RESET + VARIÁVEIS
-   ============================================================ */
+/* ── 01. Reset + variáveis ────────────────────────────────── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
@@ -68,39 +18,26 @@
   --success: #4ade80;
   --danger: #f87171;
   --info: #60a5fa;
-  --warning: #f0a100;
   --font-serif: 'Playfair Display', serif;
   --font-sans: 'Inter', sans-serif;
-  --player-h: 92px;
 }
 
-
-/* ============================================================
-   02. ACESSIBILIDADE E SCROLLBAR
-   ============================================================ */
+/* ── 02. Scrollbar ────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-dark); }
 * { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
-
 *:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-button:focus:not(:focus-visible),
-a:focus:not(:focus-visible) { outline: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
   }
 }
 
-
-/* ============================================================
-   03. LAYOUT BASE
-   ============================================================ */
+/* ── 03. Layout base ──────────────────────────────────────── */
 body {
   background: var(--bg);
   color: var(--text);
@@ -108,31 +45,22 @@ body {
   line-height: 1.5;
   scroll-behavior: smooth;
   overflow-x: hidden;
-  padding-bottom: 0;
 }
-
 body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
   pointer-events: none;
   z-index: 1000;
   opacity: 0.6;
 }
-
-body.modal-open { overflow: hidden; }
-
 .container { width: min(1200px, 90%); margin: 0 auto; }
 
-
-/* ============================================================
-   04. HEADER + NAVEGAÇÃO
-   ============================================================ */
+/* ── 04. Header ───────────────────────────────────────────── */
 header {
   position: fixed;
-  top: 0;
-  left: 0;
+  top: 0; left: 0;
   width: 100%;
   padding: 1rem 0;
   background: rgba(11, 10, 12, 0.9);
@@ -142,7 +70,6 @@ header {
   z-index: 100;
 }
 .header-inner { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-
 .logo {
   font-family: var(--font-serif);
   font-size: 1.7rem;
@@ -153,7 +80,6 @@ header {
   white-space: nowrap;
 }
 .logo span { color: var(--accent); font-style: italic; }
-
 nav { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
 nav a {
   color: var(--text-dim);
@@ -165,7 +91,6 @@ nav a {
   font-weight: 500;
 }
 nav a:hover { color: var(--accent); }
-
 .auth-area { display: flex; align-items: center; gap: 0.8rem; }
 .user-chip {
   display: none;
@@ -181,8 +106,7 @@ nav a:hover { color: var(--accent); }
 .user-chip:hover { border-color: var(--accent); }
 .user-chip.visible { display: inline-flex; }
 .user-avatar {
-  width: 30px;
-  height: 30px;
+  width: 30px; height: 30px;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   display: flex;
@@ -201,54 +125,7 @@ nav a:hover { color: var(--accent); }
   letter-spacing: 0.05em;
 }
 
-nav .nav-cart {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.45rem 0.75rem;
-  margin-left: 0.25rem;
-  border-radius: 30px;
-  color: var(--text-dim);
-  font-size: 1rem;
-  text-transform: none;
-  letter-spacing: 0;
-  line-height: 1;
-  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
-}
-nav .nav-cart:hover {
-  color: var(--accent);
-  background: rgba(212, 175, 55, 0.08);
-  box-shadow: 0 0 15px var(--accent-glow);
-}
-nav .nav-cart i { font-size: 1rem; pointer-events: none; }
-
-.nav-cart-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  background: var(--danger);
-  color: #fff;
-  font-size: 0.62rem;
-  font-weight: 700;
-  font-family: var(--font-sans);
-  line-height: 18px;
-  text-align: center;
-  border-radius: 10px;
-  border: 2px solid var(--bg);
-  letter-spacing: 0;
-  text-transform: none;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-}
-.nav-cart-badge.hidden { display: none; }
-
-
-/* ============================================================
-   05. BOTÕES
-   ============================================================ */
+/* ── 05. Botões ───────────────────────────────────────────── */
 .btn {
   display: inline-block;
   padding: 0.75rem 1.6rem;
@@ -258,28 +135,24 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
   text-transform: uppercase;
   text-decoration: none;
   border-radius: 40px;
-  transition: background 0.3s, color 0.3s, border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+  transition: 0.3s;
   border: 1px solid transparent;
   cursor: pointer;
   font-family: var(--font-sans);
+  text-align: center;
 }
 .btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .btn-primary:hover { background: transparent; color: var(--accent); box-shadow: 0 0 25px var(--accent-glow); }
-.btn-outline { background: transparent; color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+.btn-outline { background: transparent; color: var(--text); border-color: rgba(255,255,255,0.2); }
 .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-ghost { background: transparent; color: var(--text-dim); border: none; padding: 0.5rem 1rem; }
 .btn-ghost:hover { color: var(--accent); }
 .btn-sm { padding: 0.5rem 1.1rem; font-size: 0.75rem; }
 .btn-block { width: 100%; text-align: center; }
-.btn-danger { background: var(--danger); color: white; border-color: var(--danger); }
-.btn-danger:hover { background: transparent; color: var(--danger); }
 .btn:disabled,
 .btn.btn-disabled { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
 
-
-/* ============================================================
-   06. HERO
-   ============================================================ */
+/* ── 06. Hero ─────────────────────────────────────────────── */
 .hero {
   min-height: 100vh;
   display: flex;
@@ -287,17 +160,8 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
   padding: 7rem 0 4rem;
   position: relative;
   background:
-    radial-gradient(circle at 70% 30%, rgba(212, 175, 55, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 20% 80%, rgba(212, 175, 55, 0.04) 0%, transparent 40%);
-  background-size: cover;
-  background-position: center;
-}
-.hero.has-bg-image::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(11, 10, 12, 0.72);
-  z-index: 0;
+    radial-gradient(circle at 70% 30%, rgba(212,175,55,0.08) 0%, transparent 50%),
+    radial-gradient(circle at 20% 80%, rgba(212,175,55,0.04) 0%, transparent 40%);
 }
 .hero .container {
   position: relative;
@@ -327,7 +191,6 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
 }
 .hero-cta { display: flex; gap: 1rem; flex-wrap: wrap; }
 .hero-visual { display: flex; justify-content: center; align-items: center; }
-
 .vinyl-container {
   position: relative;
   width: 100%;
@@ -335,10 +198,7 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
   aspect-ratio: 1/1;
   border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #2a252e, #0d0b0e);
-  box-shadow:
-    0 30px 50px rgba(0, 0, 0, 0.7),
-    0 0 0 2px rgba(212, 175, 55, 0.2),
-    0 0 40px rgba(212, 175, 55, 0.15);
+  box-shadow: 0 30px 50px rgba(0,0,0,0.7), 0 0 0 2px rgba(212,175,55,0.2), 0 0 40px rgba(212,175,55,0.15);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -353,21 +213,10 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
   background-position: center;
   border-radius: 50%;
 }
-.vinyl-container.spinning { animation: spin 8s linear infinite; }
-.vinyl-container:not(.has-cover)::after {
-  content: "";
-  position: absolute;
-  width: 30%;
-  height: 30%;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 40%, #d4af37, #8b6f2c);
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
-}
 .vinyl-container .lyric {
   position: absolute;
   bottom: -60px;
-  left: 0;
-  right: 0;
+  left: 0; right: 0;
   text-align: center;
   font-family: var(--font-serif);
   font-style: italic;
@@ -379,10 +228,7 @@ nav .nav-cart i { font-size: 1rem; pointer-events: none; }
 @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-15px); } }
 @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
-
-/* ============================================================
-   07. SEÇÕES
-   ============================================================ */
+/* ── 07. Seções ───────────────────────────────────────────── */
 section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .section-title {
   font-family: var(--font-serif);
@@ -400,12 +246,9 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   max-width: 700px;
 }
 
-
-/* ============================================================
-   08. DISCOGRAFIA — FILTER BAR
-   ============================================================ */
+/* ── 08. Filter bar ───────────────────────────────────────── */
 .filter-bar {
-  display: flex !important;
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -446,10 +289,21 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 }
 .shop-search:focus { border-color: var(--accent); box-shadow: 0 0 15px var(--accent-glow); }
 
+.view-mode-buttons { display: flex; gap: 0.35rem; margin-left: auto; }
+.view-mode-btn {
+  display: grid;
+  place-items: center;
+  width: 34px; height: 34px;
+  color: var(--text-dim);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.view-mode-btn.active,
+.view-mode-btn:hover { color: var(--accent); border-color: var(--accent); }
 
-/* ============================================================
-   09. DISCOGRAFIA — ÁLBUNS RETRÁTEIS
-   ============================================================ */
+/* ── 09. Álbuns retráteis ─────────────────────────────────── */
 .album-block {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
@@ -457,7 +311,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   transition: 0.3s;
 }
 .album-block:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
-
 .album-block .album-header {
   display: flex;
   align-items: center;
@@ -468,25 +321,19 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   transition: 0.3s;
   background: transparent;
   border: 1px solid transparent;
-  margin-bottom: 0;
-  padding-bottom: 0.8rem;
-  flex-wrap: nowrap;
-  position: relative;
 }
 .album-block .album-header:hover {
-  background: rgba(212, 175, 55, 0.04);
-  border-color: rgba(212, 175, 55, 0.2);
+  background: rgba(212,175,55,0.04);
+  border-color: rgba(212,175,55,0.2);
 }
 .album-block.expanded .album-header {
-  background: rgba(212, 175, 55, 0.06);
-  border-color: rgba(212, 175, 55, 0.3);
+  background: rgba(212,175,55,0.06);
+  border-color: rgba(212,175,55,0.3);
   margin-bottom: 1rem;
   padding-bottom: 1rem;
 }
-
 .album-cover {
-  width: 72px;
-  height: 72px;
+  width: 72px; height: 72px;
   border-radius: 10px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   border: 1px solid var(--border);
@@ -495,7 +342,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   justify-content: center;
   font-family: var(--font-serif);
   font-size: 1.6rem;
-  color: rgba(212, 175, 55, 0.5);
+  color: rgba(212,175,55,0.5);
   font-weight: 900;
   flex-shrink: 0;
   overflow: hidden;
@@ -511,7 +358,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 }
 .album-meta { color: var(--text-dim); font-size: 0.82rem; margin-top: 0.2rem; }
 .album-meta .gold { color: var(--accent); }
-
 .album-badge {
   font-size: 0.65rem;
   letter-spacing: 0.1em;
@@ -526,14 +372,11 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   display: inline-block;
 }
 .album-badge.premium { background: var(--accent); color: var(--bg); }
-
-.album-toggle,
-.album-play {
+.album-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 32px; height: 32px;
   border-radius: 50%;
   background: var(--card);
   border: 1px solid var(--border);
@@ -542,11 +385,9 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   cursor: pointer;
   transition: 0.3s;
   flex-shrink: 0;
+  margin-left: auto;
 }
-.album-toggle { margin-left: auto; }
-.album-actions { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
-.album-block .album-header:hover .album-toggle,
-.album-block .album-header:hover .album-play {
+.album-block .album-header:hover .album-toggle {
   background: var(--accent);
   color: var(--bg);
 }
@@ -555,7 +396,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   background: var(--accent);
   color: var(--bg);
 }
-
 .album-tracks { display: none; padding-top: 0.5rem; }
 .album-block.expanded .album-tracks {
   display: block;
@@ -566,49 +406,40 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-
-/* ============================================================
-   10. DISCOGRAFIA — (legado, mantido para compatibilidade)
-   ============================================================ */
+/* ── 10. Discografia — LISTA COMPACTA (estilo fila) ───────── */
 .discography-scroll {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 2px !important;
-  overflow: visible !important;
-  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: visible;
+  padding: 0;
+  margin: 0;
 }
-
 .discography-track-card {
-  display: grid !important;
-  grid-template-columns: 24px 40px 1fr auto !important;
-  align-items: center !important;
-  gap: 10px !important;
-  padding: 8px 10px !important;
-  width: 100% !important;
-  min-width: 100% !important;
-  max-width: 100% !important;
-  border-radius: 8px !important;
-  border: 1px solid transparent !important;
-  background: transparent !important;
-  transition: background 0.18s, border-color 0.18s !important;
-  cursor: pointer !important;
+  display: grid;
+  grid-template-columns: 28px 44px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 .discography-track-card:hover {
-  background: rgba(212, 175, 55, 0.08) !important;
-  border-color: rgba(212, 175, 55, 0.2) !important;
-  transform: none !important;
-  box-shadow: none !important;
+  background: rgba(212,175,55,0.08);
+  border-color: rgba(212,175,55,0.2);
 }
 .discography-track-card.playing {
-  background: rgba(212, 175, 55, 0.14) !important;
-  border-color: rgba(212, 175, 55, 0.35) !important;
+  background: rgba(212,175,55,0.14);
+  border-color: rgba(212,175,55,0.35);
 }
-
-.discography-track-card .discography-track-cover::after { display: none !important; }
-
 .discography-track-card .track-index {
   font-size: 0.8rem;
-  color: rgba(212, 175, 55, 0.5);
+  color: rgba(212,175,55,0.5);
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-sans);
@@ -617,10 +448,8 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   color: #f0d98f;
   font-weight: 700;
 }
-
 .discography-track-card .track-cover {
-  width: 40px;
-  height: 40px;
+  width: 44px; height: 44px;
   border-radius: 4px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   background-size: cover;
@@ -629,13 +458,12 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   align-items: center;
   justify-content: center;
   font-family: var(--font-serif);
-  font-size: 0.8rem;
-  color: rgba(212, 175, 55, 0.45);
+  font-size: 0.85rem;
+  color: rgba(212,175,55,0.45);
   font-weight: 700;
   flex-shrink: 0;
   overflow: hidden;
 }
-
 .discography-track-card .track-info {
   display: flex;
   flex-direction: column;
@@ -643,15 +471,14 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   gap: 2px;
 }
 .discography-track-card .track-title {
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   color: #eee9e0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--font-sans);
   font-weight: 500;
-  display: block !important;
-  -webkit-line-clamp: unset !important;
+  line-height: 1.2;
 }
 .discography-track-card.playing .track-title {
   font-weight: 700;
@@ -659,55 +486,49 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 }
 .discography-track-card .track-duration {
   font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.55);
+  color: rgba(212,175,55,0.55);
   font-family: var(--font-sans);
 }
-
 .discography-track-card .track-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-shrink: 0;
 }
 .discography-track-card .track-state {
   font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.6);
+  color: rgba(212,175,55,0.6);
   font-family: var(--font-sans);
   white-space: nowrap;
 }
 .discography-track-card.playing .track-state {
   color: #f0d98f;
 }
-
 .discography-track-card .track-action-icon {
-  width: 28px;
-  height: 28px;
-  font-size: 0.8rem;
+  width: 30px; height: 30px;
+  font-size: 0.85rem;
   border-radius: 50%;
   display: inline-grid;
   place-items: center;
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  background: transparent;
+  border: 1px solid rgba(212,175,55,0.3);
+  background: rgba(212,175,55,0.06);
   color: #d4af37;
   cursor: pointer;
-  transition: all 0.18s;
+  transition: all 0.15s;
+  padding: 0;
 }
 .discography-track-card .track-action-icon:hover {
-  background: rgba(212, 175, 55, 0.15);
+  background: rgba(212,175,55,0.18);
   border-color: #d4af37;
+  transform: scale(1.08);
 }
 .discography-track-card .track-action-icon::after { display: none; }
 
-.discography-track-card .discography-owned-badge { display: none; }
-
-
-/* ============================================================
-   11. MODAIS GERAIS
-   ============================================================ */
+/* ── 11. Modais gerais ────────────────────────────────────── */
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(0,0,0,0.75);
   -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   display: flex;
@@ -720,7 +541,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   transition: 0.3s;
 }
 .modal-overlay.open { opacity: 1; pointer-events: auto; }
-
 .modal {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -731,7 +551,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   overflow-y: auto;
   transform: translateY(20px);
   transition: 0.3s;
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 30px 60px rgba(0,0,0,0.7);
   position: relative;
 }
 .modal-overlay.open .modal { transform: translateY(0); }
@@ -739,26 +559,22 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .modal.modal-xl { width: min(1100px, 96%); }
 .modal h2 { font-family: var(--font-serif); font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; }
 .modal .sub { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 1.5rem; }
-
 .modal-close {
   position: absolute;
-  top: 1rem;
-  right: 1rem;
+  top: 1rem; right: 1rem;
   background: none;
   border: none;
   color: var(--text-dim);
   font-size: 1.5rem;
   cursor: pointer;
   transition: 0.2s;
-  width: 32px;
-  height: 32px;
+  width: 32px; height: 32px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.modal-close:hover { color: var(--accent); background: rgba(212, 175, 55, 0.1); }
-
+.modal-close:hover { color: var(--accent); background: rgba(212,175,55,0.1); }
 .modal-switch {
   text-align: center;
   margin-top: 1.2rem;
@@ -768,10 +584,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .modal-switch a { color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 600; }
 .modal-switch a:hover { text-decoration: underline; }
 
-
-/* ============================================================
-   12. FORMULÁRIOS
-   ============================================================ */
+/* ── 12. Formulários ──────────────────────────────────────── */
 .form-group { margin-bottom: 1rem; }
 .form-group label {
   display: block;
@@ -783,8 +596,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   font-weight: 600;
 }
 .form-group input,
-.form-group textarea,
-.form-group select {
+.form-group textarea {
   width: 100%;
   padding: 0.85rem 1.1rem;
   background: var(--card);
@@ -796,51 +608,24 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   outline: none;
   transition: 0.2s;
 }
-.form-group textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
 .form-group input:focus,
-.form-group textarea:focus,
-.form-group select:focus {
+.form-group textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 15px var(--accent-glow);
 }
 .form-error { color: var(--danger); font-size: 0.8rem; margin-top: 0.3rem; min-height: 1em; }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 
-
-/* ============================================================
-   13. SOBRE / FILOSOFIA / CONTATO
-   ============================================================ */
+/* ── 13. Sobre / Filosofia / Contato ──────────────────────── */
 .sobre-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 4rem; align-items: center; }
 .sobre-img {
   width: 100%;
   aspect-ratio: 3/4;
   background: linear-gradient(145deg, #1e1b22, #0f0e11);
   border-radius: 12px;
-  position: relative;
-  overflow: hidden;
   border: 1px solid var(--border);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.6);
   background-size: cover;
   background-position: center top;
-}
-.sobre-img:not(.has-img)::before {
-  content: "JM";
-  font-family: var(--font-serif);
-  font-size: 6rem;
-  color: rgba(212, 175, 55, 0.15);
-  font-weight: 900;
-  letter-spacing: 0.1em;
-}
-.sobre-img::after {
-  content: "";
-  position: absolute;
-  inset: 20px;
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  border-radius: 8px;
-  pointer-events: none;
 }
 .sobre-text p { color: var(--text-dim); margin-bottom: 1.2rem; font-weight: 300; font-size: 1.05rem; }
 .sobre-text p strong { color: var(--accent); font-weight: 500; }
@@ -897,10 +682,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .newsletter-form input:focus { border-color: var(--accent); box-shadow: 0 0 20px var(--accent-glow); }
 .newsletter-form button { align-self: flex-start; }
 
-
-/* ============================================================
-   14. FOOTER + LINKS LEGAIS
-   ============================================================ */
+/* ── 14. Footer ───────────────────────────────────────────── */
 footer {
   padding: 3rem 0;
   text-align: center;
@@ -927,35 +709,28 @@ footer .footer-nav a {
 footer .footer-nav a:hover { color: var(--accent); }
 footer .footer-nav span { color: var(--border); user-select: none; }
 
-
-/* ============================================================
-   15. PLAYER FIXO (OCULTO)
-   ============================================================ */
+/* ── 15. Player fixo (oculto) ─────────────────────────────── */
 .player { display: none !important; }
 
-
-/* ============================================================
-   16. PLAYER EXPANDIDO — ESTILO SPOTIFY + FILA + MARCA D'ÁGUA
-   ============================================================ */
+/* ── 16. Player expandido ─────────────────────────────────── */
 .player-modal-overlay {
   z-index: 700;
   padding: 1rem;
   background:
-    linear-gradient(135deg, rgba(20, 18, 16, 0.92) 0%, rgba(11, 10, 12, 0.96) 100%),
+    linear-gradient(135deg, rgba(20,18,16,0.92) 0%, rgba(11,10,12,0.96) 100%),
     url('../assets/img/tema.webp') center / cover no-repeat;
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
-
 .music-player {
   position: relative;
   width: 100%;
   max-width: 1100px;
   max-height: 92vh;
-  background: rgba(20, 18, 16, 0.96);
-  border: 1px solid rgba(212, 175, 55, 0.18);
+  background: rgba(20,18,16,0.96);
+  border: 1px solid rgba(212,175,55,0.18);
   border-radius: 20px;
-  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 25px 70px rgba(0,0,0,0.7);
   font-family: 'Georgia', serif;
   color: #d4af37;
   display: flex;
@@ -978,14 +753,12 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 .player-close {
   position: absolute;
-  top: 16px;
-  right: 16px;
+  top: 16px; right: 16px;
   z-index: 12;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0,0,0,0.5);
   border: none;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  width: 40px; height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -993,26 +766,17 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: #d4af37;
   transition: all 0.2s;
 }
-.player-close:hover {
-  background: rgba(212, 175, 55, 0.2);
-  transform: scale(1.08);
-}
-.player-close svg {
-  width: 22px;
-  height: 22px;
-  fill: currentColor;
-}
+.player-close:hover { background: rgba(212,175,55,0.2); transform: scale(1.08); }
+.player-close svg { width: 22px; height: 22px; fill: currentColor; }
 
 .player-fullscreen {
   position: absolute;
-  top: 16px;
-  right: 64px;
+  top: 16px; right: 64px;
   z-index: 11;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0,0,0,0.5);
   border: none;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
+  width: 40px; height: 40px;
   display: none;
   align-items: center;
   justify-content: center;
@@ -1020,16 +784,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: #d4af37;
   transition: all 0.2s;
 }
-.player-fullscreen:hover {
-  background: rgba(212, 175, 55, 0.2);
-  transform: scale(1.08);
-}
-.player-fullscreen svg {
-  width: 22px;
-  height: 22px;
-  fill: currentColor;
-  display: block;
-}
+.player-fullscreen:hover { background: rgba(212,175,55,0.2); transform: scale(1.08); }
+.player-fullscreen svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 .player-fullscreen .icon-exit { display: none; }
 .music-player:fullscreen .player-fullscreen .icon-enter { display: none; }
 .music-player:fullscreen .player-fullscreen .icon-exit { display: block; }
@@ -1047,63 +803,62 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   min-height: 0;
   overflow: hidden;
 }
-
 .player-col {
   padding: 3rem 2rem 2rem;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border-right: 1px solid rgba(212, 175, 55, 0.15);
+  border-right: 1px solid rgba(212,175,55,0.15);
   min-height: 0;
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
+  scrollbar-color: rgba(212,175,55,0.3) transparent;
 }
 .player-col::-webkit-scrollbar { width: 6px; }
 .player-col::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
+  background: rgba(212,175,55,0.3);
   border-radius: 3px;
 }
-
 .player-watermark-area {
   display: flex;
   flex-direction: column;
   flex: 1;
 }
 
-/* ── Capa quadrada grande — com <img> dentro ── */
+/* Capa quadrada grande do player — com <img> dentro */
 .music-player .album-cover {
-  width: 100% !important;
-  max-width: 340px !important;
-  aspect-ratio: 1 / 1 !important;
-  height: auto !important;
-  min-height: 0 !important;
-  margin: 0 auto 1.5rem !important;
-  border-radius: 12px !important;
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  min-height: 0;
+  margin: 0 auto 1.5rem;
+  padding: 0;
+  border-radius: 12px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  background-size: cover !important;
-  background-position: center !important;
-  background-repeat: no-repeat !important;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 4rem;
-  font-weight: 700;
-  color: rgba(212, 175, 55, 0.3);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  flex-shrink: 0;
-  border: 1px solid rgba(212, 175, 55, 0.12);
   overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  border: 1px solid rgba(212,175,55,0.12);
   position: relative;
 }
 .music-player .album-cover img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
   display: block;
   border-radius: inherit;
 }
 .music-player .album-cover::before,
-.music-player .album-cover::after { display: none !important; }
+.music-player .album-cover::after {
+  display: none !important;
+  content: none !important;
+}
 
 .track-info { text-align: center; margin-bottom: 0.8rem; }
 .track-title {
@@ -1112,16 +867,15 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 700;
   color: #f0d98f;
   margin-bottom: 0.3rem;
-  text-shadow: 0 2px 10px rgba(212, 175, 55, 0.25);
+  text-shadow: 0 2px 10px rgba(212,175,55,0.25);
   word-break: break-word;
   line-height: 1.2;
 }
 .track-artist {
   font-size: 0.9rem;
-  color: rgba(212, 175, 55, 0.7);
+  color: rgba(212,175,55,0.7);
   font-style: italic;
 }
-
 .preview-badge {
   display: none;
   text-align: center;
@@ -1130,8 +884,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 700;
   text-transform: uppercase;
   color: #d4af37;
-  background: rgba(212, 175, 55, 0.1);
-  border: 1px solid rgba(212, 175, 55, 0.35);
+  background: rgba(212,175,55,0.1);
+  border: 1px solid rgba(212,175,55,0.35);
   border-radius: 999px;
   padding: 0.25rem 0.8rem;
   margin: 0 auto 0.8rem;
@@ -1142,7 +896,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .progress-container { margin-bottom: 1.5rem; }
 .progress-container .progress-bar {
   height: 4px;
-  background: rgba(212, 175, 55, 0.18);
+  background: rgba(212,175,55,0.18);
   border-radius: 2px;
   cursor: pointer;
   position: relative;
@@ -1159,7 +913,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   justify-content: space-between;
   font-size: 0.75rem;
-  color: rgba(212, 175, 55, 0.7);
+  color: rgba(212,175,55,0.7);
   margin-top: 0.5rem;
   font-variant-numeric: tabular-nums;
 }
@@ -1172,8 +926,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-bottom: 1rem;
 }
 .control-btn {
-  width: 44px;
-  height: 44px;
+  width: 44px; height: 44px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1188,38 +941,28 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .control-btn:hover {
   color: #f0d98f;
   opacity: 1;
-  background: rgba(212, 175, 55, 0.1);
+  background: rgba(212,175,55,0.1);
   transform: scale(1.08);
 }
 .control-btn svg { width: 22px; height: 22px; fill: currentColor; }
-
 .control-btn.play-btn {
-  width: 60px;
-  height: 60px;
+  width: 60px; height: 60px;
   background: linear-gradient(135deg, #d4af37, #f0d98f);
   color: #1a1a1a;
   opacity: 1;
-  box-shadow: 0 8px 25px rgba(212, 175, 55, 0.4);
+  box-shadow: 0 8px 25px rgba(212,175,55,0.4);
 }
 .control-btn.play-btn:hover {
   background: linear-gradient(135deg, #f0d98f, #d4af37);
   transform: scale(1.06);
-  box-shadow: 0 10px 30px rgba(212, 175, 55, 0.55);
+  box-shadow: 0 10px 30px rgba(212,175,55,0.55);
 }
-.control-btn.play-btn svg {
-  width: 26px;
-  height: 26px;
-  fill: #1a1a1a;
-}
-
-.control-btn-shuffle {
-  opacity: 0.45;
-  position: relative;
-}
+.control-btn.play-btn svg { width: 26px; height: 26px; fill: #1a1a1a; }
+.control-btn-shuffle { opacity: 0.45; position: relative; }
 .control-btn-shuffle.active {
   opacity: 1;
   color: #f0d98f;
-  background: rgba(212, 175, 55, 0.15);
+  background: rgba(212,175,55,0.15);
 }
 .control-btn-shuffle.active::after {
   content: "";
@@ -1227,8 +970,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
+  width: 4px; height: 4px;
   border-radius: 50%;
   background: #f0d98f;
 }
@@ -1242,8 +984,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-bottom: 1rem;
 }
 .extra-btn {
-  width: 36px;
-  height: 36px;
+  width: 36px; height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1258,7 +999,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .extra-btn:hover {
   opacity: 1;
   transform: translateY(-2px);
-  background: rgba(212, 175, 55, 0.08);
+  background: rgba(212,175,55,0.08);
 }
 .extra-btn svg { width: 20px; height: 20px; fill: currentColor; }
 
@@ -1269,7 +1010,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   flex-wrap: wrap;
   margin-top: auto;
   padding-top: 1rem;
-  border-top: 1px solid rgba(212, 175, 55, 0.15);
+  border-top: 1px solid rgba(212,175,55,0.15);
   position: relative;
   z-index: 5;
 }
@@ -1290,7 +1031,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   cursor: not-allowed;
   pointer-events: none;
 }
-
 .expanded-access {
   color: #d4af37;
   font-size: 0.9rem;
@@ -1300,11 +1040,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 0.5rem;
 }
 
-/* Fila de faixas */
+/* Fila */
 .player-queue {
   margin-top: 1.5rem;
   padding-top: 1rem;
-  border-top: 1px solid rgba(212, 175, 55, 0.18);
+  border-top: 1px solid rgba(212,175,55,0.18);
 }
 .player-queue[hidden] { display: none; }
 .player-queue-header {
@@ -1324,7 +1064,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .player-queue-count {
   font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.6);
+  color: rgba(212,175,55,0.6);
   font-variant-numeric: tabular-nums;
 }
 .player-queue-list {
@@ -1335,11 +1075,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
+  scrollbar-color: rgba(212,175,55,0.3) transparent;
 }
 .player-queue-list::-webkit-scrollbar { width: 6px; }
 .player-queue-list::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
+  background: rgba(212,175,55,0.3);
   border-radius: 3px;
 }
 .queue-track {
@@ -1358,21 +1098,17 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font: inherit;
   width: 100%;
 }
-.queue-track:hover { background: rgba(212, 175, 55, 0.08); }
-.queue-track.playing { background: rgba(212, 175, 55, 0.14); }
+.queue-track:hover { background: rgba(212,175,55,0.08); }
+.queue-track.playing { background: rgba(212,175,55,0.14); }
 .queue-track-index {
   font-size: 0.8rem;
-  color: rgba(212, 175, 55, 0.5);
+  color: rgba(212,175,55,0.5);
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.queue-track.playing .queue-track-index {
-  color: #f0d98f;
-  font-weight: 700;
-}
+.queue-track.playing .queue-track-index { color: #f0d98f; font-weight: 700; }
 .queue-track-cover {
-  width: 40px;
-  height: 40px;
+  width: 40px; height: 40px;
   border-radius: 4px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   background-size: cover;
@@ -1382,7 +1118,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   justify-content: center;
   font-family: 'Georgia', serif;
   font-size: 0.8rem;
-  color: rgba(212, 175, 55, 0.45);
+  color: rgba(212,175,55,0.45);
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -1397,35 +1133,32 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: block;
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
 }
-.queue-track.playing .queue-track-title {
-  font-weight: 700;
-  color: #f0d98f;
-}
+.queue-track.playing .queue-track-title { font-weight: 700; color: #f0d98f; }
 .queue-track-duration {
   font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.55);
+  color: rgba(212,175,55,0.55);
   display: block;
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
 }
 .queue-track-lock {
   font-size: 0.85rem;
-  color: rgba(212, 175, 55, 0.5);
+  color: rgba(212,175,55,0.5);
 }
 .queue-track.playing .queue-track-lock { color: #d4af37; }
 
-/* Coluna direita: letra */
+/* Coluna letra */
 .lyrics-col {
   display: flex;
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(0,0,0,0.18);
   padding: 3rem 2rem 2rem 1.5rem;
 }
 .lyrics-header {
   padding-bottom: 1rem;
   margin-bottom: 1rem;
-  border-bottom: 1px solid rgba(212, 175, 55, 0.18);
+  border-bottom: 1px solid rgba(212,175,55,0.18);
 }
 .lyrics-header h3 {
   margin: 0;
@@ -1441,17 +1174,17 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow-y: auto;
   padding-right: 8px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
+  scrollbar-color: rgba(212,175,55,0.3) transparent;
   text-align: center;
   font-family: 'Georgia', serif;
   font-size: 1.15rem;
   line-height: 1.9;
-  color: rgba(240, 217, 143, 0.72);
+  color: rgba(240,217,143,0.72);
   scroll-behavior: smooth;
 }
 .lyrics-scroll::-webkit-scrollbar { width: 6px; }
 .lyrics-scroll::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
+  background: rgba(212,175,55,0.3);
   border-radius: 3px;
 }
 .lyrics-scroll .lyric-line {
@@ -1469,7 +1202,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   opacity: 0.55;
 }
 .lyrics-scroll .lyric-line:hover {
-  background: rgba(212, 175, 55, 0.08);
+  background: rgba(212,175,55,0.08);
   color: #f0d98f;
   opacity: 1;
 }
@@ -1477,21 +1210,17 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: #f0d98f;
   font-weight: 700;
   opacity: 1;
-  text-shadow: 0 0 14px rgba(212, 175, 55, 0.5);
+  text-shadow: 0 0 14px rgba(212,175,55,0.5);
   transform: scale(1.03);
 }
 .lyrics-scroll .lyrics-empty {
-  color: rgba(212, 175, 55, 0.5);
+  color: rgba(212,175,55,0.5);
   font-style: italic;
   padding: 2rem 0;
 }
-
 .mobile-tabs { display: none; }
 
-
-/* ============================================================
-   17. TOAST GLOBAL
-   ============================================================ */
+/* ── 17. Toast ────────────────────────────────────────────── */
 .toast {
   position: fixed;
   bottom: 1rem;
@@ -1503,11 +1232,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 0.9rem 1.5rem;
   border-radius: 40px;
   font-size: 0.9rem;
-  z-index: 600;
+  z-index: 9999;
   opacity: 0;
   pointer-events: none;
   transition: 0.3s;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -1516,10 +1245,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast .icon { color: var(--accent); font-size: 1.1rem; }
 
-
-/* ============================================================
-   18. MODAL DE PLANOS
-   ============================================================ */
+/* ── 18. Modal de planos ──────────────────────────────────── */
 .plans-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1536,7 +1262,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   flex-direction: column;
 }
-.plan-card:hover { transform: translateY(-5px); border-color: rgba(212, 175, 55, 0.4); }
+.plan-card:hover { transform: translateY(-5px); border-color: rgba(212,175,55,0.4); }
 .plan-card.featured { border-color: var(--accent); box-shadow: 0 0 40px var(--accent-glow); }
 .plan-badge {
   position: absolute;
@@ -1585,7 +1311,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .plan-features li::before { content: "✓"; color: var(--accent); font-weight: 700; flex-shrink: 0; }
 .plan-features li.no { opacity: 0.5; }
 .plan-features li.no::before { content: "✕"; color: var(--text-dim); }
-
 .modal.modal-xl { width: min(1100px, 96%); padding: 2.5rem 2rem; }
 .modal.modal-xl h2 { font-size: 2.2rem; text-align: center; margin-bottom: 0.3rem; }
 .modal.modal-xl .sub { text-align: center; margin-bottom: 2rem; }
@@ -1595,10 +1320,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-top: 0;
 }
 
-
-/* ============================================================
-   19. PLAYLISTS
-   ============================================================ */
+/* ── 19. Playlists ────────────────────────────────────────── */
 .playlists-panel { margin-top: 2.5rem; }
 .playlists-heading h3 { font-family: var(--font-serif); font-size: 1.5rem; }
 .playlists-heading p { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.25rem; }
@@ -1627,8 +1349,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: grid;
   place-items: center;
   flex: 0 0 58px;
-  width: 58px;
-  height: 58px;
+  width: 58px; height: 58px;
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   color: var(--bg);
   font-family: var(--font-serif);
@@ -1648,6 +1369,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   text-align: center;
 }
 
+/* Drawer de letras */
 .lyrics-drawer {
   position: fixed;
   right: 1rem;
@@ -1657,10 +1379,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   max-height: min(70vh, 560px);
   padding: 1.25rem;
   overflow: hidden;
-  background: rgba(19, 18, 22, 0.97);
+  background: rgba(19,18,22,0.97);
   border: 1px solid var(--border);
   border-radius: 14px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.55);
   opacity: 0;
   pointer-events: none;
   transform: translateY(1rem);
@@ -1695,713 +1417,27 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .lyric-line.active { color: var(--accent); transform: translateX(4px); }
 .lyrics-empty { padding: 1.5rem 0; color: var(--text-dim); font-size: 0.85rem; text-align: center; }
 
-
-/* ============================================================
-   20. REDES SOCIAIS
-   ============================================================ */
+/* ── 20. Redes sociais ────────────────────────────────────── */
 .social-links { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
 .ad-social-icon {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 46px;
+  width: 46px; height: 46px;
   border-radius: 50%;
   background: var(--card);
   border: 1px solid var(--border);
   color: var(--text-dim);
   text-decoration: none;
   font-size: 1.2rem;
-  transition: transform 0.25s ease, color 0.25s ease, background 0.25s ease,
-              border-color 0.25s ease, box-shadow 0.25s ease;
+  transition: transform 0.25s, color 0.25s, background 0.25s, border-color 0.25s, box-shadow 0.25s;
 }
-.ad-social-icon i,
-.ad-social-icon svg { transition: transform 0.25s ease; line-height: 1; }
-.ad-social-icon:hover { transform: translateY(-4px); color: #ffffff; border-color: transparent; }
-.ad-social-icon:hover i,
-.ad-social-icon:hover svg { transform: scale(1.15); }
-.ad-social-icon::before {
-  content: attr(data-label);
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
-  background: var(--bg-elev);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 0.4rem 0.75rem;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-.ad-social-icon:hover::before { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ad-social-icon:hover { transform: translateY(-4px); color: #fff; border-color: transparent; }
 .ad-social-icon svg { width: 1em; height: 1em; fill: currentColor; display: block; }
-.ad-social-icon i[class*="fa-"] {
-  font-size: 1.15em;
-  line-height: 1;
-  width: 1.15em;
-  height: 1.15em;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-.ad-social-icon i,
-.ad-social-icon svg { color: inherit; }
+.ad-social-icon i { color: inherit; }
 
-
-/* ============================================================
-   21. ADMIN — BASE
-   ============================================================ */
-.admin-layout { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
-.admin-sidebar {
-  background: var(--bg-elev);
-  border-right: 1px solid var(--border);
-  padding: 1.5rem 0;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
-}
-.admin-sidebar .brand {
-  padding: 0 1.5rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 1rem;
-}
-.admin-sidebar .brand h2 { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700; }
-.admin-sidebar .brand p {
-  color: var(--accent);
-  font-size: 0.7rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-top: 0.2rem;
-}
-.admin-nav { display: flex; flex-direction: column; }
-.admin-nav button {
-  background: none;
-  border: none;
-  text-align: left;
-  color: var(--text-dim);
-  padding: 0.85rem 1.5rem;
-  font-size: 0.85rem;
-  font-family: var(--font-sans);
-  font-weight: 500;
-  cursor: pointer;
-  transition: 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  border-left: 3px solid transparent;
-}
-.admin-nav button:hover { background: rgba(212, 175, 55, 0.05); color: var(--text); }
-.admin-nav button.active {
-  background: rgba(212, 175, 55, 0.1);
-  color: var(--accent);
-  border-left-color: var(--accent);
-}
-.admin-nav button .ico { font-size: 1rem; width: 18px; text-align: center; }
-.admin-main { padding: 2rem; max-width: 1100px; }
-.admin-topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-bottom: 1.5rem;
-  margin-bottom: 2rem;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-.admin-topbar h1 { font-family: var(--font-serif); font-size: 1.8rem; font-weight: 700; }
-.admin-topbar .actions { display: flex; gap: 0.7rem; flex-wrap: wrap; }
-.admin-section { display: none; }
-.admin-section.active { display: block; }
-.admin-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.5rem;
-  margin-bottom: 1.5rem;
-}
-.admin-card h3 {
-  font-family: var(--font-serif);
-  font-size: 1.2rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-}
-.admin-card h3 .hint {
-  font-family: var(--font-sans);
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  font-weight: 400;
-  letter-spacing: 0.05em;
-}
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 2rem;
-}
-.stat-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.3rem;
-  transition: 0.2s;
-}
-.stat-card:hover { border-color: rgba(212, 175, 55, 0.4); }
-.stat-card .label {
-  font-size: 0.7rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  font-weight: 600;
-}
-.stat-card .value {
-  font-family: var(--font-serif);
-  font-size: 2rem;
-  font-weight: 900;
-  color: var(--accent);
-  margin-top: 0.4rem;
-  line-height: 1;
-}
-.stat-card .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.4rem; }
-.admin-table { width: 100%; border-collapse: collapse; }
-.admin-table th,
-.admin-table td {
-  text-align: left;
-  padding: 0.75rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.85rem;
-  vertical-align: middle;
-}
-.admin-table th {
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-.admin-table tr:hover td { background: rgba(212, 175, 55, 0.03); }
-.admin-img-preview {
-  width: 100%;
-  max-width: 260px;
-  height: 140px;
-  background: #0f0e11;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  margin-top: 0.5rem;
-  background-size: cover;
-  background-position: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-dim);
-  font-size: 0.8rem;
-}
-.upload-zone {
-  border: 2px dashed var(--border);
-  border-radius: 10px;
-  padding: 1.2rem;
-  text-align: center;
-  cursor: pointer;
-  transition: 0.2s;
-  font-size: 0.85rem;
-  color: var(--text-dim);
-}
-.upload-zone:hover { border-color: var(--accent); color: var(--accent); }
-.track-editor {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
-  margin-bottom: 0.8rem;
-}
-.track-editor .track-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.8rem;
-  gap: 0.5rem;
-}
-.track-editor .track-head strong { font-size: 0.9rem; color: var(--accent); }
-.admin-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.8);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-  z-index: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  opacity: 0;
-  pointer-events: none;
-  transition: 0.3s;
-}
-.admin-modal-overlay.open { opacity: 1; pointer-events: auto; }
-.admin-modal {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 2rem;
-  width: min(700px, 100%);
-  max-height: 90vh;
-  overflow-y: auto;
-  position: relative;
-}
-.admin-modal h3 { font-family: var(--font-serif); font-size: 1.4rem; margin-bottom: 1rem; }
-.admin-login-wrap {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  background: radial-gradient(circle at 50% 30%, rgba(212, 175, 55, 0.1), transparent 60%);
-}
-.admin-login-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 2.5rem 2rem;
-  width: min(400px, 100%);
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7);
-}
-.admin-login-card .brand { text-align: center; margin-bottom: 2rem; }
-.admin-login-card .brand h1 { font-family: var(--font-serif); font-size: 1.6rem; font-weight: 700; }
-.admin-login-card .brand p {
-  color: var(--accent);
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-top: 0.3rem;
-}
-.security-banner {
-  background: rgba(212, 175, 55, 0.1);
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  color: var(--text-dim);
-  padding: 0.8rem 1rem;
-  border-radius: 8px;
-  font-size: 0.75rem;
-  margin-bottom: 1.2rem;
-  line-height: 1.5;
-}
-.security-banner strong { color: var(--accent); }
-
-
-/* ============================================================
-   22. ADMIN — BOTÃO SALVAR (DIRTY)
-   ============================================================ */
-#adminSaveBtn.is-dirty {
-  background: linear-gradient(135deg, var(--accent), #f0c95c);
-  color: var(--bg);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow), 0 6px 20px rgba(212, 175, 55, 0.25);
-  animation: savePulse 2s ease-in-out infinite;
-}
-@keyframes savePulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--accent-glow), 0 6px 20px rgba(212, 175, 55, 0.25); }
-  50%      { box-shadow: 0 0 0 4px var(--accent-glow), 0 6px 24px rgba(212, 175, 55, 0.4); }
-}
-@media (prefers-reduced-motion: reduce) {
-  #adminSaveBtn.is-dirty { animation: none; }
-}
-
-
-/* ============================================================
-   23. ADMIN — ESTADOS
-   ============================================================ */
-.admin-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 2.5rem 1rem;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  font-style: italic;
-}
-.admin-loading::before {
-  content: "";
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: adminSpin 0.8s linear infinite;
-}
-@keyframes adminSpin { to { transform: rotate(360deg); } }
-.admin-error-box {
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.3);
-  border-radius: 10px;
-  padding: 1.25rem 1.5rem;
-  text-align: center;
-  margin: 1rem 0;
-}
-.admin-error-box p { color: #f0a5a5; font-size: 0.9rem; margin-bottom: 0.9rem; }
-.admin-empty {
-  padding: 2.5rem 1rem;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  font-style: italic;
-}
-
-
-/* ============================================================
-   24. ADMIN — BADGES
-   ============================================================ */
-.badge-mini {
-  display: inline-block;
-  font-size: 0.65rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  padding: 0.2rem 0.6rem;
-  border-radius: 20px;
-  font-weight: 700;
-}
-.badge-free { background: rgba(176, 169, 160, 0.15); color: var(--text-dim); }
-.badge-premium { background: var(--accent); color: var(--bg); }
-.badge-banned { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
-.badge-mini.badge-anual {
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  color: var(--bg);
-}
-
-
-/* ============================================================
-   25. ADMIN — BACKUP GRID
-   ============================================================ */
-.backup-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.9rem;
-  margin: 1rem 0 1.5rem;
-}
-.backup-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
-}
-.backup-card .label {
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-}
-.backup-card .value {
-  font-family: var(--font-serif);
-  font-size: 1.4rem;
-  font-weight: 900;
-  color: var(--accent);
-  margin-top: 0.35rem;
-  line-height: 1.1;
-  word-break: break-word;
-}
-
-
-/* ============================================================
-   26. ADMIN — MODAL (LARGURAS)
-   ============================================================ */
-.admin-modal.modal-wide { width: min(720px, 100%); }
-.admin-modal.modal-xl { width: min(1100px, 96%); }
-.admin-modal .form-row-3 {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1rem;
-}
-@media (max-width: 600px) {
-  .admin-modal .form-row,
-  .admin-modal .form-row-3 { grid-template-columns: 1fr; }
-}
-
-
-/* ============================================================
-   27. ADMIN — TOAST
-   ============================================================ */
-.admin-toast {
-  position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  z-index: 9999;
-  max-width: min(360px, calc(100vw - 2rem));
-  padding: 0.85rem 1.15rem;
-  background: var(--bg-elev);
-  border: 1px solid var(--accent);
-  color: var(--text);
-  border-radius: 10px;
-  font-size: 0.88rem;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-
-/* ============================================================
-   28. ADMIN — ACESSIBILIDADE
-   ============================================================ */
-form[aria-busy="true"] { opacity: 0.75; pointer-events: none; }
-form[aria-busy="true"] button[type="submit"] { cursor: wait; }
-.admin-table .btn:focus-visible,
-.admin-nav button:focus-visible,
-.admin-modal .btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
-
-/* ============================================================
-   29. RESPONSIVO — SITE PÚBLICO
-   ============================================================ */
-@media (max-width: 900px) {
-  .hero .container { grid-template-columns: 1fr; text-align: center; }
-  .hero-sub { margin: 0 auto; }
-  .hero-cta { justify-content: center; }
-  .hero-visual { order: -1; }
-  .vinyl-container { max-width: 280px; }
-  .sobre-grid { grid-template-columns: 1fr; gap: 2rem; }
-  .contato-grid { grid-template-columns: 1fr; gap: 3rem; }
-  nav { gap: 1rem; }
-  nav a { font-size: 0.7rem; }
-  .form-row { grid-template-columns: 1fr; }
-  .filter-bar { flex-direction: column; align-items: stretch; }
-  .filter-bar .shop-search-wrap { flex: 1 1 auto; max-width: 100%; }
-}
-
-@media (max-width: 768px) {
-  /* Player expandido — mobile Spotify */
-  .player-modal-overlay {
-    padding: 0;
-    align-items: stretch;
-    justify-content: stretch;
-    background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
-  }
-  .music-player {
-    max-width: 100%;
-    max-height: 100vh;
-    height: 100vh;
-    border-radius: 0;
-    background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
-    border: none;
-    box-shadow: none;
-  }
-  .music-player::before { border-radius: 0; }
-  .player-grid {
-    grid-template-columns: 1fr;
-    overflow-y: auto;
-    padding-top: 48px;
-  }
-  .player-col {
-    padding: 16px 20px 24px;
-    border-right: none;
-    border-bottom: none;
-    overflow-y: visible;
-  }
-  .music-player .album-cover {
-    max-width: 100% !important;
-    max-height: 42vh !important;
-    width: auto !important;
-    aspect-ratio: 1 !important;
-    margin: 0 auto 24px !important;
-    border-radius: 12px !important;
-  }
-  .music-player .track-title { font-size: 1.5rem; }
-  .music-player .controls { padding: 0; gap: 8px; }
-  .music-player .play-btn { width: 64px; height: 64px; }
-  .music-player .play-btn svg { width: 28px; height: 28px; }
-
-  .lyrics-col {
-    position: absolute;
-    inset: 0;
-    padding: 56px 24px 24px;
-    background: linear-gradient(180deg, #2d2420 0%, #0b0a0c 60%);
-    z-index: 20;
-    display: none;
-    flex-direction: column;
-    border: none;
-  }
-  .music-player.mobile-lyrics .lyrics-col { display: flex; }
-  .music-player.mobile-lyrics .player-col { display: none; }
-  .lyrics-scroll {
-    font-size: 1.3rem;
-    line-height: 2;
-    text-align: left;
-    padding-right: 4px;
-  }
-  .lyrics-scroll .lyric-line { text-align: left; opacity: 0.45; }
-  .lyrics-scroll .lyric-line.active { font-size: 1.45rem; opacity: 1; }
-
-  .mobile-tabs {
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    padding: 12px 20px;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-    background: rgba(0, 0, 0, 0.4);
-    border-top: 1px solid rgba(212, 175, 55, 0.15);
-    position: sticky;
-    bottom: 0;
-    z-index: 25;
-  }
-  .mobile-tab {
-    flex: 1;
-    max-width: 160px;
-    padding: 10px 16px;
-    background: transparent;
-    border: none;
-    color: rgba(212, 175, 55, 0.6);
-    font-family: 'Georgia', serif;
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-  }
-  .mobile-tab.active {
-    color: #d4af37;
-    border-bottom-color: #d4af37;
-  }
-
-  .player-queue-list { max-height: 220px; }
-  .queue-track {
-    grid-template-columns: 20px 36px 1fr auto;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-  .queue-track-cover { width: 36px; height: 36px; }
-
-  .player-actions .btn {
-    min-width: 110px;
-    font-size: 0.78rem;
-    padding: 0.6rem 0.9rem;
-  }
-
-  /* Discografia lista — mobile */
-  .discography-track-card {
-    grid-template-columns: 20px 36px 1fr auto !important;
-    gap: 8px !important;
-    padding: 6px 8px !important;
-  }
-  .discography-track-card .track-cover { width: 36px; height: 36px; }
-  .discography-track-card .track-title { font-size: 0.85rem; }
-  .discography-track-card .track-duration { font-size: 0.68rem; }
-  .discography-track-card .track-state { display: none; }
-}
-
-@media (max-width: 600px) {
-  .header-inner { flex-wrap: wrap; }
-  .logo { font-size: 1.4rem; }
-  nav { order: 3; width: 100%; justify-content: center; }
-  .hero { padding-top: 9rem; }
-  .hero-content h1 { font-size: 2.3rem; }
-  .section-title { font-size: 1.8rem; }
-  .vinyl-container .lyric { bottom: -45px; font-size: 0.9rem; }
-  .album-header { gap: 0.8rem; }
-  .album-cover { width: 56px; height: 56px; font-size: 1.2rem; }
-  .album-title { font-size: 1.1rem; }
-  .modal { padding: 1.5rem; }
-  .modal h2 { font-size: 1.5rem; }
-  .modal.modal-xl { padding: 1.5rem 1rem; }
-  .modal.modal-xl h2 { font-size: 1.6rem; }
-  .modal.modal-xl .plans-grid { grid-template-columns: 1fr; }
-  .ad-social-icon { width: 42px; height: 42px; font-size: 1.1rem; }
-  .social-links { gap: 0.6rem; }
-  footer .footer-nav { gap: 0.5rem; font-size: 0.75rem; }
-}
-
-
-/* ============================================================
-   30. RESPONSIVO — ADMIN
-   ============================================================ */
-@media (max-width: 900px) {
-  .admin-layout { grid-template-columns: 1fr; }
-  .admin-sidebar { position: static; height: auto; }
-  .admin-nav { flex-direction: row; overflow-x: auto; padding-bottom: 0.5rem; }
-  .admin-nav button {
-    white-space: nowrap;
-    border-left: none;
-    border-bottom: 3px solid transparent;
-  }
-  .admin-nav button.active { border-left: none; border-bottom-color: var(--accent); }
-  .admin-table {
-    display: block;
-    overflow-x: auto;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-  }
-  .admin-main { padding: 1.25rem 1rem; }
-  .admin-topbar h1 { font-size: 1.4rem; }
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-}
-@media (max-width: 600px) {
-  .admin-main { padding: 1rem; }
-  .admin-sidebar .brand h2 { font-size: 1.1rem; }
-  .admin-nav button { padding: 0.7rem 1rem; font-size: 0.8rem; }
-  .backup-grid { grid-template-columns: 1fr; }
-  .stat-card .value { font-size: 1.6rem; }
-}
-
-
-/* ============================================================
-   31. Z-INDEX DE MODAIS ACIMA DO PLAYER
-   ============================================================ */
-#plansModal,
-#rentModal,
-#loginModal,
-#signupModal,
-#accountModal {
-  z-index: 800;
-}
-#expandedPlayerModal.open ~ #plansModal.open,
-#expandedPlayerModal.open ~ #rentModal.open,
-#expandedPlayerModal.open ~ #loginModal.open,
-#expandedPlayerModal.open ~ #signupModal.open,
-#expandedPlayerModal.open ~ #accountModal.open {
-  z-index: 900;
-}
-.player-actions {
-  position: relative;
-  z-index: 5;
-}
-.player-actions .btn {
-  position: relative;
-  z-index: 6;
-  pointer-events: auto;
-  cursor: pointer;
-}
-.player-actions .btn:disabled {
-  pointer-events: none;
-  cursor: not-allowed;
-}
-
-
-/* ============================================================
-   32. MODAL DE ALUGUEL — opções de duração
-   ============================================================ */
+/* ── 21. Modal de aluguel ─────────────────────────────────── */
 #rentModal .rent-track-info {
   display: flex;
   align-items: center;
@@ -2413,8 +1449,7 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   margin-bottom: 1.2rem;
 }
 #rentModal .rent-track-cover {
-  width: 52px;
-  height: 52px;
+  width: 52px; height: 52px;
   border-radius: 8px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   background-size: cover;
@@ -2424,14 +1459,13 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   justify-content: center;
   font-family: var(--font-serif);
   font-size: 1rem;
-  color: rgba(212, 175, 55, 0.4);
+  color: rgba(212,175,55,0.4);
   font-weight: 900;
   flex-shrink: 0;
   overflow: hidden;
 }
 #rentModal .rent-track-cover img {
-  width: 100%;
-  height: 100%;
+  width: 100%; height: 100%;
   object-fit: cover;
   border-radius: inherit;
 }
@@ -2449,14 +1483,12 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   color: var(--text-dim);
   margin-top: 2px;
 }
-
 #rentModal .rent-options {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin-bottom: 1rem;
 }
-
 #rentModal .rent-option {
   display: grid;
   grid-template-columns: 20px 1fr auto;
@@ -2471,18 +1503,17 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   position: relative;
 }
 #rentModal .rent-option:hover {
-  border-color: rgba(212, 175, 55, 0.4);
-  background: rgba(212, 175, 55, 0.04);
+  border-color: rgba(212,175,55,0.4);
+  background: rgba(212,175,55,0.04);
 }
 #rentModal .rent-option.selected {
   border-color: var(--accent);
-  background: rgba(212, 175, 55, 0.08);
+  background: rgba(212,175,55,0.08);
   box-shadow: 0 0 0 1px var(--accent) inset;
 }
 #rentModal .rent-option input[type="radio"] {
   accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
+  width: 16px; height: 16px;
   cursor: pointer;
 }
 #rentModal .rent-option-label {
@@ -2516,4 +1547,173 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   font-weight: 700;
   padding: 0.2rem 0.6rem;
   border-radius: 20px;
+}
+
+/* ── 22. Z-index dos modais acima do player ───────────────── */
+#plansModal,
+#rentModal,
+#loginModal,
+#signupModal,
+#accountModal {
+  z-index: 800;
+}
+#expandedPlayerModal.open ~ #plansModal.open,
+#expandedPlayerModal.open ~ #rentModal.open,
+#expandedPlayerModal.open ~ #loginModal.open,
+#expandedPlayerModal.open ~ #signupModal.open,
+#expandedPlayerModal.open ~ #accountModal.open {
+  z-index: 900;
+}
+.player-actions { position: relative; z-index: 5; }
+.player-actions .btn {
+  position: relative;
+  z-index: 6;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.player-actions .btn:disabled { pointer-events: none; cursor: not-allowed; }
+
+/* ── 23. Responsivo ───────────────────────────────────────── */
+@media (max-width: 900px) {
+  .hero .container { grid-template-columns: 1fr; text-align: center; }
+  .hero-sub { margin: 0 auto; }
+  .hero-cta { justify-content: center; }
+  .hero-visual { order: -1; }
+  .vinyl-container { max-width: 280px; }
+  .sobre-grid { grid-template-columns: 1fr; gap: 2rem; }
+  .contato-grid { grid-template-columns: 1fr; gap: 3rem; }
+  nav { gap: 1rem; }
+  nav a { font-size: 0.7rem; }
+  .filter-bar { flex-direction: column; align-items: stretch; }
+  .filter-bar .shop-search-wrap { flex: 1 1 auto; max-width: 100%; }
+}
+
+@media (max-width: 768px) {
+  .player-modal-overlay {
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
+  }
+  .music-player {
+    max-width: 100%;
+    max-height: 100vh;
+    height: 100vh;
+    border-radius: 0;
+    background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
+    border: none;
+    box-shadow: none;
+  }
+  .music-player::before { border-radius: 0; }
+  .player-grid {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+    padding-top: 48px;
+  }
+  .player-col {
+    padding: 16px 20px 24px;
+    border-right: none;
+    overflow-y: visible;
+  }
+  .music-player .album-cover {
+    max-width: 100%;
+    max-height: 42vh;
+    width: auto;
+    aspect-ratio: 1;
+    margin: 0 auto 20px;
+  }
+  .music-player .track-title { font-size: 1.5rem; }
+  .music-player .controls { padding: 0; gap: 8px; }
+  .music-player .play-btn { width: 64px; height: 64px; }
+  .music-player .play-btn svg { width: 28px; height: 28px; }
+  .lyrics-col {
+    position: absolute;
+    inset: 0;
+    padding: 56px 24px 24px;
+    background: linear-gradient(180deg, #2d2420 0%, #0b0a0c 60%);
+    z-index: 20;
+    display: none;
+    flex-direction: column;
+    border: none;
+  }
+  .music-player.mobile-lyrics .lyrics-col { display: flex; }
+  .music-player.mobile-lyrics .player-col { display: none; }
+  .lyrics-scroll {
+    font-size: 1.3rem;
+    line-height: 2;
+    text-align: left;
+  }
+  .lyrics-scroll .lyric-line { text-align: left; opacity: 0.45; }
+  .lyrics-scroll .lyric-line.active { font-size: 1.45rem; opacity: 1; }
+  .mobile-tabs {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 20px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    background: rgba(0,0,0,0.4);
+    border-top: 1px solid rgba(212,175,55,0.15);
+    position: sticky;
+    bottom: 0;
+    z-index: 25;
+  }
+  .mobile-tab {
+    flex: 1;
+    max-width: 160px;
+    padding: 10px 16px;
+    background: transparent;
+    border: none;
+    color: rgba(212,175,55,0.6);
+    font-family: 'Georgia', serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .mobile-tab.active {
+    color: #d4af37;
+    border-bottom-color: #d4af37;
+  }
+  .player-queue-list { max-height: 220px; }
+  .queue-track {
+    grid-template-columns: 20px 36px 1fr auto;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+  .queue-track-cover { width: 36px; height: 36px; }
+  .player-actions .btn {
+    min-width: 110px;
+    font-size: 0.78rem;
+    padding: 0.6rem 0.9rem;
+  }
+  /* Discografia lista — mobile */
+  .discography-track-card {
+    grid-template-columns: 24px 38px 1fr auto;
+    gap: 8px;
+    padding: 7px 8px;
+  }
+  .discography-track-card .track-cover { width: 38px; height: 38px; }
+  .discography-track-card .track-title { font-size: 0.85rem; }
+  .discography-track-card .track-duration { font-size: 0.68rem; }
+}
+
+@media (max-width: 600px) {
+  .header-inner { flex-wrap: wrap; }
+  .logo { font-size: 1.4rem; }
+  nav { order: 3; width: 100%; justify-content: center; }
+  .hero { padding-top: 9rem; }
+  .hero-content h1 { font-size: 2.3rem; }
+  .section-title { font-size: 1.8rem; }
+  .album-cover { width: 56px; height: 56px; font-size: 1.2rem; }
+  .album-title { font-size: 1.1rem; }
+  .modal { padding: 1.5rem; }
+  .modal h2 { font-size: 1.5rem; }
+  .modal.modal-xl { padding: 1.5rem 1rem; }
+  .modal.modal-xl h2 { font-size: 1.6rem; }
+  .modal.modal-xl .plans-grid { grid-template-columns: 1fr; }
+  .ad-social-icon { width: 42px; height: 42px; font-size: 1.1rem; }
+  footer .footer-nav { gap: 0.5rem; font-size: 0.75rem; }
 }
