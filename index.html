@@ -134,8 +134,14 @@
       </div>
 
       <div id="discographyContainer"></div>
+
       <div class="playlists-panel" id="playlistsPanel" aria-labelledby="playlistsTitle">
-        <div class="playlists-heading"><div><h3 id="playlistsTitle">Playlists</h3><p>Seleções criadas para ouvir em sequência.</p></div></div>
+        <div class="playlists-heading">
+          <div>
+            <h3 id="playlistsTitle">Playlists</h3>
+            <p>Seleções criadas para ouvir em sequência.</p>
+          </div>
+        </div>
         <div class="playlists-grid" id="playlistsGrid"></div>
       </div>
     </div>
@@ -225,7 +231,13 @@
   <audio id="audio" preload="auto"></audio>
 
   <div class="lyrics-drawer" id="lyricsDrawer" aria-live="polite" aria-label="Letra sincronizada">
-    <div class="lyrics-drawer-head"><div><span class="now-label">LETRA</span><h2 id="lyricsTitle">Nenhuma faixa tocando</h2></div><button class="modal-close" id="closeLyrics" aria-label="Fechar letras">×</button></div>
+    <div class="lyrics-drawer-head">
+      <div>
+        <span class="now-label">LETRA</span>
+        <h2 id="lyricsTitle">Nenhuma faixa tocando</h2>
+      </div>
+      <button class="modal-close" id="closeLyrics" aria-label="Fechar letras">×</button>
+    </div>
     <div id="lyricsContent" class="lyrics-content"><p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p></div>
   </div>
 
@@ -255,7 +267,7 @@
       <!-- Grid: 2 colunas -->
       <div class="player-grid">
 
-        <!-- ══════════ COLUNA ESQUERDA: PLAYER ══════════ -->
+        <!-- COLUNA ESQUERDA: PLAYER -->
         <div class="player-col">
           <div class="player-watermark-area">
 
@@ -326,7 +338,7 @@
 
         </div>
 
-        <!-- ══════════ COLUNA DIREITA: LETRA ══════════ -->
+        <!-- COLUNA DIREITA: LETRA -->
         <div class="lyrics-col">
           <div class="lyrics-header">
             <h3>Letra</h3>
