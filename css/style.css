@@ -3484,3 +3484,14 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   color: var(--text-dim);
   margin-top: 2px;
 }
+
+/* ============================================================
+   ADMIN — Editor de redes sociais
+   ============================================================ */
+.social-editor-item input[type="url"] {
+  transition: border-color 0.2s;
+}
+.social-editor-item input[type="url"]:invalid,
+.social-editor-item input[type="url"][style*="--danger"] {
+  border-color: var(--danger);
+}
