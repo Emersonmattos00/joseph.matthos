@@ -235,7 +235,7 @@
   <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
     <div class="music-player">
 
-      <!-- Botão tela cheia (desktop/tablet) -->
+      <!-- Botão tela cheia -->
       <button class="player-fullscreen" id="expandedFullscreenBtn" aria-label="Tela cheia" title="Tela cheia">
         <svg class="icon-enter" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
@@ -252,28 +252,22 @@
         </svg>
       </button>
 
-      <!-- Grid: 2 colunas no desktop, 1 no mobile -->
+      <!-- Grid: 2 colunas -->
       <div class="player-grid">
 
         <!-- ══════════ COLUNA ESQUERDA: PLAYER ══════════ -->
         <div class="player-col">
-
-          <!-- Área com marca d'água ao fundo -->
           <div class="player-watermark-area">
 
-            <!-- Capa quadrada grande -->
             <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
 
-            <!-- Info -->
             <div class="track-info">
               <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
               <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
             </div>
 
-            <!-- Badge de prévia -->
             <div class="preview-badge" id="expandedPreviewBadge">PRÉVIA 30s</div>
 
-            <!-- Progresso -->
             <div class="progress-container">
               <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
                 <div class="progress" id="expandedProgressFill"></div>
@@ -284,7 +278,6 @@
               </div>
             </div>
 
-            <!-- Controles principais: aleatório, prev, play, next -->
             <div class="controls">
               <button class="control-btn control-btn-shuffle" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
                 <svg viewBox="0 0 24 24" fill="currentColor">
@@ -311,7 +304,6 @@
               </button>
             </div>
 
-            <!-- Extras: volume -->
             <div class="extra-controls">
               <button class="extra-btn" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
                 <svg viewBox="0 0 24 24" fill="currentColor">
@@ -320,12 +312,10 @@
               </button>
             </div>
 
-            <!-- Ações (alugar / assinar) -->
             <div class="player-actions" id="expandedPlayerActions"></div>
 
           </div>
 
-          <!-- ══════════ LISTA DE FAIXAS (FILA) ══════════ -->
           <div class="player-queue" id="expandedPlayerQueue" hidden>
             <div class="player-queue-header">
               <span class="player-queue-label">A seguir</span>
@@ -335,7 +325,6 @@
           </div>
 
         </div>
-        <!-- ══════════ FIM DA COLUNA ESQUERDA ══════════ -->
 
         <!-- ══════════ COLUNA DIREITA: LETRA ══════════ -->
         <div class="lyrics-col">
@@ -346,7 +335,6 @@
             <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
           </div>
         </div>
-        <!-- ══════════ FIM DA COLUNA DIREITA ══════════ -->
 
       </div>
 
@@ -487,14 +475,14 @@
             <div class="form-group"><label>Nome do artista (logo)</label><input type="text" data-content="branding.nameParts.first"></div>
             <div class="form-group"><label>Nome destacado</label><input type="text" data-content="branding.nameParts.accent"></div>
           </div>
-          <div class="form-group"><label>Texto do rodapé</label><input type="text" data-content="branding.footerText"></div>
+          <div class="form-group"><label>Texto do rodapé</label><input type="text" data-content="branding.footer"></div>
           <div class="form-group"><label>Imagem de fundo (URL ou upload)</label>
             <input type="text" id="bgImageInput" data-content="branding.bgImage" placeholder="assets/img/tema.webp">
             <div class="upload-zone" data-upload-target="bgUpload" style="margin-top:.5rem;">
               <span>Clique para enviar imagem de fundo</span>
               <input type="file" id="bgUpload" accept="image/*" hidden>
             </div>
-            <div id="bgPreview" class="preview-box"></div>
+            <div id="bgPreview" class="admin-img-preview"></div>
           </div>
         </div>
       </div>
@@ -502,35 +490,38 @@
       <div class="admin-section" id="tab-hero">
         <div class="admin-card">
           <h3>Hero</h3>
-          <div class="form-group"><label>Título (linha 1)</label><input type="text" data-content="hero.titleLine1"></div>
-          <div class="form-group"><label>Título (linha 2 - destaque)</label><input type="text" data-content="hero.titleLine2"></div>
+          <div class="form-group"><label>Título (com HTML permitido: span.gold, br)</label><input type="text" data-content="hero.title"></div>
           <div class="form-group"><label>Subtítulo</label><input type="text" data-content="hero.subtitle"></div>
-          <div class="form-group"><label>Texto do botão principal</label><input type="text" data-content="hero.primaryBtnText"></div>
-          <div class="form-group"><label>Texto do botão secundário</label><input type="text" data-content="hero.secondaryBtnText"></div>
           <div class="form-row">
-            <div class="form-group"><label>Frase do vinil</label><input type="text" data-content="hero.vinyl.quote"></div>
+            <div class="form-group"><label>Texto do botão principal</label><input type="text" data-content="hero.primaryBtn.text"></div>
+            <div class="form-group"><label>Link do botão principal</label><input type="text" data-content="hero.primaryBtn.link"></div>
+          </div>
+          <div class="form-group"><label>Texto do botão secundário</label><input type="text" data-content="hero.secondaryBtn.text"></div>
+          <div class="form-row">
+            <div class="form-group"><label>Frase do vinil</label><input type="text" data-content="hero.vinyl.lyric"></div>
             <div class="form-group"><label>Imagem do vinil (URL)</label><input type="text" data-content="hero.vinyl.image"></div>
           </div>
           <div class="upload-zone" data-upload-target="vinylUpload">
             <span>Enviar imagem do vinil</span>
             <input type="file" id="vinylUpload" accept="image/*" hidden>
           </div>
-          <div id="vinylPreview" class="preview-box"></div>
+          <div id="vinylPreview" class="admin-img-preview"></div>
         </div>
       </div>
 
       <div class="admin-section" id="tab-sobre">
         <div class="admin-card">
           <h3>Sobre</h3>
-          <div class="form-group"><label>Título</label><input type="text" data-content="sobre.title"></div>
+          <div class="form-group"><label>Título (HTML permitido)</label><input type="text" data-content="sobre.title"></div>
           <div class="form-group"><label>Subtítulo</label><input type="text" data-content="sobre.subtitle"></div>
-          <div class="form-group"><label>Texto (parágrafos separados por linha em branco)</label><textarea rows="6" data-content="sobre.text"></textarea></div>
+          <div class="form-group"><label>Parágrafos (um por linha)</label><textarea rows="6" data-content="sobre.paragraphs"></textarea></div>
+          <div class="form-group"><label>Citação</label><input type="text" data-content="sobre.quote"></div>
           <div class="form-group"><label>Imagem (URL)</label><input type="text" data-content="sobre.image"></div>
           <div class="upload-zone" data-upload-target="sobreUpload">
             <span>Enviar imagem Sobre</span>
             <input type="file" id="sobreUpload" accept="image/*" hidden>
           </div>
-          <div id="sobrePreview" class="preview-box"></div>
+          <div id="sobrePreview" class="admin-img-preview"></div>
         </div>
       </div>
 
@@ -566,7 +557,9 @@
       <div class="admin-section" id="tab-contato">
         <div class="admin-card">
           <h3>Contato <button class="btn btn-outline btn-sm" id="addSocialBtn" style="float:right;">+ Rede social</button></h3>
-          <div class="form-group"><label>Título</label><input type="text" data-content="contato.title"></div>
+          <div class="form-group"><label>Título (HTML permitido)</label><input type="text" data-content="contato.title"></div>
+          <div class="form-group"><label>Subtítulo</label><input type="text" data-content="contato.subtitle"></div>
+          <div class="form-group"><label>Heading</label><input type="text" data-content="contato.heading"></div>
           <div class="form-group"><label>Descrição</label><input type="text" data-content="contato.description"></div>
           <div id="socialsEditor"></div>
         </div>
@@ -585,6 +578,10 @@
           <div class="form-row">
             <div class="form-group"><label>Cor de destaque</label><input type="color" data-content="aparencia.accent"></div>
             <div class="form-group"><label>Cor de fundo</label><input type="color" data-content="aparencia.bg"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Cor do texto</label><input type="color" data-content="aparencia.text"></div>
+            <div class="form-group"><label>Cor de destaque escura</label><input type="color" data-content="aparencia.accentDark"></div>
           </div>
         </div>
       </div>
