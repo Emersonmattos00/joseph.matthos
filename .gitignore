@@ -21,6 +21,9 @@ pnpm-lock.yaml
 .pnp.js
 .pnp.cjs
 
+# ⚠️  NÃO ignorar package-lock.json — ele DEVE ser commitado
+#     (build determinístico na Vercel)
+
 # ============================================================
 # LOGS
 # ============================================================
@@ -33,6 +36,9 @@ lerna-debug.log*
 
 # ============================================================
 # VARIÁVEIS DE AMBIENTE
+# ------------------------------------------------------------
+# ⚠️  NUNCA commite arquivos .env reais.
+#     Use .env.example (commitado) como template.
 # ============================================================
 .env
 .env.local
@@ -40,6 +46,22 @@ lerna-debug.log*
 .env.development
 .env.production
 .env.test
+.env*.local
+
+# ✅ Exceção: template documentado
+!.env.example
+
+# ============================================================
+# SEGREDOS / CHAVES / CERTIFICADOS
+# ============================================================
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+secrets.json
+credentials.json
+service-account*.json
 
 # ============================================================
 # VERCEL / DEPLOY
@@ -64,6 +86,11 @@ lerna-debug.log*
 *.sublime-workspace
 
 # ============================================================
+# HISTÓRICO LOCAL (VSCode)
+# ============================================================
+.history/
+
+# ============================================================
 # BUILD / CACHE
 # ============================================================
 dist/
@@ -86,8 +113,8 @@ coverage/
 # ============================================================
 # ÁUDIOS LOCAIS (grandes — não commitar)
 # ------------------------------------------------------------
-# Envie os áudios via painel admin (IndexedDB) ou hospede-os
-# externamente. Se precisar versionar alguns, use exceções.
+# O projeto usa Supabase Storage para áudios. Esta pasta é
+# apenas para arquivos temporários de desenvolvimento local.
 # ============================================================
 assets/audio/*.mp3
 assets/audio/*.wav
