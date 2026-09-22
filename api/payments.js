@@ -9,6 +9,7 @@
    - Rental: preference (pagamento único, 48h de acesso)
    - Webhook: valida HMAC + idempotência via payments_events
    - Preços SEMPRE do servidor (envs + tracks.price_cents)
+   - Webhook duplicado NÃO processado → reprocessa (retry_count)
    ============================================================ */
 
 'use strict';
@@ -44,6 +45,7 @@ const MAX_TRACK_INDEX = 10000;
 const MAX_ALBUM_ID_LENGTH = 64;
 
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
+const MAX_RETRY_COUNT = 10;
 
 const GENERIC_ERROR = 'Não foi possível iniciar o pagamento.';
 const GENERIC_RATE = 'Muitas tentativas. Tente novamente mais tarde.';
@@ -573,6 +575,15 @@ async function createMercadoPagoPreference({ cfg, user, track, albumId, trackInd
 
 // ─────────────────────────────────────────────────────────────
 // WEBHOOK
+// ------------------------------------------------------------
+// Fluxo:
+//   1. Valida assinatura HMAC
+//   2. Insere evento em payments_events (idempotência)
+//   3. Se duplicado:
+//       - se processed_at preenchido → ignora
+//       - se NÃO processado → REPROCESSA (retry_count até 10)
+//   4. Processa (preapproval ou payment)
+//   5. Marca processed_at
 // ─────────────────────────────────────────────────────────────
 async function handleWebhook(req, res) {
   const sig = validateMPSignature(req);
@@ -615,12 +626,74 @@ async function handleWebhook(req, res) {
       return sendJson(res, 502, { ok: false });
     }
 
+    // ── Evento já existia (duplicata do MP)
+    // Verificar se foi REALMENTE processado.
+    // Se não, reprocessar (evita perder pagamento em queda no meio).
     if (!Array.isArray(inserted.body) || inserted.body.length === 0) {
-      await audit('payment_webhook', { success: true, reason: 'duplicated', externalId: resourceId });
-      return sendJson(res, 200, { ok: true, duplicated: true });
-    }
+      let existing = null;
+      try {
+        const check = await supabaseAdminRequest(
+          `/rest/v1/payments_events?provider=eq.mercadopago` +
+            `&provider_event=eq.${encodeURIComponent(providerEvent)}` +
+            `&select=id,processed_at,failure_reason,retry_count` +
+            `&limit=1`,
+          { method: 'GET' }
+        );
+        existing = Array.isArray(check.body) ? check.body[0] : null;
+      } catch (err) {
+        console.error('[payments/webhook] check duplicate:', err.message);
+        return sendJson(res, 502, { ok: false });
+      }
 
-    eventRow = inserted.body[0];
+      if (existing && existing.processed_at) {
+        // Já processado com sucesso — não reprocessar
+        await audit('payment_webhook', {
+          success: true,
+          reason: 'duplicated_processed',
+          externalId: resourceId
+        });
+        return sendJson(res, 200, { ok: true, duplicated: true });
+      }
+
+      if (existing && !existing.processed_at) {
+        // Existe mas NÃO foi processado → reprocessar
+        const retryCount = Number(existing.retry_count) || 0;
+        if (retryCount >= MAX_RETRY_COUNT) {
+          console.error('[payments/webhook] retry limit atingido:', providerEvent);
+          await audit('payment_webhook', {
+            success: false,
+            reason: 'retry_limit',
+            externalId: resourceId
+          });
+          return sendJson(res, 200, { ok: true, ignored: 'retry_limit' });
+        }
+
+        // Incrementa contador de retry
+        await supabaseAdminRequest(
+          `/rest/v1/payments_events?id=eq.${encodeURIComponent(existing.id)}`,
+          {
+            method: 'PATCH',
+            headers: { Prefer: 'return=minimal' },
+            body: JSON.stringify({ retry_count: retryCount + 1 })
+          }
+        ).catch(() => {});
+
+        eventRow = existing;
+        console.warn(
+          '[payments/webhook] reprocessando evento não processado:',
+          providerEvent,
+          'retry:',
+          retryCount + 1
+        );
+        // segue o fluxo normal (não retorna)
+      } else {
+        // Não encontrado (corrida) — fail-safe
+        console.error('[payments/webhook] evento duplicado sem registro:', providerEvent);
+        return sendJson(res, 502, { ok: false });
+      }
+    } else {
+      eventRow = inserted.body[0];
+    }
   } catch (error) {
     console.error('[payments/webhook] insert event:', error.message);
     return sendJson(res, 502, { ok: false });
