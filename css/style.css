@@ -2934,3 +2934,40 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   margin: 0 !important;
   padding: 0 !important;
 }
+
+/* ============================================================
+   ADMIN — dashboard: loading, erro e retry
+   ============================================================ */
+.stat-card .loading-hint {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.stat-card.is-error {
+  border-color: rgba(248, 113, 113, 0.3);
+}
+.stat-card.is-error .label {
+  color: var(--danger);
+}
+.btn-retry {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.btn-retry:hover {
+  background: rgba(212, 175, 55, 0.12);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.btn-retry:active {
+  transform: translateY(1px);
+}
