@@ -3177,3 +3177,91 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* ============================================================
+   ADMIN — Editor de frases
+   ============================================================ */
+.frases-editor__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.frases-editor__count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.frases-editor__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+/* Botão de reordenar */
+.frase-editor__order {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.frase-order-btn {
+  width: 26px;
+  height: 26px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.frase-order-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.frase-order-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Preview da frase (replica a .frase-card do site público) */
+.frase-editor__preview-wrap {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+.frase-preview {
+  background: var(--bg-elev);
+  border-left: 3px solid var(--accent);
+  padding: 1.2rem 1.4rem;
+  border-radius: 0 10px 10px 0;
+}
+.frase-preview p {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+.frase-preview .author {
+  display: block;
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
