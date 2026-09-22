@@ -1,11 +1,12 @@
 /* ============================================================
    api/public.js — Endpoints públicos consolidados
    ------------------------------------------------------------
-   GET /api/public                    → { ok, content, albums, tracks, plans }
+   GET /api/public                    → { ok, content, albums, tracks, plans, rentalPlans }
    GET /api/public?resource=content   → { ok, data, version, updatedAt }
    GET /api/public?resource=albums    → { ok, albums: [...] }
    GET /api/public?resource=tracks    → { ok, tracks: [...] }
    GET /api/public?resource=plans     → { ok, currency, plans: [...] }
+   GET /api/public?resource=rental-plans → { ok, rentalPlans: [...] }
    HEAD /api/public[?resource=...]    → mesmos headers, sem body
 
    - Só GET e HEAD
@@ -13,6 +14,7 @@
    - Rate limit por IP (opcional)
    - NUNCA expõe URLs de áudio (vêm via /api/stream)
    - NUNCA expõe dados sensíveis
+   - Preços vêm das envs (fonte de verdade)
    ============================================================ */
 
 'use strict';
@@ -34,7 +36,26 @@ const RATE_WINDOW_MS = 60_000;
 const CACHE_AGGREGATE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
 const CACHE_PLANS = 'public, max-age=300, s-maxage=300, stale-while-revalidate=3600';
 
-const VALID_RESOURCES = new Set(['content', 'albums', 'tracks', 'plans']);
+const VALID_RESOURCES = new Set([
+  'content',
+  'albums',
+  'tracks',
+  'plans',
+  'rental-plans'
+]);
+
+// ─────────────────────────────────────────────────────────────
+// Rental plans — apenas metadata de exibição
+// ⚠️ Os PREÇOS vêm das envs (fonte de verdade).
+// ─────────────────────────────────────────────────────────────
+const RENTAL_PLAN_DEFS = [
+  { id: '24h', envKey: 'RENTAL_PRICE_24H', label: '24 horas', days: 1,  popular: false },
+  { id: '48h', envKey: 'RENTAL_PRICE_48H', label: '48 horas', days: 2,  popular: true  },
+  { id: '3d',  envKey: 'RENTAL_PRICE_3D',  label: '3 dias',   days: 3,  popular: false },
+  { id: '5d',  envKey: 'RENTAL_PRICE_5D',  label: '5 dias',   days: 5,  popular: false },
+  { id: '10d', envKey: 'RENTAL_PRICE_10D', label: '10 dias',  days: 10, popular: false },
+  { id: '15d', envKey: 'RENTAL_PRICE_15D', label: '15 dias',  days: 15, popular: false }
+];
 
 module.exports = async function handler(req, res) {
   res.setHeader('Allow', 'GET, HEAD');
@@ -60,12 +81,12 @@ module.exports = async function handler(req, res) {
 
   res.setHeader(
     'Cache-Control',
-    resource === 'plans' ? CACHE_PLANS : CACHE_AGGREGATE
+    resource === 'plans' || resource === 'rental-plans' ? CACHE_PLANS : CACHE_AGGREGATE
   );
 
   try {
     if (!resource) {
-      // ── Agregado: content + albums (com tracks) + tracks flat + plans
+      // ── Agregado: content + albums (com tracks) + tracks flat + plans + rentalPlans
       const [content, catalog, plans] = await Promise.all([
         fetchContent(),
         fetchAlbumsWithTracks(),
@@ -75,15 +96,18 @@ module.exports = async function handler(req, res) {
       if (!content.ok) return fail(res, method, 502, 'Conteúdo indisponível.');
       if (!catalog.ok) return fail(res, method, 502, 'Catálogo indisponível.');
 
+      const rentals = fetchRentalPlans();
+
       const payload = {
         ok: true,
         content: content.data,
         contentVersion: content.version,
         contentUpdatedAt: content.updatedAt,
-        albums: catalog.albums,       // ← NOVO: álbuns com tracks[] dentro
-        tracks: catalog.tracks,       // ← flat (compatibilidade)
+        albums: catalog.albums,
+        tracks: catalog.tracks,
         plans: plans.plans,
-        currency: plans.currency
+        currency: plans.currency,
+        rentalPlans: rentals.rentalPlans
       };
 
       return respond(res, method, payload);
@@ -118,6 +142,14 @@ module.exports = async function handler(req, res) {
         ok: true,
         currency: r.currency,
         plans: r.plans
+      });
+    }
+
+    if (resource === 'rental-plans') {
+      const r = fetchRentalPlans();
+      return respond(res, method, {
+        ok: true,
+        rentalPlans: r.rentalPlans
       });
     }
 
@@ -170,7 +202,7 @@ async function fetchAlbumsWithTracks() {
     ),
     supabaseAdminRequest(
       `/rest/v1/tracks?published=eq.true` +
-        `&select=album_id,track_index,title,duration,preview_start,preview_duration,price_cents,for_sale,lyrics` +
+        `&select=id,album_id,track_index,title,duration,preview_start,preview_duration,price_cents,for_sale,lyrics` +
         `&order=album_id.asc,track_index.asc` +
         `&limit=${MAX_TRACKS}`,
       { method: 'GET' }
@@ -205,7 +237,7 @@ async function fetchAlbumsWithTracks() {
     tracks: (byAlbum.get(a.id) || []).map((t) => mapTrack(t))
   }));
 
-  // Também retorna a lista flat (compatibilidade com consumidores antigos)
+  // Lista flat (compatibilidade)
   const flatTracks = trackRows.map((t) => mapTrack(t));
 
   return { ok: true, albums, tracks: flatTracks };
@@ -213,14 +245,11 @@ async function fetchAlbumsWithTracks() {
 
 // ─────────────────────────────────────────────────────────────
 // Tracks (flat)
-// ------------------------------------------------------------
-// ⚠️  NÃO retorna full_audio nem preview_audio.
-//     URLs de áudio vêm via /api/stream.
 // ─────────────────────────────────────────────────────────────
 async function fetchTracks() {
   const result = await supabaseAdminRequest(
     `/rest/v1/tracks?published=eq.true` +
-      `&select=album_id,track_index,title,duration,` +
+      `&select=id,album_id,track_index,title,duration,` +
       `preview_start,preview_duration,price_cents,for_sale,lyrics` +
       `&order=album_id.asc,track_index.asc` +
       `&limit=${MAX_TRACKS}`,
@@ -239,9 +268,13 @@ async function fetchTracks() {
 
 // ─────────────────────────────────────────────────────────────
 // Mapeia uma linha de `tracks` para o formato do cliente
+// ------------------------------------------------------------
+// ⚠️ Inclui o campo `id` (track.id) — obrigatório para
+//    playlists (que referenciam faixas por ID imutável).
 // ─────────────────────────────────────────────────────────────
 function mapTrack(t) {
   return {
+    id: t.id,
     albumId: t.album_id,
     trackIndex: t.track_index,
     title: t.title || '',
@@ -256,7 +289,7 @@ function mapTrack(t) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Plans
+// Plans (assinatura)
 // ─────────────────────────────────────────────────────────────
 async function fetchPlans() {
   const monthlyCents = parsePriceCents(process.env.MP_PREMIUM_MONTHLY_PRICE);
@@ -275,6 +308,32 @@ async function fetchPlans() {
     : { id: 'anual', priceCents: 0, interval: 'year', available: false });
 
   return { currency: 'BRL', plans };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Rental plans (aluguel de faixas)
+// ------------------------------------------------------------
+// Envs esperadas:
+//   RENTAL_PRICE_24H, RENTAL_PRICE_48H, RENTAL_PRICE_3D,
+//   RENTAL_PRICE_5D, RENTAL_PRICE_10D, RENTAL_PRICE_15D
+// ─────────────────────────────────────────────────────────────
+function fetchRentalPlans() {
+  const rentalPlans = RENTAL_PLAN_DEFS
+    .map((def) => {
+      const raw = process.env[def.envKey];
+      const price = Number(raw);
+      if (!Number.isFinite(price) || price <= 0) return null;
+      return {
+        id: def.id,
+        label: def.label,
+        days: def.days,
+        price,
+        popular: def.popular
+      };
+    })
+    .filter(Boolean);
+
+  return { rentalPlans };
 }
 
 // ─────────────────────────────────────────────────────────────
