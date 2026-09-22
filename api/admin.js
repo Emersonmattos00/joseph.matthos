@@ -34,6 +34,7 @@
        audio-preview → audio-preview   (público)
        audio-full    → audio-premium   (privado)
    - Playlists: sanitizadas para aceitar apenas track.id (integer)
+   - Ao mudar plano para "free", assinaturas no MP são canceladas
    ============================================================ */
 
 'use strict';
@@ -566,12 +567,6 @@ function sanitizePlaylists(playlists) {
 //   - 'image'          → site-assets     (público)
 //   - 'audio-preview'  → audio-preview   (público)
 //   - 'audio-full'     → audio-premium   (privado)
-//
-// Retorno:
-//   - Buckets públicos → { ok, url, path, bucket }
-//   - Bucket privado   → { ok, url: null, path, bucket }
-//     `path` deve ser gravado em tracks.full_path; a URL é
-//     assinada em runtime pelo /api/stream.
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
@@ -728,6 +723,15 @@ async function handleGetUsers(req, res) {
 
 // ─────────────────────────────────────────────────────────────
 // USERS — PATCH
+// ------------------------------------------------------------
+// Ao mudar para "free":
+//   1. Cancela assinaturas ativas no MP (provider=mercadopago)
+//   2. Marca assinaturas locais como "canceled"
+//   3. Auditoria com contagem de cancelamentos no MP
+// ------------------------------------------------------------
+// Ao mudar para "premium" ou "anual":
+//   - Cria assinatura manual no banco (provider=manual)
+//   - Cancela outras assinaturas ativas do mesmo usuário
 // ─────────────────────────────────────────────────────────────
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
@@ -752,7 +756,61 @@ async function handlePatchUser(req, res, session) {
 
     const targetUser = userCheck.body[0];
 
+    // ═══════════════════════════════════════════════════════════
+    // MUDANÇA PARA "free" — cancelar no MP + banco
+    // ═══════════════════════════════════════════════════════════
     if (plan === 'free') {
+      // ── 1) Buscar assinaturas ativas (antes de cancelar)
+      const subsRes = await supabaseAdminRequest(
+        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}` +
+          `&status=in.(authorized,trialing)` +
+          `&select=id,provider,provider_sub_id`,
+        { method: 'GET' }
+      );
+
+      const activeSubs = Array.isArray(subsRes.body) ? subsRes.body : [];
+
+      // ── 2) Cancelar no Mercado Pago (se provider for mercadopago)
+      const mpToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
+      let mpCancelledCount = 0;
+
+      if (mpToken && activeSubs.length) {
+        for (const sub of activeSubs) {
+          if (sub.provider !== 'mercadopago' || !sub.provider_sub_id) continue;
+
+          try {
+            const r = await fetch(
+              `https://api.mercadopago.com/preapproval/${encodeURIComponent(sub.provider_sub_id)}`,
+              {
+                method: 'PUT',
+                headers: {
+                  Authorization: `Bearer ${mpToken}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ status: 'cancelled' })
+              }
+            );
+
+            if (!r.ok) {
+              const text = await r.text().catch(() => '');
+              console.warn(
+                '[admin/users] MP cancel failed:',
+                sub.provider_sub_id,
+                r.status,
+                text.slice(0, 200)
+              );
+            } else {
+              console.log('[admin/users] MP cancel OK:', sub.provider_sub_id);
+              mpCancelledCount++;
+            }
+          } catch (err) {
+            // Não bloqueia — cancelamos localmente de qualquer forma
+            console.error('[admin/users] MP cancel error:', err.message);
+          }
+        }
+      }
+
+      // ── 3) Cancelar localmente
       const cancelRes = await supabaseAdminRequest(
         `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)`,
         {
@@ -768,38 +826,55 @@ async function handlePatchUser(req, res, session) {
       if (!cancelRes.response.ok) {
         return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
       }
-    } else {
-      const manualId = `manual_${userId}_${Date.now()}`;
-      const insertRes = await supabaseAdminRequest('/rest/v1/subscriptions', {
-        method: 'POST',
-        headers: { Prefer: 'return=minimal,resolution=merge-duplicates' },
-        body: JSON.stringify({
-          user_id: userId,
+
+      // ── 4) Auditoria estendida
+      await audit('user.plan.change', {
+        actor: session.user,
+        target: userId,
+        metadata: {
           plan,
-          status: 'authorized',
-          provider: 'manual',
-          provider_sub_id: manualId,
-          started_at: new Date().toISOString(),
+          email: targetUser.email || null,
+          mpCancelledCount,
+          activeSubs: activeSubs.length
+        }
+      });
+
+      return sendJson(res, 200, { ok: true, plan });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MUDANÇA PARA "premium" / "anual" — assinatura manual
+    // ═══════════════════════════════════════════════════════════
+    const manualId = `manual_${userId}_${Date.now()}`;
+    const insertRes = await supabaseAdminRequest('/rest/v1/subscriptions', {
+      method: 'POST',
+      headers: { Prefer: 'return=minimal,resolution=merge-duplicates' },
+      body: JSON.stringify({
+        user_id: userId,
+        plan,
+        status: 'authorized',
+        provider: 'manual',
+        provider_sub_id: manualId,
+        started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+    });
+    if (!insertRes.response.ok) {
+      return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
+    }
+
+    await supabaseAdminRequest(
+      `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)&provider_sub_id=neq.${encodeURIComponent(manualId)}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=minimal' },
+        body: JSON.stringify({
+          status: 'canceled',
+          canceled_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
         })
-      });
-      if (!insertRes.response.ok) {
-        return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
       }
-
-      await supabaseAdminRequest(
-        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)&provider_sub_id=neq.${encodeURIComponent(manualId)}`,
-        {
-          method: 'PATCH',
-          headers: { Prefer: 'return=minimal' },
-          body: JSON.stringify({
-            status: 'canceled',
-            canceled_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-        }
-      ).catch(() => {});
-    }
+    ).catch(() => {});
 
     await audit('user.plan.change', {
       actor: session.user,
@@ -924,14 +999,6 @@ function countBy(arr, key) {
 
 // ─────────────────────────────────────────────────────────────
 // AUDIT — leitura do histórico de eventos
-// ------------------------------------------------------------
-// GET /api/admin?action=audit&source=admin|auth&limit=100
-//
-// - source=admin (padrão) → lê de `admin_audit`
-//   Colunas: id, action, actor, target, metadata, ip, user_agent, created_at
-//
-// - source=auth → lê de `auth_audit_log`
-//   Colunas: id, event, email_hash, user_id, ip, user_agent, success, reason, created_at
 // ─────────────────────────────────────────────────────────────
 async function handleGetAudit(req, res) {
   const source = String(req.query?.source || 'admin').toLowerCase();
