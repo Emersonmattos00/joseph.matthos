@@ -11,7 +11,7 @@
    ⚠️  Arquivos em /js/admin/** NÃO entram no cache — sempre frescos
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v13';
+const CACHE_VERSION = 'jm-v15';
 
 // ─────────────────────────────────────────────────────────────
 // Assets estáticos
