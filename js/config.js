@@ -17,8 +17,7 @@
 
    🎯 Este arquivo é apenas FALLBACK:
      - Quando /api/public falha, o site usa o conteúdo daqui.
-     - Quando o backend funciona, o site lê do banco
-       (`site_content`, `albums`, `tracks`, `effective_plan`).
+     - Quando o backend funciona, o site lê do banco.
 
    📦 Fonte de verdade (produção):
      - `albums` + `tracks`   → estrutura da discografia
@@ -39,12 +38,6 @@ export const CONTENT_SCHEMA_VERSION = 3;
 
 // ─────────────────────────────────────────────────────────────
 // Conteúdo padrão
-// ------------------------------------------------------------
-// ⚠️ NÃO incluir `discografia.albums` aqui.
-//    Álbuns e faixas vêm de `albums` + `tracks` no Supabase.
-//
-// ⚠️ NÃO incluir preços nos planos.
-//    Preços vêm de /api/public (envs do servidor).
 // ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
@@ -118,8 +111,6 @@ export const DEFAULT_CONTENT = {
       description: "Uma seleção para entrar no universo de Joseph.",
       cover: "JM",
       // ⚠️ IDs são resolvidos via /api/public (tracks.id).
-      //    Este fallback usa referências simbólicas que o site
-      //    resolve em runtime; se não existirem, são ignoradas.
       tracks: []
     }
   ],
@@ -136,7 +127,6 @@ export const DEFAULT_CONTENT = {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
     // ⚠️ SEM `price` — preço sempre de /api/public (envs MP_PREMIUM_*).
-    //    Aqui só vivem textos, features e flags visuais.
     plans: [
       {
         id: "free",
@@ -230,12 +220,6 @@ export const DEFAULT_CONTENT = {
 //   RENTAL_PRICE_10D
 //   RENTAL_PRICE_15D
 //
-// Aqui só vivem:
-//   - id      → chave estável (NUNCA mude)
-//   - label   → texto exibido
-//   - days    → duração em dias
-//   - popular → flag visual (pode ser ajustada)
-//
 // Este array é usado APENAS como fallback quando /api/public
 // falha ou ainda não carregou. NUNCA exibe `price` daqui.
 // ─────────────────────────────────────────────────────────────
@@ -249,7 +233,7 @@ export const RENTAL_PLANS_FALLBACK = [
 ];
 
 // ─────────────────────────────────────────────────────────────
-// Labels de redes sociais (network → label)
+// Labels de redes sociais
 // ─────────────────────────────────────────────────────────────
 export const SOCIAL_LABELS = {
   spotify:   "Spotify",
@@ -284,7 +268,7 @@ export const PRICE_FORMATTER = new Intl.NumberFormat('pt-BR', {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Congelamento profundo (evita mutação acidental)
+// Congelamento profundo
 // ─────────────────────────────────────────────────────────────
 function deepFreeze(obj) {
   if (obj && typeof obj === 'object' && !Object.isFrozen(obj)) {
@@ -302,7 +286,7 @@ deepFreeze(SOCIAL_LABELS);
 deepFreeze(NETWORKS_ORDER);
 
 // ─────────────────────────────────────────────────────────────
-// Compatibilidade com código legado (site.js, store.js)
+// Compatibilidade com código legado
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
