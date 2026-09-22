@@ -118,10 +118,9 @@ export const DEFAULT_CONTENT = {
   loja: {
     enabled: true,
     title: "Loja de <span class=\"gold\">faixas</span>",
-    subtitle: "Compre músicas individuais. Pagamento único, download imediato, sem assinatura.",
+    subtitle: "Alugue músicas individuais. Pagamento único, sem assinatura.",
     currency: "BRL",
-    discount: { minItems: 3, percent: 10 },
-    showCart: true
+    showCart: false
   },
 
   planos: {
@@ -138,7 +137,7 @@ export const DEFAULT_CONTENT = {
         features: [
           { text: "Prévias de 30s de todas as faixas", ok: true },
           { text: "Acesso à discografia completa", ok: true },
-          { text: "Compra de faixas individuais", ok: true },
+          { text: "Aluguel de faixas individuais", ok: true },
           { text: "Faixas completas na assinatura", ok: false },
           { text: "Downloads ilimitados", ok: false }
         ],
@@ -155,7 +154,7 @@ export const DEFAULT_CONTENT = {
           { text: "Toda a discografia desbloqueada", ok: true },
           { text: "Áudio em alta qualidade", ok: true },
           { text: "Downloads ilimitados", ok: true },
-          { text: "Loja de faixas incluída", ok: true },
+          { text: "Aluguel de faixas incluído", ok: true },
           { text: "Cancele quando quiser", ok: true }
         ],
         cta: "Assinar Premium",
@@ -208,6 +207,21 @@ export const DEFAULT_CONTENT = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// Planos de aluguel — duração + preço
+// ------------------------------------------------------------
+// ⚠️ Os preços são validados no backend antes de criar
+//    o checkout. Aqui é só para exibição e escolha.
+// ─────────────────────────────────────────────────────────────
+export const RENTAL_PLANS = [
+  { id: '24h', label: '24 horas', days: 1,  price: 2.90,  popular: false },
+  { id: '48h', label: '48 horas', days: 2,  price: 4.90,  popular: true  },
+  { id: '3d',  label: '3 dias',   days: 3,  price: 6.90,  popular: false },
+  { id: '5d',  label: '5 dias',   days: 5,  price: 9.90,  popular: false },
+  { id: '10d', label: '10 dias',  days: 10, price: 14.90, popular: false },
+  { id: '15d', label: '15 dias',  days: 15, price: 19.90, popular: false }
+];
+
+// ─────────────────────────────────────────────────────────────
 // Labels de redes sociais (network → label)
 // ─────────────────────────────────────────────────────────────
 export const SOCIAL_LABELS = {
@@ -256,6 +270,7 @@ function deepFreeze(obj) {
 }
 
 deepFreeze(DEFAULT_CONTENT);
+deepFreeze(RENTAL_PLANS);
 deepFreeze(SOCIAL_LABELS);
 deepFreeze(NETWORKS_ORDER);
 
@@ -264,6 +279,7 @@ deepFreeze(NETWORKS_ORDER);
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
+  window.RENTAL_PLANS = RENTAL_PLANS;
   window.SOCIAL_LABELS = SOCIAL_LABELS;
   window.NETWORKS_ORDER = NETWORKS_ORDER;
   window.PRICE_FORMATTER = PRICE_FORMATTER;
