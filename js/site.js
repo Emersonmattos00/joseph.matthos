@@ -7,12 +7,16 @@
    - Login/signup/logout via /api/auth?action=*
    - Aluguel de faixa via /api/payments?type=rental → MP checkout
    - Assinatura via /api/payments?type=subscription → MP checkout
+   - Preços de aluguel vêm de /api/public (rentalPlans[]) — envs do servidor
    - Nenhum localStorage para dados de negócio
    - Sem onclick inline; tudo via data-action + delegação
-   - NÃO conhece o painel admin (responsabilidade de admin/index.js)
    ============================================================ */
 
-import { DEFAULT_CONTENT, SOCIAL_LABELS, RENTAL_PLANS } from './config.js';
+import {
+  DEFAULT_CONTENT,
+  SOCIAL_LABELS,
+  RENTAL_PLANS_FALLBACK
+} from './config.js';
 
 import {
   esc,
@@ -35,6 +39,7 @@ export const SITE = {
   albums: [],
   tracks: {},
   plans: {},
+  rentalPlans: [],       // ← preços vêm de /api/public
   user: null,
   rentals: [],
   viewMode: 'cards',
@@ -105,6 +110,7 @@ async function loadPublicData() {
       SITE.albums = [];
       SITE.tracks = {};
       SITE.plans = {};
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
       return;
     }
 
@@ -125,12 +131,32 @@ async function loadPublicData() {
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) if (p && p.id) SITE.plans[p.id] = p;
     }
+
+    // ── Rental plans (preços vêm do backend)
+    SITE.rentalPlans = [];
+    if (Array.isArray(json.rentalPlans)) {
+      SITE.rentalPlans = json.rentalPlans
+        .filter((p) => p && p.id && Number.isFinite(Number(p.price)))
+        .map((p) => ({
+          id: String(p.id),
+          label: String(p.label || p.id),
+          days: Number(p.days) || 1,
+          price: Number(p.price),
+          popular: !!p.popular
+        }));
+    }
+
+    if (!SITE.rentalPlans.length) {
+      console.warn('[site] /api/public não retornou rentalPlans — usando fallback sem preço');
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
+    }
   } catch (err) {
     console.warn('[public] falha, usando DEFAULT_CONTENT:', err?.message);
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
     SITE.tracks = {};
     SITE.plans = {};
+    SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
   }
 }
 
@@ -377,7 +403,6 @@ function renderPlans() {
     })
     .join('');
 
-  // Bind direto nos botões de assinatura
   grid.querySelectorAll('[data-plan]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
@@ -477,7 +502,7 @@ function renderDiscography() {
   container.classList.toggle('view-list', SITE.viewMode === 'list');
   container.innerHTML = html || '<p class="album-empty">Nada encontrado.</p>';
 
-  // Bind direto nos botões de alugar da discografia (garantia extra)
+  // Bind direto nos botões de alugar da discografia
   container.querySelectorAll('[data-action="open-rent"]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
@@ -582,17 +607,50 @@ function renderPlaylists() {
 }
 
 function resolvePlaylistTracks(playlist) {
-  return (playlist?.tracks || [])
-    .map((ref) => {
-      const [albumId, idxStr] = String(ref).split(':');
-      const album = findAlbum(albumId);
-      const idx = Number(idxStr);
-      if (!album || !Number.isInteger(idx)) return null;
-      const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-      if (!albumTracks[idx]) return null;
-      return { album, track: albumTracks[idx], trackIndex: idx };
-    })
-    .filter(Boolean);
+  if (!playlist || !Array.isArray(playlist.tracks)) return [];
+
+  // Constrói índice trackId → {album, track, trackIndex}
+  const index = new Map();
+  for (const album of SITE.albums || []) {
+    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    tracks.forEach((track, trackIndex) => {
+      if (track && track.id !== undefined && track.id !== null) {
+        index.set(Number(track.id), { album, track, trackIndex });
+      }
+    });
+  }
+
+  // Fallback legado: "albumId:index"
+  const legacyIndex = new Map();
+  for (const album of SITE.albums || []) {
+    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    tracks.forEach((track, trackIndex) => {
+      legacyIndex.set(`${album.id}:${trackIndex}`, { album, track, trackIndex });
+    });
+  }
+
+  const out = [];
+  for (const ref of playlist.tracks) {
+    // Formato novo: number
+    if (typeof ref === 'number' && Number.isFinite(ref)) {
+      const entry = index.get(ref);
+      if (entry) out.push(entry);
+      continue;
+    }
+
+    // Formato legado: string
+    if (typeof ref === 'string') {
+      const trimmed = ref.trim();
+      const asNum = Number(trimmed);
+      if (Number.isFinite(asNum) && String(asNum) === trimmed) {
+        const entry = index.get(asNum);
+        if (entry) { out.push(entry); continue; }
+      }
+      const legacy = legacyIndex.get(trimmed);
+      if (legacy) out.push(legacy);
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -615,10 +673,11 @@ function openRentModal(albumId, trackIndex) {
     return;
   }
 
+  const plans = SITE.rentalPlans;
   _rentContext = {
     albumId,
     trackIndex,
-    planId: RENTAL_PLANS[1]?.id || RENTAL_PLANS[0]?.id
+    planId: plans.find((p) => p.popular)?.id || plans[0]?.id || null
   };
 
   // Info da faixa
@@ -641,10 +700,22 @@ function openRentModal(albumId, trackIndex) {
   const albumEl = document.getElementById('rentTrackAlbum');
   if (albumEl) albumEl.textContent = `${album.title} · ${track.duration || ''}`.trim();
 
-  // Opções
   const optionsEl = document.getElementById('rentOptions');
   if (optionsEl) {
-    optionsEl.innerHTML = RENTAL_PLANS.map((p) => `
+    const hasPrices = plans.some((p) => p.price > 0);
+
+    if (!hasPrices) {
+      optionsEl.innerHTML = `
+        <p class="hint" style="color:var(--warning,#f0a100);text-align:center;padding:1rem;">
+          Preços indisponíveis no momento. Tente novamente em instantes.
+        </p>`;
+      const errEl2 = document.getElementById('rentError');
+      if (errEl2) errEl2.textContent = '';
+      openModal('rentModal');
+      return;
+    }
+
+    optionsEl.innerHTML = plans.map((p) => `
       <label class="rent-option ${p.id === _rentContext.planId ? 'selected' : ''}" data-plan="${esc(p.id)}">
         <input type="radio" name="rent-plan" value="${esc(p.id)}" ${p.id === _rentContext.planId ? 'checked' : ''}>
         <span>
@@ -683,6 +754,13 @@ async function confirmRent() {
   }
   if (!_rentContext.albumId || !_rentContext.planId) {
     if (errEl) errEl.textContent = 'Escolha um período.';
+    return;
+  }
+
+  // ── Verificação: o plano selecionado tem preço conhecido?
+  const selected = SITE.rentalPlans.find((p) => p.id === _rentContext.planId);
+  if (!selected || selected.price <= 0) {
+    if (errEl) errEl.textContent = 'Preço indisponível. Reabra o modal.';
     return;
   }
 
@@ -748,7 +826,6 @@ async function subscribe(planId) {
 // DELEGAÇÃO GLOBAL
 // ─────────────────────────────────────────────────────────────
 function bindGlobalEvents() {
-  // 1) Delegação global (fallback)
   document.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (!actionEl) return;
@@ -797,7 +874,6 @@ function bindGlobalEvents() {
     }
   });
 
-  // 2) Busca
   const shopSearch = document.getElementById('shopSearch');
   if (shopSearch && shopSearch.dataset.bound !== '1') {
     shopSearch.dataset.bound = '1';
@@ -807,7 +883,6 @@ function bindGlobalEvents() {
     }, 250));
   }
 
-  // 3) Filtros
   const filterBar = document.getElementById('filterBar');
   if (filterBar && filterBar.dataset.bound !== '1') {
     filterBar.dataset.bound = '1';
@@ -833,7 +908,6 @@ function bindGlobalEvents() {
     });
   }
 
-  // 4) Auth
   document.getElementById('loginBtn')?.addEventListener('click', () => openModal('loginModal'));
   document.getElementById('signupBtn')?.addEventListener('click', () => openModal('signupModal'));
   document.getElementById('userChip')?.addEventListener('click', openAccountModal);
@@ -866,10 +940,8 @@ function bindGlobalEvents() {
     e.target.reset();
   });
 
-  // 5) Confirmar aluguel
   document.getElementById('rentConfirmBtn')?.addEventListener('click', confirmRent);
 
-  // 6) Fechar modais
   document.querySelectorAll('[data-close]').forEach((el) => {
     if (el.dataset.bound === '1') return;
     el.dataset.bound = '1';
@@ -890,14 +962,12 @@ function bindGlobalEvents() {
     });
   });
 
-  // 7) ESC
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     document.querySelectorAll('.modal-overlay.open').forEach((m) => m.classList.remove('open'));
     document.body.style.overflow = '';
   });
 
-  // 8) Espaço play/pause
   document.addEventListener('keydown', (e) => {
     const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
     const pub = document.getElementById('publicSite');
@@ -1737,12 +1807,10 @@ function renderExpandedPlayerActions(albumId, trackIndex) {
     return;
   }
 
-  // HTML dos botões — com IDs únicos
   wrap.innerHTML = `
     <button class="btn btn-primary btn-sm" type="button" id="expandedRentBtn">Alugar</button>
     <button class="btn btn-ghost btn-sm" type="button" id="expandedPlansBtn">Assinar Premium</button>`;
 
-  // Bind direto — garante que abre o modal certo
   document.getElementById('expandedRentBtn')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1850,6 +1918,7 @@ if (document.readyState === 'loading') {
 
 window.__site = {
   get state() { return { ...SITE }; },
+  get rentalPlans() { return SITE.rentalPlans.slice(); },
   async reload() {
     await loadUser();
     applyContentToSite();
