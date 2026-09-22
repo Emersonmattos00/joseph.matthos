@@ -45,6 +45,7 @@
    40. RESPONSIVO — site público
    41. RESPONSIVO — admin
    42. PLAYER — botão tela cheia + fullscreen
+   43. CORREÇÃO — capa do álbum (mobile + fullscreen)
    ============================================================ */
 
 
@@ -586,8 +587,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 
 /* ============================================================
    10. DISCOGRAFIA — LISTA COMPACTA (ESTILO FILA)
-   ------------------------------------------------------------
-   Layout: [número] [capa] [título/duração à esquerda] [estado/ação]
    ============================================================ */
 .discography-scroll {
   display: flex;
@@ -723,9 +722,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 
 /* ============================================================
    11. DISCOGRAFIA — MODO LISTA (LEGADO)
-   ------------------------------------------------------------
-   Mantido apenas para compatibilidade. A lista compacta
-   (seção 10) já é o padrão.
    ============================================================ */
 #discographyContainer[data-view-mode="list"] .album-block.expanded .discography-scroll,
 #discographyContainer.view-list .album-block.expanded .discography-scroll {
@@ -1187,13 +1183,16 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-variant-numeric: tabular-nums;
 }
 
-/* Controles */
+/* ============================================================
+   CONTROLES — linha única: shuffle, prev, play, next, mute
+   ============================================================ */
 .controls {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1.2rem;
+  gap: 1rem;
   margin-bottom: 1rem;
+  flex-wrap: nowrap;
 }
 .control-btn {
   width: 44px;
@@ -1208,6 +1207,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: none;
   border: none;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .control-btn:hover {
   color: #f0d98f;
@@ -1236,6 +1236,15 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   fill: #1a1a1a;
 }
 
+/* Botão mute embutido na linha de controles */
+.control-btn-mute {
+  width: 40px;
+  height: 40px;
+  opacity: 0.6;
+}
+.control-btn-mute:hover { opacity: 1; }
+.control-btn-mute svg { width: 20px; height: 20px; fill: currentColor; }
+
 /* Shuffle */
 .control-btn-shuffle {
   opacity: 0.45;
@@ -1261,13 +1270,9 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: none !important;
 }
 
-/* Extras */
+/* Extras — escondido no desktop (o mute já está na linha) */
 .extra-controls {
-  display: flex;
-  justify-content: center;
-  gap: 1.2rem;
-  padding-top: 0.5rem;
-  margin-bottom: 1rem;
+  display: none;
 }
 .extra-btn {
   width: 36px;
@@ -2572,8 +2577,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 
 /* ============================================================
    39. Z-INDEX DOS MODAIS PÚBLICOS
-   ------------------------------------------------------------
-   Modais públicos ficam acima do player expandido.
    ============================================================ */
 #plansModal,
 #rentModal,
@@ -2653,13 +2656,14 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-bottom: none;
     overflow-y: visible;
   }
+  /* Capa no mobile — quadrada, centralizada, 280px */
   .music-player .album-cover {
-    max-width: 100%;
-    max-height: 42vh;
-    width: auto;
-    aspect-ratio: 1;
-    margin: 0 auto 20px;
-    border-radius: 12px;
+    width: min(70vw, 280px) !important;
+    max-width: min(70vw, 280px) !important;
+    max-height: none !important;
+    aspect-ratio: 1 / 1 !important;
+    margin: 0 auto 20px !important;
+    border-radius: 12px !important;
   }
   .music-player .track-title { font-size: 1.5rem; }
   .music-player .controls { padding: 0; gap: 8px; }
@@ -2863,12 +2867,12 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 }
 .music-player:fullscreen .album-cover,
 .music-player:-webkit-full-screen .album-cover {
-  max-width: none;
-  max-height: 55vh;
-  width: 100%;
-  aspect-ratio: 1;
-  margin-bottom: 32px;
-  border-radius: 18px;
+  max-width: min(100%, 480px) !important;
+  max-height: 55vh !important;
+  width: min(100%, 480px) !important;
+  aspect-ratio: 1 !important;
+  margin: 0 auto 32px !important;
+  border-radius: 18px !important;
 }
 .music-player:fullscreen .track-title,
 .music-player:-webkit-full-screen .track-title {
@@ -2910,4 +2914,22 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 .music-player:-webkit-full-screen .player-fullscreen svg {
   width: 26px;
   height: 26px;
+}
+
+
+/* ============================================================
+   43. CORREÇÃO — CAPA DO ÁLBUM NO PLAYER (mobile + fullscreen)
+   ============================================================ */
+.music-player .album-cover img {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  object-position: center !important;
+  display: block !important;
+  border-radius: inherit !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
