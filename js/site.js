@@ -32,8 +32,8 @@ import {
 // ─────────────────────────────────────────────────────────────
 export const SITE = {
   content: null,
-  albums: [],        // catálogo vem do Supabase via /api/public
-  tracks: {},        // índice flat: "albumId:trackIndex" → metadados da faixa
+  albums: [],
+  tracks: {},
   plans: {},
   user: null,
   rentals: [],
@@ -51,6 +51,12 @@ let previewNoticeTrackKey = '';
 let isSeeking = false;
 let lastVolume = 0.8;
 let muted = false;
+
+// Estado da fila e shuffle
+let playerQueue = [];        // [{ albumId, trackIndex }]
+let playerQueueIndex = -1;
+let shuffleEnabled = false;
+let savedQueueOrder = [];    // ordem original antes do shuffle
 
 // ─────────────────────────────────────────────────────────────
 // BOOT
@@ -398,8 +404,6 @@ function renderPlans() {
 
 // ─────────────────────────────────────────────────────────────
 // DISCOGRAFIA
-// ------------------------------------------------------------
-// Fonte de verdade: SITE.albums (vem do /api/public → banco)
 // ─────────────────────────────────────────────────────────────
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
@@ -512,26 +516,26 @@ function renderTrackCard(album, track, trackIndex) {
     ? ''
     : esc(album.coverInitials || album.cover || '♪');
 
-  const priceHTML = premium
-    ? '<div class="discography-track-price">✓<small>Premium ativo</small></div>'
+  // ── SEM PREÇO VISÍVEL — apenas estado
+  const stateHTML = premium
+    ? '<div class="discography-track-price">✓<small>Premium</small></div>'
     : rented
-    ? '<div class="discography-track-price">✓<small>Alugada</small></div>'
-    : forSale
-    ? `<div class="discography-track-price">${esc(
-        formatPrice(priceCents / 100)
-      )}<small>pagamento único</small></div>`
-    : '<div class="discography-track-price">🔒<small>exclusivo Premium</small></div>';
+    ? '<div class="discography-track-price">✓<small>Sua</small></div>'
+    : locked
+    ? '<div class="discography-track-price">🔒<small>Bloqueada</small></div>'
+    : '<div class="discography-track-price">▶<small>Ouvir prévia</small></div>';
 
+  // ── Botão alugar (sem preço visível)
   const actionButtons = (() => {
     if (premium || rented) return '';
     if (!forSale) return '';
     return `
       <button class="track-action-icon buy"
               type="button"
-              data-tooltip="Comprar"
-              data-action="buy-track"
+              data-tooltip="Alugar"
+              data-action="rent-track"
               data-album="${esc(album.id)}"
-              data-track="${trackIndex}">🛒</button>`;
+              data-track="${trackIndex}">🎫</button>`;
   })();
 
   return `
@@ -551,7 +555,7 @@ function renderTrackCard(album, track, trackIndex) {
           <span>${locked ? (track.previewDuration || 30) + 's prévia' : 'Completa'}</span>
         </div>
         <div class="discography-track-footer">
-          ${priceHTML}
+          ${stateHTML}
           ${actionButtons ? `<div class="track-actions">${actionButtons}</div>` : ''}
         </div>
       </div>
@@ -609,10 +613,10 @@ function resolvePlaylistTracks(playlist) {
 // ─────────────────────────────────────────────────────────────
 // COMPRA (rental) — MP checkout
 // ─────────────────────────────────────────────────────────────
-async function buyTrack(albumId, trackIndex) {
+async function rentTrack(albumId, trackIndex) {
   if (!SITE.user) {
-    toast('Entre na sua conta para comprar.', 'ℹ');
-    openModal('loginModal');
+    toast('Entre na sua conta para alugar.', 'ℹ');
+    openModal('plansModal');
     return;
   }
   if (isPremium() || isRented(albumId, trackIndex)) {
@@ -635,7 +639,7 @@ async function buyTrack(albumId, trackIndex) {
     }
     window.location.assign(json.checkoutUrl);
   } catch (err) {
-    console.error('[buy-track]', err);
+    console.error('[rent-track]', err);
     toast('Gateway de pagamento indisponível.', '⚠');
   }
 }
@@ -698,11 +702,22 @@ function bindGlobalEvents() {
         openExpandedPlayer(albumId, trackIndex);
         break;
       }
-      case 'buy-track': {
-        const btn = e.target.closest('[data-action="buy-track"]');
+      case 'rent-track': {
+        const btn = e.target.closest('[data-action="rent-track"]');
         if (!btn) break;
         e.stopPropagation();
-        await buyTrack(btn.dataset.album, Number(btn.dataset.track));
+        await rentTrack(btn.dataset.album, Number(btn.dataset.track));
+        break;
+      }
+      case 'play-queue': {
+        const btn = e.target.closest('[data-action="play-queue"]');
+        if (!btn) break;
+        const idx = Number(btn.dataset.queueIndex);
+        if (!Number.isInteger(idx) || !playerQueue[idx]) break;
+        playerQueueIndex = idx;
+        const item = playerQueue[idx];
+        playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+        renderQueue();
         break;
       }
       case 'open-playlist': {
@@ -1153,7 +1168,7 @@ function initPlayer() {
   audio.addEventListener('play', onPlay);
   audio.addEventListener('pause', onPause);
   audio.addEventListener('error', onError);
-  audio.addEventListener('ended', nextTrack);
+  audio.addEventListener('ended', onEnded);
   audio.addEventListener('loadedmetadata', syncProgress);
   audio.addEventListener('loadedmetadata', syncExpandedProgress);
 
@@ -1171,7 +1186,6 @@ function bindPlayerControls() {
   bind('nextBtn', nextTrack);
   bind('prevBtn', prevTrack);
   bind('muteBtn', toggleMute);
-  bind('downloadBtn', onDownloadClick);
   bind('lyricsBtn', () =>
     document.getElementById('lyricsDrawer')?.classList.toggle('open')
   );
@@ -1181,7 +1195,7 @@ function bindPlayerControls() {
   bind('expandedNextBtn', nextTrack);
   bind('expandedPrevBtn', prevTrack);
   bind('expandedMuteBtn', toggleMute);
-  bind('expandedDownloadBtn', onDownloadClick);
+  bind('expandedShuffleBtn', toggleShuffle);
   bind('closeLyrics', () =>
     document.getElementById('lyricsDrawer')?.classList.remove('open')
   );
@@ -1228,7 +1242,6 @@ function bindFullscreenBtn() {
   if (btn.dataset.bound === '1') return;
   btn.dataset.bound = '1';
 
-  // ── Detecção de suporte / iOS
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   const supportsFullscreen = !!(
     document.fullscreenEnabled ||
@@ -1287,14 +1300,135 @@ function bindFullscreenBtn() {
   document.addEventListener('MSFullscreenChange', onFsChange);
 }
 
-async function playFromDiscography(albumId, trackIndex) {
+// ─────────────────────────────────────────────────────────────
+// FILA E SHUFFLE
+// ─────────────────────────────────────────────────────────────
+function buildQueueForAlbum(albumId, startIndex) {
+  const album = findAlbum(albumId);
+  if (!album) {
+    playerQueue = [];
+    playerQueueIndex = -1;
+    return;
+  }
+  const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+
+  let indices = albumTracks.map((_, i) => i);
+
+  if (shuffleEnabled && indices.length > 1) {
+    indices = shuffleArray(indices);
+    const clickedPos = indices.indexOf(startIndex);
+    if (clickedPos > 0) {
+      [indices[0], indices[clickedPos]] = [indices[clickedPos], indices[0]];
+    }
+  }
+
+  playerQueue = indices.map((i) => ({ albumId, trackIndex: i }));
+  playerQueueIndex = playerQueue.findIndex(
+    (q) => q.albumId === albumId && q.trackIndex === startIndex
+  );
+
+  const shuffleBtn = document.getElementById('expandedShuffleBtn');
+  if (shuffleBtn) {
+    shuffleBtn.hidden = albumTracks.length <= 1;
+    shuffleBtn.classList.toggle(
+      'active',
+      shuffleEnabled && albumTracks.length > 1
+    );
+  }
+}
+
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function toggleShuffle() {
+  shuffleEnabled = !shuffleEnabled;
+
+  const shuffleBtn = document.getElementById('expandedShuffleBtn');
+  if (shuffleBtn) shuffleBtn.classList.toggle('active', shuffleEnabled);
+
+  if (currentTrackIdentity) {
+    buildQueueForAlbum(
+      currentTrackIdentity.albumId,
+      currentTrackIdentity.trackIndex
+    );
+    renderQueue();
+  }
+
+  toast(
+    shuffleEnabled ? 'Aleatório ativado.' : 'Aleatório desativado.',
+    '🔀'
+  );
+}
+
+function renderQueue() {
+  const wrap = document.getElementById('expandedPlayerQueue');
+  const list = document.getElementById('expandedQueueList');
+  const count = document.getElementById('expandedQueueCount');
+  if (!wrap || !list) return;
+
+  if (playerQueue.length <= 1) {
+    wrap.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+
+  wrap.hidden = false;
+  if (count) count.textContent = `${playerQueue.length} faixas`;
+
+  list.innerHTML = playerQueue
+    .map((item, idx) => {
+      const album = findAlbum(item.albumId);
+      if (!album) return '';
+      const track = (album.tracks || [])[item.trackIndex];
+      if (!track) return '';
+
+      const isCurrent = idx === playerQueueIndex;
+      const locked = isLocked(item.albumId, item.trackIndex);
+
+      const coverStyle = album.coverImage
+        ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
+        : '';
+      const coverText = album.coverImage
+        ? ''
+        : esc(album.coverInitials || album.cover || '♪');
+
+      return `
+        <button class="queue-track ${isCurrent ? 'playing' : ''}"
+                type="button"
+                data-action="play-queue"
+                data-queue-index="${idx}">
+          <span class="queue-track-index">${isCurrent ? '▶' : idx + 1}</span>
+          <span class="queue-track-cover" ${coverStyle}>${coverText}</span>
+          <span class="queue-track-info">
+            <span class="queue-track-title">${esc(track.title)}</span>
+            <span class="queue-track-duration">${esc(track.duration || '—')}</span>
+          </span>
+          <span class="queue-track-lock">${locked ? '🔒' : '▶'}</span>
+        </button>`;
+    })
+    .join('');
+}
+
+// ─────────────────────────────────────────────────────────────
+// PLAYER — playFromDiscography (com fila)
+// ─────────────────────────────────────────────────────────────
+async function playFromDiscography(albumId, trackIndex, opts = {}) {
   const album = findAlbum(albumId);
   if (!album) return;
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
   const track = albumTracks[trackIndex];
   if (!track) return;
 
-  // 1) Pede URL ao backend (com verificação de permissão)
+  if (!opts.fromQueue) {
+    buildQueueForAlbum(albumId, trackIndex);
+  }
+
   let streamData;
   try {
     const r = await fetch(
@@ -1321,7 +1455,6 @@ async function playFromDiscography(albumId, trackIndex) {
     return;
   }
 
-  // 2) Configura identidade + preview state
   currentTrackIdentity = {
     albumId,
     trackIndex,
@@ -1339,11 +1472,9 @@ async function playFromDiscography(albumId, trackIndex) {
 
   previewNoticeTrackKey = '';
 
-  // 3) Carrega áudio
   audio.src = src;
   audio.load();
 
-  // 4) Atualiza UI
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
@@ -1374,6 +1505,8 @@ async function playFromDiscography(albumId, trackIndex) {
 
   renderLyrics(track);
   syncExpandedPlayer(track, album, unlocked);
+  renderExpandedPlayerActions(albumId, trackIndex);
+  renderQueue();
   updatePlayingHighlight();
 
   try {
@@ -1396,42 +1529,32 @@ function togglePlay() {
 }
 
 function nextTrack() {
-  if (!currentTrackIdentity) return;
-  const albums = SITE.albums;
-  for (const album of albums) {
-    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-    for (let i = 0; i < albumTracks.length; i++) {
-      const isCurrent =
-        currentTrackIdentity.albumId === album.id &&
-        currentTrackIdentity.trackIndex === i;
-      if (isCurrent) {
-        if (i + 1 < albumTracks.length) {
-          return playFromDiscography(album.id, i + 1);
-        }
-        return;
-      }
-    }
+  if (!playerQueue.length || playerQueueIndex < 0) return;
+  if (playerQueueIndex + 1 >= playerQueue.length) {
+    // Fim da fila: pausa
+    audio.pause();
+    return;
   }
+  playerQueueIndex++;
+  const item = playerQueue[playerQueueIndex];
+  playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
 }
 
 function prevTrack() {
-  if (!audio || !currentTrackIdentity) return;
+  if (!audio || !playerQueue.length || playerQueueIndex < 0) return;
   if (audio.currentTime > 3 && !previewState.active) {
     audio.currentTime = 0;
     return;
   }
-  const albums = SITE.albums;
-  for (const album of albums) {
-    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-    for (let i = 0; i < albumTracks.length; i++) {
-      const isCurrent =
-        currentTrackIdentity.albumId === album.id &&
-        currentTrackIdentity.trackIndex === i;
-      if (isCurrent && i > 0) {
-        return playFromDiscography(album.id, i - 1);
-      }
-    }
-  }
+  if (playerQueueIndex - 1 < 0) return;
+  playerQueueIndex--;
+  const item = playerQueue[playerQueueIndex];
+  playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+}
+
+function onEnded() {
+  // Toca próxima automaticamente
+  nextTrack();
 }
 
 function toggleMute() {
@@ -1449,7 +1572,6 @@ function toggleMute() {
 }
 
 function updateMuteButtons() {
-  // Barra fixa do rodapé — usa emoji/texto
   const icon =
     muted || audio?.volume === 0
       ? '🔇'
@@ -1459,7 +1581,6 @@ function updateMuteButtons() {
   const btn = document.getElementById('muteBtn');
   if (btn) btn.textContent = icon;
 
-  // Player expandido — troca o SVG
   const expBtn = document.getElementById('expandedMuteBtn');
   if (expBtn) {
     const svg = expBtn.querySelector('svg');
@@ -1480,40 +1601,6 @@ function updateVolumeFill() {
   const bar = document.getElementById('volumeBar');
   if (bar && audio) {
     bar.setAttribute('aria-valuenow', Math.round(audio.volume * 100));
-  }
-}
-
-async function onDownloadClick() {
-  if (!currentTrackIdentity) {
-    toast('Toque uma faixa primeiro.', 'ℹ');
-    return;
-  }
-
-  try {
-    const r = await fetch(
-      `/api/stream?albumId=${encodeURIComponent(currentTrackIdentity.albumId)}` +
-      `&trackIndex=${currentTrackIdentity.trackIndex}`,
-      { credentials: 'same-origin' }
-    );
-    const data = await r.json();
-
-    if (!r.ok || !data?.ok || !data.unlocked || !data.fullUrl) {
-      toast('Compre ou assine para baixar.', '🔒');
-      return;
-    }
-
-    const a = document.createElement('a');
-    a.href = data.fullUrl;
-    a.download = `Joseph Matthos - ${currentTrackIdentity.trackTitle}.mp3`;
-    a.target = '_blank';
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    toast('Download iniciado.', '⬇');
-  } catch (err) {
-    console.error('[download]', err);
-    toast('Erro ao baixar.', '⚠');
   }
 }
 
@@ -1589,7 +1676,7 @@ function onTimeUpdate() {
 
     const key = currentTrackIdentity ? currentTrackIdentity.identity : '';
     if (previewNoticeTrackKey !== key) {
-      toast('Prévia encerrada. Compre ou assine para ouvir completa.', '🎧');
+      toast('Prévia encerrada. Alugue ou assine para ouvir completa.', '🎧');
       previewNoticeTrackKey = key;
     }
   }
@@ -1686,7 +1773,6 @@ function onPlay() {
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.add('spinning');
 
-  // Player expandido: troca ícone do SVG
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.add('playing');
@@ -1701,7 +1787,6 @@ function onPause() {
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.remove('spinning');
 
-  // Player expandido: volta ao ícone play
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.remove('playing');
@@ -1730,7 +1815,6 @@ function openExpandedPlayer(albumId, trackIndex) {
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  // Reset: volta pra tab "Música" no mobile
   const player = modal.querySelector('.music-player');
   const musicTab = modal.querySelector('.mobile-tab[data-tab="music"]');
   if (player && musicTab) {
@@ -1743,7 +1827,6 @@ function openExpandedPlayer(albumId, trackIndex) {
   }
 
   playFromDiscography(albumId, trackIndex);
-  renderExpandedPlayerActions(albumId, trackIndex);
 }
 
 function closeExpandedPlayer() {
@@ -1751,7 +1834,10 @@ function closeExpandedPlayer() {
   if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
 
-  // Se estiver em fullscreen, sai
+  // Limpa fila
+  playerQueue = [];
+  playerQueueIndex = -1;
+
   const fsEl =
     document.fullscreenElement ||
     document.webkitFullscreenElement ||
@@ -1780,27 +1866,25 @@ function renderExpandedPlayerActions(albumId, trackIndex) {
 
   if (isPremium()) {
     wrap.innerHTML =
-      '<span class="expanded-access">Premium: álbum completo liberado</span>';
+      '<span class="expanded-access">✓ Premium: acesso completo</span>';
     return;
   }
   if (isRented(albumId, trackIndex)) {
     wrap.innerHTML =
-      '<span class="expanded-access">Você tem acesso a esta faixa</span>';
+      '<span class="expanded-access">✓ Você alugou esta faixa</span>';
     return;
   }
 
-  const cents = trackPriceCents(albumId, trackIndex);
-  const priceText = cents > 0 ? formatPrice(cents / 100) : '';
+  const loggedIn = !!SITE.user;
+
+  // Alugar: deslogado → abre planos; logado → disabled
+  const rentBtn = loggedIn
+    ? `<button class="btn btn-primary btn-sm" disabled aria-disabled="true">Alugar</button>`
+    : `<button class="btn btn-primary btn-sm" data-action="open-plans">Alugar</button>`;
 
   wrap.innerHTML = `
-    <button class="btn btn-primary btn-sm"
-            data-action="buy-track"
-            data-album="${esc(albumId)}"
-            data-track="${trackIndex}">
-      ${priceText ? `Comprar ${esc(priceText)}` : 'Comprar'}
-    </button>
-    <button class="btn btn-ghost btn-sm"
-            data-action="open-plans">
+    ${rentBtn}
+    <button class="btn btn-ghost btn-sm" data-action="open-plans">
       Assinar Premium
     </button>`;
 }
