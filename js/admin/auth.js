@@ -5,6 +5,8 @@
    - Atalho global Ctrl+Shift+A
    - Abre o painel quando ?admin está na URL
    - FLUXO CORRIGIDO: sessão → bootContent → dashboard
+   - OTIMIZAÇÃO: após login, NÃO refaz /session (reusa a sessão
+     recém-confirmada) — evita requisição duplicada
    - Propaga erros 401/403/429/503 para o caller
    ============================================================ */
 
@@ -49,14 +51,43 @@ function showSessionLoading() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Entrar no dashboard (SEM refazer /session)
+// ------------------------------------------------------------
+// Usado:
+//   - por openAdminSite() após confirmar sessão via /session
+//   - por onLoginSubmit() após /login bem-sucedido
+// ============================================================
+async function enterAdminDashboard(user) {
+  // 1) UI
+  setDisplay('publicSite', 'none');
+  setDisplay('adminSite', 'block');
+  document.body.style.paddingBottom = '0';
+  window.scrollTo(0, 0);
+
+  // 2) Estado
+  AdminState.user = user || { user: 'admin' };
+  showAdminDashboard();
+
+  // 3) Conteúdo
+  if (window.__admin && typeof window.__admin.bootContent === 'function') {
+    try {
+      await window.__admin.bootContent();
+    } catch (err) {
+      console.error('[admin] bootContent falhou:', err);
+    }
+  } else {
+    console.warn('[admin] __admin.bootContent indisponível — conteúdo não carregado.');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Abrir painel — orquestrador único
 // ------------------------------------------------------------
 // Fluxo:
 //   showAdminRoot → /session
 //      ├─ 401/403 → showAdminLogin (sem tentar carregar conteúdo)
 //      ├─ erro de rede/5xx → showAdminLogin (fail-safe)
-//      └─ OK → showAdminDashboard → __admin.bootContent()
-//                        (loadContent → applyContent → dashboard)
+//      └─ OK → enterAdminDashboard → __admin.bootContent()
 // ─────────────────────────────────────────────────────────────
 export async function openAdminSite() {
   setDisplay('publicSite', 'none');
@@ -70,7 +101,6 @@ export async function openAdminSite() {
     session = await apiFetch('session', { method: 'GET' });
   } catch (err) {
     if (err?.status === 401 || err?.status === 403) {
-      // Sem sessão válida → login, sem carregar conteúdo
       showAdminLogin();
       return;
     }
@@ -95,22 +125,8 @@ export async function openAdminSite() {
     return;
   }
 
-  // ── Sessão OK → dashboard + carrega conteúdo
-  AdminState.user = session.user || { user: 'admin' };
-  showAdminDashboard();
-
-  // 🔴 CORREÇÃO CRÍTICA: carregar conteúdo após confirmar sessão
-  if (window.__admin && typeof window.__admin.bootContent === 'function') {
-    try {
-      await window.__admin.bootContent();
-    } catch (err) {
-      // bootContent já lida com 401/403 internamente (mostrando login).
-      // Aqui só registramos erros inesperados sem derrubar a UI.
-      console.error('[admin] bootContent falhou:', err);
-    }
-  } else {
-    console.warn('[admin] __admin.bootContent indisponível — conteúdo não carregado.');
-  }
+  // Sessão OK → dashboard + conteúdo
+  await enterAdminDashboard(session.user);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -204,8 +220,9 @@ function bindLoginElements() {
 // ─────────────────────────────────────────────────────────────
 // Login
 // ------------------------------------------------------------
-// Após POST /login bem-sucedido, delega o fluxo completo
-// para openAdminSite() — sessão → bootContent → dashboard.
+// OTIMIZAÇÃO: após POST /login bem-sucedido, NÃO refazemos
+// /session — a resposta do /login já confirma a autenticação.
+// Chamamos enterAdminDashboard() diretamente.
 // ─────────────────────────────────────────────────────────────
 async function onLoginSubmit(e) {
   e.preventDefault();
@@ -247,12 +264,12 @@ async function onLoginSubmit(e) {
       return;
     }
 
-    AdminState.user = { user: result.user || user };
+    // ✅ Login OK. NÃO refazemos /session.
+    //    A resposta de /login já é a confirmação de sessão.
     clearError('adminLoginError');
     form.reset();
 
-    // Fluxo único e confiável: sessão → conteúdo → dashboard
-    await openAdminSite();
+    await enterAdminDashboard({ user: result.user || user });
     toast('Bem-vindo ao painel.', '⚙');
 
   } catch (err) {
