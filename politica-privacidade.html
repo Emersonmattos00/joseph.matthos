@@ -14,7 +14,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
 
-<!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Política de Privacidade | Joseph Matthos">
 <meta property="og:description" content="Saiba como tratamos seus dados conforme a LGPD.">
@@ -35,9 +34,7 @@
     --border: #2b272f;
   }
 
-  html {
-    scroll-behavior: smooth;
-  }
+  html { scroll-behavior: smooth; }
 
   body {
     background: var(--bg);
@@ -47,7 +44,6 @@
     min-height: 100vh;
   }
 
-  /* Acessibilidade: respeita preferência do usuário */
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
     *, *::before, *::after {
@@ -74,7 +70,6 @@
   }
   .back-link:hover { opacity: 0.7; }
 
-  /* ===== NAV ===== */
   .page-nav {
     display: flex;
     gap: 1.5rem;
@@ -169,7 +164,6 @@
   strong { color: var(--text); font-weight: 600; }
   a { color: var(--accent); }
 
-  /* ===== CODE ===== */
   code {
     font-family: 'Courier New', ui-monospace, monospace;
     background: rgba(212, 175, 55, 0.1);
@@ -219,7 +213,6 @@
     font-weight: 500;
   }
 
-  /* ===== TOC ===== */
   .toc {
     background: var(--card);
     border: 1px solid var(--border);
@@ -265,7 +258,6 @@
     font-weight: 500;
   }
 
-  /* ===== BACK TO TOP ===== */
   #backToTop {
     position: fixed;
     bottom: 2rem;
@@ -307,7 +299,6 @@
     #backToTop { bottom: 1rem; right: 1rem; width: 42px; height: 42px; }
   }
 
-  /* ===== IMPRESSÃO ===== */
   @media print {
     body { background: #fff; color: #000; }
     .back-link, .page-nav, #backToTop, footer { display: none; }
@@ -332,8 +323,8 @@
         Marco Civil da Internet (Lei nº 12.965/2014).
       </p>
       <p class="update-date">
-        Última atualização: <time datetime="2026-09-18">18 de setembro de 2026</time>
-        · Versão 1.1
+        Última atualização: <time datetime="2026-09-22">22 de setembro de 2026</time>
+        · Versão 1.2
       </p>
     </header>
 
@@ -348,6 +339,7 @@
         <li><a href="#transferencia">Transferência Internacional</a></li>
         <li><a href="#armazenamento">Armazenamento e Segurança</a></li>
         <li><a href="#retencao">Prazos de Retenção</a></li>
+        <li><a href="#publicidade">Publicidade e Serviços de Terceiros</a></li>
         <li><a href="#cookies">Cookies e Tecnologias Similares</a></li>
         <li><a href="#direitos">Seus Direitos como Titular</a></li>
         <li><a href="#menores">Crianças e Adolescentes</a></li>
@@ -365,7 +357,7 @@
         <strong>josephmatthos.vercel.app</strong> e suas funcionalidades.
       </p>
       <p>
-        Ao acessar, cadastrar-se, assinar planos ou comprar faixas na plataforma,
+        Ao acessar, cadastrar-se, assinar planos ou alugar faixas na plataforma,
         você concorda com as práticas descritas neste documento e com os
         <a href="termos-uso.html">Termos de Uso</a>. Caso não concorde, pedimos que
         não utilize nossos serviços.
@@ -378,7 +370,7 @@
       <h3>2.1 Dados fornecidos diretamente por você</h3>
       <ul>
         <li><strong>Cadastro:</strong> nome completo e endereço de e-mail.</li>
-        <li><strong>Assinaturas e compras:</strong> o modo demo usa validação local apenas para simulação; pagamentos reais estão bloqueados até a integração de um gateway compatível.</li>
+        <li><strong>Assinaturas e aluguéis:</strong> plano escolhido, faixa alugada e metadados da transação. Os dados de pagamento (cartão, CPF/CNPJ, endereço de cobrança) <strong>não passam pelos nossos servidores</strong> — são coletados diretamente pelo Mercado Pago no checkout.</li>
         <li><strong>Newsletter:</strong> nome e e-mail, mediante consentimento explícito.</li>
         <li><strong>Contato:</strong> mensagens enviadas voluntariamente por canais de atendimento.</li>
         <li><strong>Conteúdo enviado:</strong> arquivos de áudio e metadados associados, enviados por administradores através do painel de gestão.</li>
@@ -386,10 +378,10 @@
 
       <h3>2.2 Dados coletados automaticamente</h3>
       <ul>
-        <li>Dados técnicos eventualmente registrados pelo provedor de hospedagem e pelo serviço de banco de dados, como endereço IP, navegador e sistema operacional;</li>
+        <li>Dados técnicos registrados pelo provedor de hospedagem (Vercel) e pelo serviço de banco de dados (Supabase), como endereço IP, navegador e sistema operacional;</li>
         <li>Idioma, resolução de tela e informações necessárias ao funcionamento do site;</li>
         <li>Metadados de arquivos enviados (nome, tamanho, tipo MIME, data de upload) armazenados no banco de dados;</li>
-        <li>Interações com o player de áudio somente quando forem implementadas métricas compatíveis com esta política.</li>
+        <li>Logs de acesso e erro retidos por curtos períodos para fins de segurança e diagnóstico.</li>
       </ul>
 
       <h3>2.3 Dados que NÃO coletamos</h3>
@@ -399,20 +391,22 @@
         opinião política, filiação a sindicato, dados de saúde, vida sexual,
         dados genéticos ou biométricos.
       </p>
+      <p>
+        <strong>Não coletamos nem armazenamos dados de cartão de crédito</strong>.
+        Toda a captura e processamento de dados de pagamento é feita diretamente
+        pelo Mercado Pago, que atua como controlador independente desses dados.
+      </p>
 
       <div class="highlight-box">
         <p>
-          <strong>Nota técnica:</strong> Os dados de sessão e preferências da
-          plataforma são armazenados localmente no navegador via
-          <code>localStorage</code> e <code>IndexedDB</code>. Os arquivos de
-          áudio enviados pelo painel administrativo são armazenados no serviço
-          de armazenamento de objetos <strong>Supabase Storage</strong>. Os
-          metadados dos arquivos (nome, caminho, tamanho, tipo) são mantidos em
-          banco de dados PostgreSQL, enquanto o conteúdo real dos arquivos
-          reside no provedor de armazenamento backend. O acesso aos objetos é
-          controlado por políticas de Row Level Security (RLS) do PostgreSQL,
-          garantindo que apenas usuários autorizados possam ler, enviar ou
-          excluir arquivos.
+          <strong>Nota técnica:</strong> A sessão de usuários comuns é gerenciada
+          pelo Supabase Auth, que emite cookies HttpOnly. O painel administrativo
+          usa cookie próprio (<code>__Host-jm_admin</code>), HttpOnly e com
+          <code>SameSite=Lax</code>. Preferências de player (volume, mudo) ficam
+          apenas em memória durante a sessão. Os arquivos de áudio enviados pelo
+          painel administrativo são armazenados no <strong>Supabase Storage</strong>,
+          com metadados em PostgreSQL e acesso controlado por políticas de
+          Row Level Security (RLS).
         </p>
       </div>
     </section>
@@ -422,11 +416,12 @@
       <p>Utilizamos seus dados pessoais para:</p>
       <ul>
         <li>Criar e manter sua conta na plataforma;</li>
-        <li>Processar assinaturas e vendas de faixas;</li>
+        <li>Processar assinaturas e aluguéis de faixas;</li>
         <li>Liberar acesso a conteúdos premium e downloads;</li>
         <li>Armazenar e servir arquivos de áudio enviados pelo painel administrativo;</li>
         <li>Enviar comunicações sobre novas músicas, shows e atualizações (apenas com consentimento);</li>
         <li>Responder solicitações de suporte e contato;</li>
+        <li>Exibir publicidade por meio de parceiros (Google AdSense);</li>
         <li>Melhorar a experiência do usuário e a performance da plataforma;</li>
         <li>Cumprir obrigações legais, fiscais e regulatórias;</li>
         <li>Prevenir fraudes e garantir a segurança da plataforma.</li>
@@ -437,7 +432,7 @@
       <h2>4. Base Legal para o Tratamento</h2>
       <p>Tratamos seus dados com fundamento nas seguintes bases legais da LGPD:</p>
       <ul>
-        <li><strong>Consentimento (Art. 7º, I):</strong> newsletter e comunicações de marketing;</li>
+        <li><strong>Consentimento (Art. 7º, I):</strong> newsletter, comunicações de marketing e exibição de anúncios personalizados;</li>
         <li><strong>Execução de contrato (Art. 7º, V):</strong> fornecimento do serviço contratado (acesso a faixas, assinaturas, armazenamento de conteúdo);</li>
         <li><strong>Legítimo interesse (Art. 7º, IX):</strong> segurança da plataforma, prevenção a fraudes, análises agregadas;</li>
         <li><strong>Cumprimento de obrigação legal (Art. 7º, II):</strong> retenção de dados fiscais de compras.</li>
@@ -451,9 +446,11 @@
         Compartilhamentos só ocorrem nas seguintes hipóteses:
       </p>
       <ul>
-        <li><strong>Operadores de serviço:</strong> provedores de hospedagem (Vercel), CDN de fontes (Google Fonts), CDN de ícones (Cloudflare) e infraestrutura de banco de dados e armazenamento (Supabase), todos com políticas compatíveis com a LGPD;</li>
-        <li><strong>Supabase (Infraestrutura):</strong> fornece serviços de banco de dados PostgreSQL, autenticação e armazenamento de objetos, processando dados de arquivos enviados por administradores e seus metadados associados;</li>
-        <li><strong>Gateways de pagamento:</strong> quando integrados, compartilhamos apenas os dados necessários para processamento da transação;</li>
+        <li><strong>Vercel (hospedagem):</strong> processa logs de acesso para operar o site;</li>
+        <li><strong>Supabase (banco de dados, autenticação e Storage):</strong> processa dados de conta, metadados e arquivos enviados;</li>
+        <li><strong>Mercado Pago (pagamentos):</strong> atua como controlador independente dos dados de pagamento. Recomendamos ler a <a href="https://www.mercadopago.com.br/privacidade" target="_blank" rel="noopener noreferrer">Política de Privacidade do Mercado Pago</a>;</li>
+        <li><strong>Google (AdSense e Fonts):</strong> exibição de anúncios e carregamento de fontes;</li>
+        <li><strong>Cloudflare (Font Awesome via cdnjs):</strong> carregamento de ícones;</li>
         <li><strong>Obrigação legal:</strong> por ordem judicial ou requisição de autoridade competente;</li>
         <li><strong>Proteção de direitos:</strong> em situações que envolvam fraude, segurança ou defesa em processos.</li>
       </ul>
@@ -462,20 +459,21 @@
     <section id="transferencia">
       <h2>6. Transferência Internacional de Dados</h2>
       <p>
-        Alguns dos operadores que utilizamos — <strong>Vercel</strong> (hospedagem),
-        <strong>Google Fonts</strong> (tipografia), <strong>Cloudflare</strong>
-        (CDN de ícones) e <strong>Supabase</strong> (banco de dados e
-        armazenamento de objetos) — podem armazenar ou processar dados em
-        servidores localizados fora do Brasil, principalmente nos Estados Unidos.
-      </p>
-      <p>
-        Essas transferências são realizadas com base em:
+        Alguns dos operadores que utilizamos armazenam ou processam dados em
+        servidores localizados fora do Brasil, principalmente nos <strong>Estados
+        Unidos</strong>:
       </p>
       <ul>
-        <li>Cláusulas contratuais padrão aprovadas pela ANPD;</li>
-        <li>Certificações e políticas de privacidade dos operadores;</li>
-        <li>Salvaguardas adequadas conforme Art. 33 da LGPD.</li>
+        <li><strong>Vercel</strong> — hospedagem (região padrão: Washington, EUA);</li>
+        <li><strong>Supabase</strong> — banco de dados, autenticação e Storage (região padrão do plano gratuito: US East);</li>
+        <li><strong>Google</strong> — AdSense e Fonts;</li>
+        <li><strong>Cloudflare</strong> — CDN de ícones.</li>
       </ul>
+      <p>
+        Essas transferências são realizadas com base em cláusulas contratuais
+        padrão aprovadas pela ANPD e nas políticas de privacidade dos
+        operadores, conforme Art. 33 da LGPD.
+      </p>
       <p>
         Ao utilizar a plataforma, você reconhece e concorda com essas
         transferências internacionais, que são necessárias para o funcionamento
@@ -490,9 +488,10 @@
         contra acesso não autorizado, perda, alteração ou divulgação:
       </p>
       <ul>
-        <li>Senhas de usuários demo são processadas no navegador; credenciais administrativas em produção são validadas com <code>crypto.scrypt</code> no backend, com salt único por senha e comparação em tempo constante;</li>
+        <li>Senhas de usuários são gerenciadas pelo Supabase Auth com hash seguro;</li>
+        <li>Credenciais administrativas são validadas no backend com <code>crypto.scrypt</code>, salt único por senha e comparação em tempo constante;</li>
         <li>Arquivos enviados são armazenados em buckets do Supabase Storage com políticas de Row Level Security (RLS) que restringem leitura, escrita e exclusão a usuários autenticados e autorizados;</li>
-        <li>Comunicação via HTTPS (TLS 1.3) em todas as páginas e em todas as chamadas à API do Supabase;</li>
+        <li>Comunicação via HTTPS (TLS 1.2+) em todas as páginas e em todas as chamadas à API;</li>
         <li>Content Security Policy (CSP) configurada para prevenir XSS;</li>
         <li>Validação de entrada e sanitização em todos os pontos de interação;</li>
         <li>Retenção mínima necessária para as finalidades descritas.</li>
@@ -515,25 +514,51 @@
       <ul>
         <li><strong>Dados de conta:</strong> enquanto ativa + 6 meses após exclusão;</li>
         <li><strong>Dados fiscais (compras):</strong> 5 anos (obrigação legal — CTN);</li>
-        <li><strong>Logs de acesso:</strong> no mínimo 6 meses (Marco Civil da Internet, Art. 15);</li>
+        <li><strong>Logs de acesso (Vercel):</strong> retidos por curto período (tipicamente até 7 dias no plano de hospedagem);</li>
         <li><strong>Newsletter:</strong> até revogação do consentimento;</li>
         <li><strong>Dados de suporte:</strong> 2 anos após resolução;</li>
         <li><strong>Arquivos de áudio e metadados:</strong> enquanto o conteúdo permanecer publicado na plataforma, ou até solicitação de exclusão pelo titular ou administrador responsável.</li>
       </ul>
       <p>
         Após esses prazos, os dados são anonimizados ou eliminados de forma
-        segura, salvo quando a lei exigir retenção por período superior. A
-        exclusão de arquivos no Supabase Storage remove tanto o objeto no
-        backend quanto seus metadados no banco de dados.
+        segura, salvo quando a lei exigir retenção por período superior.
+      </p>
+    </section>
+
+    <section id="publicidade">
+      <h2>9. Publicidade e Serviços de Terceiros</h2>
+      <p>
+        A plataforma exibe anúncios por meio do <strong>Google AdSense</strong>
+        (ID <code>ca-pub-7190208592008203</code>). O Google pode:
+      </p>
+      <ul>
+        <li>Usar cookies e identificadores para exibir anúncios personalizados;</li>
+        <li>Coletar dados de navegação, endereço IP e informações do dispositivo;</li>
+        <li>Compartilhar dados com anunciantes conforme a política do Google.</li>
+      </ul>
+      <p>
+        Para saber mais, consulte a
+        <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener noreferrer">Política de Publicidade do Google</a>
+        e a
+        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Política de Privacidade do Google</a>.
+        Você pode desativar anúncios personalizados em
+        <a href="https://adssettings.google.com" target="_blank" rel="noopener noreferrer">adssettings.google.com</a>.
+      </p>
+      <p>
+        Também carregamos <strong>Google Fonts</strong> (tipografia) e
+        <strong>Font Awesome via cdnjs (Cloudflare)</strong> (ícones). Esses
+        serviços podem registrar o endereço IP do usuário durante o
+        carregamento dos arquivos.
       </p>
     </section>
 
     <section id="cookies">
-      <h2>9. Cookies e Tecnologias Similares</h2>
+      <h2>10. Cookies e Tecnologias Similares</h2>
       <p>Utilizamos as seguintes categorias:</p>
       <ul>
-        <li><strong>Essenciais:</strong> sessão do usuário, preferências de volume do player, carrinho de compras (obrigatórios para o funcionamento);</li>
-        <li><strong>Funcionais:</strong> lembrar suas preferências de aparência e plano escolhido;</li>
+        <li><strong>Essenciais:</strong> sessão do usuário (Supabase Auth, cookie <code>__Host-jm_admin</code> para o painel administrativo); obrigatórios para o funcionamento;</li>
+        <li><strong>Funcionais:</strong> preferências de aparência e escolhas de plano;</li>
+        <li><strong>Publicidade:</strong> cookies do Google AdSense e seus parceiros para exibir anúncios;</li>
         <li><strong>Analíticos:</strong> métricas agregadas de uso (quando habilitados).</li>
       </ul>
       <p>
@@ -543,12 +568,14 @@
       </p>
       <p>
         Respeitamos o sinal <code>Do Not Track</code> (DNT) do navegador. Quando
-        ativado, não utilizamos tecnologias analíticas de rastreamento.
+        ativado, não utilizamos tecnologias analíticas próprias de rastreamento
+        — mas os cookies de publicidade do Google podem continuar ativos,
+        conforme configurado nos controles de anúncios do Google.
       </p>
     </section>
 
     <section id="direitos">
-      <h2>10. Seus Direitos como Titular</h2>
+      <h2>11. Seus Direitos como Titular</h2>
       <p>
         Conforme o Art. 18 da LGPD, você pode solicitar, a qualquer momento e
         mediante requisição gratuita:
@@ -565,15 +592,13 @@
         <li>Revogação do consentimento previamente dado.</li>
       </ul>
       <p>
-        Para exercer qualquer desses direitos, basta enviar mensagem pelo
-        canal indicado na seção 13 desta política. A exclusão de arquivos
-        enviados por administradores remove o objeto do Supabase Storage e
-        seus metadados associados no banco de dados.
+        Para exercer qualquer desses direitos, envie mensagem pelo canal
+        indicado na seção 14 desta política.
       </p>
     </section>
 
     <section id="menores">
-      <h2>11. Crianças e Adolescentes</h2>
+      <h2>12. Crianças e Adolescentes</h2>
       <p>
         A plataforma não é direcionada a menores de 13 anos. Não coletamos
         intencionalmente dados de crianças. Caso tomemos conhecimento de que
@@ -587,7 +612,7 @@
     </section>
 
     <section id="alteracoes">
-      <h2>12. Alterações nesta Política</h2>
+      <h2>13. Alterações nesta Política</h2>
       <p>
         Esta Política pode ser atualizada periodicamente para refletir mudanças
         legais, operacionais ou de práticas de tratamento. A versão vigente
@@ -601,7 +626,7 @@
     </section>
 
     <section id="contato">
-      <h2>13. Como Entrar em Contato</h2>
+      <h2>14. Como Entrar em Contato</h2>
       <p>
         Para exercer seus direitos, tirar dúvidas sobre esta Política ou tratar
         de qualquer questão relacionada aos seus dados pessoais, entre em
@@ -631,21 +656,18 @@
         <span class="current-page" aria-current="page">Política de Privacidade</span>
       </p>
       <p style="margin-top:0.75rem;font-size:0.75rem;opacity:0.7;">
-        Versão 1.1 · Última atualização: 18 de setembro de 2026
+        Versão 1.2 · Última atualização: 22 de setembro de 2026
       </p>
     </footer>
   </div>
 
-  <!-- Botão "Voltar ao topo" -->
   <button type="button" id="backToTop" aria-label="Voltar ao topo">↑</button>
 
   <script>
     (function () {
       'use strict';
 
-      /* ============================================================
-         BOTÃO VOLTAR AO TOPO
-         ============================================================ */
+      /* BOTÃO VOLTAR AO TOPO */
       var backToTop = document.getElementById('backToTop');
       var scrollThreshold = 400;
 
@@ -664,9 +686,7 @@
       window.addEventListener('scroll', toggleBackToTop, { passive: true });
       toggleBackToTop();
 
-      /* ============================================================
-         ARIA-CURRENT NO TOC (destaca seção ativa)
-         ============================================================ */
+      /* ARIA-CURRENT NO TOC */
       var tocLinks = document.querySelectorAll('.toc a[href^="#"]');
       var sections = document.querySelectorAll('section[id]');
 
@@ -695,9 +715,7 @@
         });
       }
 
-      /* ============================================================
-         SMOOTH SCROLL COM OFFSET (para TOC)
-         ============================================================ */
+      /* SMOOTH SCROLL COM OFFSET */
       document.querySelectorAll('a[href^="#"]').forEach(function (link) {
         link.addEventListener('click', function (e) {
           var targetId = link.getAttribute('href').slice(1);
@@ -714,21 +732,16 @@
             block: 'start'
           });
 
-          // Atualiza a URL sem recarregar
           if (history.pushState) {
             history.pushState(null, '', '#' + targetId);
           }
 
-          // Foco para acessibilidade
           target.setAttribute('tabindex', '-1');
           target.focus({ preventScroll: true });
         });
       });
 
-      /* ============================================================
-         LOG (para debug)
-         ============================================================ */
-      console.log('[privacidade] Página carregada · Versão 1.1');
+      console.log('[privacidade] Página carregada · Versão 1.2');
     })();
   </script>
 </body>
