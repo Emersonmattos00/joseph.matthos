@@ -43,7 +43,7 @@
    38. ADMIN — acessibilidade
    39. RESPONSIVO — site público
    40. RESPONSIVO — admin
-   41. PLAYER EXPANDIDO — fila / shuffle / fullscreen / mobile Spotify
+   41. CORREÇÃO — z-index de modais acima do player
    ============================================================ */
 
 
@@ -1142,21 +1142,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 /* ============================================================
    17. PLAYER EXPANDIDO — ESTILO SPOTIFY + FILA + MARCA D'ÁGUA
-   ------------------------------------------------------------
-   Estrutura:
-   ┌──────────────────────────────────────────────────────┐
-   │ [fullscreen] [fechar]                                 │
-   │ ┌─────────────┐  ┌──────────────────────────────┐    │
-   │ │  coluna     │  │  coluna letra                │    │
-   │ │  player     │  │  (sincronizada)              │    │
-   │ │  (capa,     │  │                              │    │
-   │ │   título,   │  │  linha 1                     │    │
-   │ │   progresso,│  │  linha 2                     │    │
-   │ │   controles)│  │  linha 3 ← ativa             │    │
-   │ │  + fila     │  │                              │    │
-   │ └─────────────┘  └──────────────────────────────┘    │
-   │ [mobile-tabs]                                         │
-   └──────────────────────────────────────────────────────┘
    ============================================================ */
 
 /* ── Overlay com marca d'água tema.webp ───────────────────── */
@@ -1233,7 +1218,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   fill: currentColor;
 }
 
-/* ── Botão tela cheia (ao lado do fechar) ─────────────────── */
+/* ── Botão tela cheia ─────────────────────────────────────── */
 .player-fullscreen {
   position: absolute;
   top: 16px;
@@ -1269,6 +1254,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .music-player:-moz-full-screen .player-fullscreen .icon-enter { display: none; }
 .music-player:-moz-full-screen .player-fullscreen .icon-exit { display: block; }
 
+@media (min-width: 769px) {
+  .player-fullscreen { display: flex; }
+}
+
 /* ── Grid principal ──────────────────────────────────────── */
 .player-grid {
   display: grid;
@@ -1278,7 +1267,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow: hidden;
 }
 
-/* ── Coluna esquerda (player) ────────────────────────────── */
+/* ── Coluna esquerda ─────────────────────────────────────── */
 .player-col {
   padding: 3rem 2rem 2rem;
   display: flex;
@@ -1301,7 +1290,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   flex: 1;
 }
 
-/* ── Capa quadrada grande (formato álbum) ────────────────── */
+/* ── Capa quadrada grande ────────────────────────────────── */
 .music-player .album-cover {
   width: 100%;
   max-width: 340px;
@@ -1322,7 +1311,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border: 1px solid rgba(212, 175, 55, 0.12);
 }
 
-/* ── Info da faixa ────────────────────────────────────────── */
+/* ── Info ─────────────────────────────────────────────────── */
 .track-info { text-align: center; margin-bottom: 0.8rem; }
 .track-title {
   font-family: 'Georgia', serif;
@@ -1340,7 +1329,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-style: italic;
 }
 
-/* ── Badge de prévia ─────────────────────────────────────── */
+/* ── Badge prévia ────────────────────────────────────────── */
 .preview-badge {
   display: none;
   text-align: center;
@@ -1384,7 +1373,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Controles principais ────────────────────────────────── */
+/* ── Controles ────────────────────────────────────────────── */
 .controls {
   display: flex;
   align-items: center;
@@ -1433,7 +1422,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   fill: #1a1a1a;
 }
 
-/* ── Botão aleatório (shuffle) ───────────────────────────── */
+/* ── Shuffle ──────────────────────────────────────────────── */
 .control-btn-shuffle {
   opacity: 0.45;
   position: relative;
@@ -1458,7 +1447,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: none !important;
 }
 
-/* ── Extras (mute) ────────────────────────────────────────── */
+/* ── Extras ───────────────────────────────────────────────── */
 .extra-controls {
   display: flex;
   justify-content: center;
@@ -1487,7 +1476,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .extra-btn svg { width: 20px; height: 20px; fill: currentColor; }
 
-/* ── Ações (Alugar / Assinar Premium) ────────────────────── */
+/* ── Ações (Alugar / Assinar Premium) ─────────────────────── */
 .player-actions {
   display: flex;
   gap: 0.6rem;
@@ -1496,6 +1485,8 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-top: auto;
   padding-top: 1rem;
   border-top: 1px solid rgba(212, 175, 55, 0.15);
+  position: relative;
+  z-index: 5;
 }
 .player-actions:empty { display: none; }
 .player-actions .btn {
@@ -1503,6 +1494,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   min-width: 130px;
   padding: 0.7rem 1.1rem;
   font-size: 0.82rem;
+  position: relative;
+  z-index: 6;
+  pointer-events: auto;
+  cursor: pointer;
 }
 .player-actions .btn:disabled,
 .player-actions .btn.btn-disabled {
@@ -1521,7 +1516,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 
 /* ══════════════════════════════════════════════════════════════
-   FILA DE FAIXAS (A seguir) — abaixo do player
+   FILA DE FAIXAS
    ══════════════════════════════════════════════════════════════ */
 .player-queue {
   margin-top: 1.5rem;
@@ -1724,13 +1719,13 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 
 /* ══════════════════════════════════════════════════════════════
-   TABS MOBILE (ocultas no desktop)
+   TABS MOBILE
    ══════════════════════════════════════════════════════════════ */
 .mobile-tabs { display: none; }
 
 
 /* ══════════════════════════════════════════════════════════════
-   ESTADO FULLSCREEN — capa grande, layout expandido
+   FULLSCREEN
    ══════════════════════════════════════════════════════════════ */
 .music-player:fullscreen,
 .music-player:-webkit-full-screen {
@@ -1833,7 +1828,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   19. CARRINHO (MODAL + NAV)
+   19. CARRINHO
    ============================================================ */
 .cart-item {
   display: flex;
@@ -1972,7 +1967,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   22. REDES SOCIAIS (ÍCONES)
+   22. REDES SOCIAIS
    ============================================================ */
 .social-links { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
 
@@ -2531,7 +2526,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   26. ADMIN — BOTÃO SALVAR (DIRTY)
+   26. ADMIN — BOTÃO SALVAR
    ============================================================ */
 #adminSaveBtn.is-dirty {
   background: linear-gradient(135deg, var(--accent), #f0c95c);
@@ -2714,7 +2709,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   32. ADMIN — UPLOAD NO MODAL
+   32. ADMIN — UPLOAD
    ============================================================ */
 .admin-modal .upload-zone { padding: 0.9rem; font-size: 0.8rem; margin-top: 0.5rem; }
 .admin-modal .upload-zone:hover { background: rgba(212, 175, 55, 0.05); }
@@ -2763,7 +2758,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 
 /* ============================================================
-   34. ADMIN — REDES SOCIAIS (EDITOR)
+   34. ADMIN — REDES SOCIAIS
    ============================================================ */
 #socialEditor { display: flex; flex-direction: column; gap: 0.75rem; }
 #socialEditor .track-editor { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
@@ -3097,7 +3092,39 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .stat-card .value { font-size: 1.6rem; }
 }
 
-/* Exibe o botão fullscreen apenas em desktop/tablet (≥ 769px) */
-@media (min-width: 769px) {
-  .player-fullscreen { display: flex; }
+
+/* ============================================================
+   41. CORREÇÃO — Z-INDEX DE MODAIS ACIMA DO PLAYER
+   ============================================================ */
+
+/* Modais genéricos ficam ACIMA do player expandido (700) */
+#plansModal,
+#loginModal,
+#signupModal,
+#accountModal {
+  z-index: 800;
+}
+
+/* Quando o player está aberto, garante que os modais fiquem por cima */
+#expandedPlayerModal.open ~ #plansModal.open,
+#expandedPlayerModal.open ~ #loginModal.open,
+#expandedPlayerModal.open ~ #signupModal.open,
+#expandedPlayerModal.open ~ #accountModal.open {
+  z-index: 900;
+}
+
+/* Botões de ação dentro do player — garantir clique */
+.player-actions {
+  position: relative;
+  z-index: 5;
+}
+.player-actions .btn {
+  position: relative;
+  z-index: 6;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.player-actions .btn:disabled {
+  pointer-events: none;
+  cursor: not-allowed;
 }
