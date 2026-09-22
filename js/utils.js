@@ -8,6 +8,12 @@
    Nada aqui é específico do site, do admin ou do player.
    Tudo é determinístico, sem estado global mutável,
    exceto o timer interno do `toast`.
+
+   ⚠️ SEGURANÇA
+   ------------------------------------------------------------
+   - Hashing de senha NUNCA deve acontecer no cliente.
+   - Login/signup usam /api/auth?action=* (scrypt no servidor).
+   - Não reintroduza hashStr/verifyPassword aqui.
    ============================================================ */
 
 // ─────────────────────────────────────────────────────────────
@@ -307,74 +313,13 @@ export function toast(msg, icon) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// HASH DE SENHA (APENAS MODO DEV)
-// ------------------------------------------------------------
-// ⚠️  Nunca use isto em produção.
-//     O site.js e o admin usam /api/auth-* quando isProductionMode()
-//     é true. Este bloco existe apenas para o modo de desenvolvimento
-//     local, para não armazenar senhas em texto puro no localStorage.
-//
-//     Hash de senha DEVE ser feito no servidor com bcrypt/Argon2/scrypt.
-// ─────────────────────────────────────────────────────────────
-function _legacyHash(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) {
-    h = (h << 5) - h + str.charCodeAt(i);
-    h |= 0;
-  }
-  return 'h' + Math.abs(h).toString(36);
-}
-
-export async function hashStr(str) {
-  if (
-    typeof crypto !== 'undefined' &&
-    crypto.subtle &&
-    crypto.subtle.digest
-  ) {
-    try {
-      const enc = new TextEncoder().encode(str);
-      const buf = await crypto.subtle.digest('SHA-256', enc);
-      const hex = Array.from(new Uint8Array(buf))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      return 'sha256:' + hex;
-    } catch (e) {
-      console.warn('SubtleCrypto falhou, usando fallback legado:', e);
-    }
-  }
-  return _legacyHash(str);
-}
-
-export async function verifyPassword(plain, stored) {
-  if (!stored || typeof stored !== 'string') {
-    return { ok: false, needsMigration: false };
-  }
-
-  // Texto puro (legado)
-  if (stored === plain) {
-    return { ok: true, needsMigration: true };
-  }
-
-  // SHA-256
-  if (stored.indexOf('sha256:') === 0) {
-    const computed = await hashStr(plain);
-    return { ok: computed === stored, needsMigration: false };
-  }
-
-  // djb2 (legado)
-  if (stored.charAt(0) === 'h') {
-    const ok = _legacyHash(plain) === stored;
-    return { ok, needsMigration: ok };
-  }
-
-  return { ok: false, needsMigration: false };
-}
-
-// ─────────────────────────────────────────────────────────────
 // COMPATIBILIDADE COM CÓDIGO LEGADO (script clássico)
 // ------------------------------------------------------------
 // Permite que arquivos que ainda usam `esc(...)` sem import
 // continuem funcionando durante a migração para módulos ES.
+//
+// ⚠️ Não expõe funções de hashing/verificação de senha.
+//    Autenticação é 100% server-side via /api/auth?action=*.
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.esc = esc;
@@ -394,7 +339,5 @@ if (typeof window !== 'undefined') {
   window.compressImage = compressImage;
   window.luhnCheck = luhnCheck;
   window.toast = toast;
-  window.hashStr = hashStr;
-  window.verifyPassword = verifyPassword;
   window.isProductionMode = isProductionMode;
 }
