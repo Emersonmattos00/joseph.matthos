@@ -224,7 +224,7 @@
       </div>
     </div>
   </div>
-  <audio id="audio" preload="auto"></audio>
+  <audio id="audio" preload="metadata"></audio>
 
   <div class="lyrics-drawer" id="lyricsDrawer" aria-live="polite" aria-label="Letra sincronizada">
     <div class="lyrics-drawer-head">
@@ -368,7 +368,7 @@
         <div class="form-error" id="loginError" role="alert"></div>
         <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Entrar</button>
       </form>
-      <div class="modal-switch">Não tem conta? <a id="switchToSignup">Criar agora</a></div>
+      <div class="modal-switch">Não tem conta? <button type="button" class="link-button" id="switchToSignup">Criar agora</button></div>
     </div>
   </div>
 
@@ -385,7 +385,7 @@
         <div class="form-error" id="signupError" role="alert"></div>
         <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Criar conta grátis</button>
       </form>
-      <div class="modal-switch">Já tem conta? <a id="switchToLogin">Entrar</a></div>
+      <div class="modal-switch">Já tem conta? <button type="button" class="link-button" id="switchToLogin">Entrar</button></div>
     </div>
   </div>
 
@@ -458,14 +458,14 @@
   <div id="adminLogin" class="admin-login-wrap">
     <div class="admin-login-card">
       <div class="brand"><h1>Acesso Restrito</h1><p>Painel Administrativo</p></div>
-      <form id="adminLoginForm">
+      <form id="adminLoginForm" aria-describedby="adminLoginError" novalidate>
         <div class="form-group"><label for="adminUser">Usuário</label><input type="text" id="adminUser" required autocomplete="username"></div>
         <div class="form-group"><label for="adminPass">Senha</label><input type="password" id="adminPass" required autocomplete="current-password"></div>
         <div class="form-error" id="adminLoginError" role="alert"></div>
         <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;">Entrar no painel</button>
       </form>
       <button type="button" class="btn btn-ghost btn-block" id="adminForgotPassword" style="margin-top:0.75rem;">Esqueci minha senha</button>
-      <div class="modal-switch" style="margin-top:1.5rem;"><a id="backToSiteFromLogin">← Voltar ao site</a></div>
+      <div class="modal-switch" style="margin-top:1.5rem;"><button type="button" class="btn btn-ghost btn-sm" id="backToSiteFromLogin">← Voltar ao site</button></div>
     </div>
   </div>
 
@@ -627,7 +627,7 @@
       <div class="admin-section" id="tab-backup">
         <div class="admin-card">
           <h3>Backup</h3>
-          <p class="hint">Exporte ou importe todo o conteúdo do site.</p>
+          <p class="hint">Exporte ou importe o conteúdo configurável do site. Dados de usuários, vendas, banco de dados e arquivos de armazenamento não são incluídos neste backup.</p>
           <div id="backupInfo"></div>
           <div style="display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap;">
             <button class="btn btn-outline btn-sm" id="exportBtn">⬇ Exportar JSON</button>
