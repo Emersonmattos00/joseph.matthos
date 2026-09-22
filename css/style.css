@@ -418,7 +418,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── 10. Discografia — LISTA COMPACTA ─────────────────────── */
+/* ── 10. Discografia — LISTA COMPACTA (nome + duração à esquerda) ── */
 .discography-scroll {
   display: flex;
   flex-direction: column;
@@ -429,10 +429,10 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 }
 .discography-track-card {
   display: grid;
-  grid-template-columns: 28px 44px 1fr auto;
+  grid-template-columns: 40px 56px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
+  gap: 14px;
+  padding: 10px 14px;
   width: 100%;
   box-sizing: border-box;
   background: transparent;
@@ -450,8 +450,8 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   border-color: rgba(212,175,55,0.35);
 }
 .discography-track-card .track-index {
-  font-size: 0.8rem;
-  color: rgba(212,175,55,0.5);
+  font-size: 0.85rem;
+  color: rgba(212,175,55,0.55);
   text-align: center;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-sans);
@@ -461,8 +461,8 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   font-weight: 700;
 }
 .discography-track-card .track-cover {
-  width: 44px; height: 44px;
-  border-radius: 4px;
+  width: 56px; height: 56px;
+  border-radius: 6px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   background-size: cover;
   background-position: center;
@@ -470,7 +470,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   align-items: center;
   justify-content: center;
   font-family: var(--font-serif);
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   color: rgba(212,175,55,0.45);
   font-weight: 700;
   flex-shrink: 0;
@@ -479,11 +479,14 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .discography-track-card .track-info {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
   min-width: 0;
-  gap: 2px;
+  text-align: left;
 }
 .discography-track-card .track-title {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   color: #eee9e0;
   white-space: nowrap;
   overflow: hidden;
@@ -491,32 +494,37 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   font-family: var(--font-sans);
   font-weight: 500;
   line-height: 1.2;
+  text-align: left;
+  width: 100%;
 }
 .discography-track-card.playing .track-title {
   font-weight: 700;
   color: #f0d98f;
 }
 .discography-track-card .track-duration {
-  font-size: 0.72rem;
-  color: rgba(212,175,55,0.55);
+  font-size: 0.78rem;
+  color: rgba(212,175,55,0.65);
   font-family: var(--font-sans);
+  line-height: 1.2;
+  text-align: left;
 }
 .discography-track-card .track-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-shrink: 0;
+  justify-self: end;
 }
 .discography-track-card .track-state {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   color: rgba(212,175,55,0.6);
   font-family: var(--font-sans);
   white-space: nowrap;
 }
 .discography-track-card.playing .track-state { color: #f0d98f; }
 .discography-track-card .track-action-icon {
-  width: 30px; height: 30px;
-  font-size: 0.85rem;
+  width: 32px; height: 32px;
+  font-size: 0.9rem;
   border-radius: 50%;
   display: inline-grid;
   place-items: center;
@@ -2253,13 +2261,13 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     padding: 0.6rem 0.9rem;
   }
   .discography-track-card {
-    grid-template-columns: 24px 38px 1fr auto;
-    gap: 8px;
-    padding: 7px 8px;
+    grid-template-columns: 30px 44px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 8px 10px;
   }
-  .discography-track-card .track-cover { width: 38px; height: 38px; }
-  .discography-track-card .track-title { font-size: 0.85rem; }
-  .discography-track-card .track-duration { font-size: 0.68rem; }
+  .discography-track-card .track-cover { width: 44px; height: 44px; }
+  .discography-track-card .track-title { font-size: 0.88rem; }
+  .discography-track-card .track-duration { font-size: 0.72rem; }
   .discography-track-card .track-state { display: none; }
 }
 
