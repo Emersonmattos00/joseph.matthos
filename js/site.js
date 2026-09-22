@@ -1,5 +1,15 @@
 /* ============================================================
    SITE.JS — Joseph Matthos
+   ------------------------------------------------------------
+   - Conteúdo, faixas e planos vêm de /api/public (1 request)
+   - URLs de áudio vêm de /api/stream (com verificação)
+   - Usuário + aluguéis vêm de /api/auth?action=me
+   - Login/signup/logout via /api/auth?action=*
+   - Aluguel de faixa via /api/payments?type=rental → MP checkout
+   - Assinatura via /api/payments?type=subscription → MP checkout
+   - Nenhum localStorage para dados de negócio
+   - Sem onclick inline; tudo via data-action + delegação
+   - NÃO conhece o painel admin (responsabilidade de admin/index.js)
    ============================================================ */
 
 import { DEFAULT_CONTENT, SOCIAL_LABELS, RENTAL_PLANS } from './config.js';
@@ -33,6 +43,7 @@ export const SITE = {
   shopSearch: ''
 };
 
+// Estado do player
 let audio = null;
 let currentTrackIdentity = null;
 let previewState = { active: false, start: 0, end: Infinity };
@@ -41,9 +52,13 @@ let isSeeking = false;
 let lastVolume = 0.8;
 let muted = false;
 
+// Estado da fila e shuffle
 let playerQueue = [];
 let playerQueueIndex = -1;
 let shuffleEnabled = false;
+
+// Contexto do modal de aluguel
+let _rentContext = { albumId: null, trackIndex: null, planId: null };
 
 // ─────────────────────────────────────────────────────────────
 // BOOT
@@ -78,12 +93,13 @@ async function boot() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FETCH
+// FETCH DE DADOS
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
     const r = await fetch('/api/public', { credentials: 'same-origin' });
     const json = await r.json();
+
     if (!json || !json.ok) {
       SITE.content = clone(DEFAULT_CONTENT);
       SITE.albums = [];
@@ -91,21 +107,26 @@ async function loadPublicData() {
       SITE.plans = {};
       return;
     }
+
     SITE.content = json.content && typeof json.content === 'object'
-      ? json.content : clone(DEFAULT_CONTENT);
+      ? json.content
+      : clone(DEFAULT_CONTENT);
+
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
+
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
         if (t && t.albumId) SITE.tracks[`${t.albumId}:${t.trackIndex}`] = t;
       }
     }
+
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) if (p && p.id) SITE.plans[p.id] = p;
     }
   } catch (err) {
-    console.warn('[public] falha:', err?.message);
+    console.warn('[public] falha, usando DEFAULT_CONTENT:', err?.message);
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
     SITE.tracks = {};
@@ -117,6 +138,10 @@ async function loadUser() {
   if (!isProductionMode()) {
     SITE.user = null;
     SITE.rentals = [];
+    const loginBtn = document.getElementById('loginBtn');
+    const signupBtn = document.getElementById('signupBtn');
+    if (loginBtn) loginBtn.style.display = 'none';
+    if (signupBtn) signupBtn.style.display = 'none';
     return;
   }
   try {
@@ -136,18 +161,21 @@ async function loadUser() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// HELPERS
+// HELPERS DERIVADOS
 // ─────────────────────────────────────────────────────────────
 function isPremium() {
   return SITE.user && (SITE.user.plan === 'premium' || SITE.user.plan === 'anual');
 }
+
 function trackInfo(albumId, trackIndex) {
   return SITE.tracks[`${albumId}:${trackIndex}`] || null;
 }
+
 function trackPriceCents(albumId, trackIndex) {
   const info = trackInfo(albumId, trackIndex);
   return info && Number.isFinite(info.priceCents) ? info.priceCents : 0;
 }
+
 function isRented(albumId, trackIndex) {
   const key = `${albumId}:${trackIndex}`;
   const now = Date.now();
@@ -155,32 +183,45 @@ function isRented(albumId, trackIndex) {
     (r) => r.trackKey === key && new Date(r.expiresAt).getTime() > now
   );
 }
-function isLocked(albumId, trackIndex) {
-  return !isPremium() && !isRented(albumId, trackIndex);
+
+function ownsTrack(albumId, trackIndex) {
+  return isRented(albumId, trackIndex);
 }
+
+function isLocked(albumId, trackIndex) {
+  return !isPremium() && !ownsTrack(albumId, trackIndex);
+}
+
 function findAlbum(albumId) {
   return SITE.albums.find((a) => a.id === albumId) || null;
 }
 
 // ─────────────────────────────────────────────────────────────
-// APLICA CONTEÚDO
+// APLICA CONTEÚDO NO DOM
 // ─────────────────────────────────────────────────────────────
 function applyContentToSite() {
   const c = SITE.content;
   if (!c) return;
+
   document.title = c.branding?.meta?.title || 'Joseph Matthos';
   const metaDesc = document.querySelector('meta[name="description"]');
   if (metaDesc && c.branding?.meta?.description) {
     metaDesc.setAttribute('content', c.branding.meta.description);
   }
+
   const logo = document.getElementById('siteLogo');
   if (logo) {
-    logo.innerHTML = esc(c.branding?.nameParts?.first || 'Joseph') +
-      ' <span>' + esc(c.branding?.nameParts?.accent || 'Matthos') + '</span>';
+    logo.innerHTML =
+      esc(c.branding?.nameParts?.first || 'Joseph') +
+      ' <span>' +
+      esc(c.branding?.nameParts?.accent || 'Matthos') +
+      '</span>';
   }
+
   const footer = document.getElementById('footerText');
   if (footer) footer.textContent = c.branding?.footer || '';
 
+  // Aparência
   const a = c.aparencia || {};
   const root = document.documentElement.style;
   if (a.bg) root.setProperty('--bg', a.bg);
@@ -191,10 +232,12 @@ function applyContentToSite() {
 
   applyBackgroundImage(c.branding?.bgImage);
 
+  // Hero
   const heroTitle = document.getElementById('heroTitle');
   if (heroTitle) heroTitle.innerHTML = sanitizeRichText(c.hero?.title);
   const heroSub = document.getElementById('heroSub');
   if (heroSub) heroSub.textContent = c.hero?.subtitle || '';
+
   const bp = document.getElementById('heroBtnPrimary');
   if (bp) {
     bp.textContent = c.hero?.primaryBtn?.text || '';
@@ -205,8 +248,10 @@ function applyContentToSite() {
     bs.textContent = c.hero?.secondaryBtn?.text || '';
     bs.dataset.action = 'open-plans';
   }
+
   const lyricEl = document.getElementById('heroLyric');
   if (lyricEl) lyricEl.textContent = c.hero?.vinyl?.lyric || '';
+
   const vinyl = document.getElementById('heroVinyl');
   if (vinyl) {
     let coverDiv = vinyl.querySelector('.cover-img');
@@ -219,42 +264,56 @@ function applyContentToSite() {
     vinyl.classList.toggle('has-cover', !!c.hero?.vinyl?.image);
   }
 
+  // Sobre
   const sobreTitle = document.getElementById('sobreTitle');
   if (sobreTitle) sobreTitle.innerHTML = sanitizeRichText(c.sobre?.title);
   const sobreSub = document.getElementById('sobreSub');
   if (sobreSub) sobreSub.textContent = c.sobre?.subtitle || '';
   applyImageSafe(document.getElementById('sobreImg'), c.sobre?.image, 'has-img');
+
   const sobreText = document.getElementById('sobreText');
   if (sobreText) {
-    const paragraphs = String(c.sobre?.paragraphs || '').split('\n').filter((p) => p.trim());
-    sobreText.innerHTML = paragraphs.map((p) => `<p>${sanitizeHtml(p)}</p>`).join('') +
+    const paragraphs = String(c.sobre?.paragraphs || '')
+      .split('\n')
+      .filter((p) => p.trim());
+    sobreText.innerHTML =
+      paragraphs.map((p) => `<p>${sanitizeHtml(p)}</p>`).join('') +
       (c.sobre?.quote ? `<div class="quote">${esc(c.sobre.quote)}</div>` : '');
   }
 
+  // Filosofia
   const filTitle = document.getElementById('filosofiaTitle');
   if (filTitle) filTitle.innerHTML = sanitizeRichText(c.filosofia?.title);
   const filSub = document.getElementById('filosofiaSub');
   if (filSub) filSub.textContent = c.filosofia?.subtitle || '';
+
   const frasesGrid = document.getElementById('frasesGrid');
   if (frasesGrid) {
-    frasesGrid.innerHTML = (c.filosofia?.frases || []).map((f) => `
-      <div class="frase-card">
-        <p>"${esc(f.text)}"</p>
-        <span class="author">— ${esc(f.author)}</span>
-      </div>`).join('');
+    frasesGrid.innerHTML = (c.filosofia?.frases || [])
+      .map(
+        (f) => `
+        <div class="frase-card">
+          <p>"${esc(f.text)}"</p>
+          <span class="author">— ${esc(f.author)}</span>
+        </div>`
+      )
+      .join('');
   }
 
+  // Discografia
   const discoTitle = document.getElementById('discoTitle');
   if (discoTitle) discoTitle.innerHTML = sanitizeRichText(c.discografia?.title);
   const discoSub = document.getElementById('discoSub');
   if (discoSub) discoSub.textContent = c.discografia?.subtitle || '';
 
+  // Planos
   const plansTitle = document.getElementById('plansModalTitle');
   if (plansTitle) plansTitle.innerHTML = sanitizeRichText(c.planos?.title);
   const plansSub = document.getElementById('plansModalSub');
   if (plansSub) plansSub.textContent = c.planos?.subtitle || '';
   renderPlans();
 
+  // Contato
   const cTitle = document.getElementById('contatoTitle');
   if (cTitle) cTitle.innerHTML = sanitizeRichText(c.contato?.title);
   const cSub = document.getElementById('contatoSub');
@@ -263,17 +322,21 @@ function applyContentToSite() {
   if (cHeading) cHeading.textContent = c.contato?.heading || '';
   const cDesc = document.getElementById('contatoDesc');
   if (cDesc) cDesc.textContent = c.contato?.description || '';
+
   const socialLinks = document.getElementById('socialLinks');
   if (socialLinks) {
-    socialLinks.innerHTML = (c.contato?.socials || []).map((s) => {
-      const network = s.network || s.icon || 'link';
-      const label = SOCIAL_LABELS[network] || network;
-      return `<a href="${esc(safeExternalUrl(s.url))}"
-        target="_blank" rel="noopener noreferrer"
-        class="ad-social-icon ${esc(network)}"
-        data-label="${esc(label)}"
-        aria-label="${esc(label)}">${getSocialIconHTML(network)}</a>`;
-    }).join('');
+    socialLinks.innerHTML = (c.contato?.socials || [])
+      .map((s) => {
+        const network = s.network || s.icon || 'link';
+        const label = SOCIAL_LABELS[network] || network;
+        return `
+          <a href="${esc(safeExternalUrl(s.url))}"
+             target="_blank" rel="noopener noreferrer"
+             class="ad-social-icon ${esc(network)}"
+             data-label="${esc(label)}"
+             aria-label="${esc(label)}">${getSocialIconHTML(network)}</a>`;
+      })
+      .join('');
   }
 }
 
@@ -283,30 +346,41 @@ function applyContentToSite() {
 function renderPlans() {
   const grid = document.getElementById('plansGrid');
   if (!grid) return;
-  const plans = SITE.content?.planos?.plans || [];
-  grid.innerHTML = plans.map((p) => {
-    const priceInfo = SITE.plans[p.id] || {};
-    const cents = priceInfo.priceCents || 0;
-    const interval = priceInfo.interval;
-    const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
-    const suffixText = interval === 'month' ? '/mês' : interval === 'year' ? '/ano' : '';
-    return `
-      <div class="plan-card ${p.featured ? 'featured' : ''}">
-        ${p.badge ? `<div class="plan-badge">${esc(p.badge)}</div>` : ''}
-        <div class="plan-name">${esc(p.name)}</div>
-        <div class="plan-price">${esc(priceText)}<small>${esc(suffixText)}</small></div>
-        <p class="plan-desc">${esc(p.desc)}</p>
-        <ul class="plan-features">
-          ${(p.features || []).map((f) => `<li class="${f.ok ? '' : 'no'}">${esc(f.text)}</li>`).join('')}
-        </ul>
-        <button class="btn ${p.featured ? 'btn-primary' : 'btn-outline'} btn-block"
-                ${p.disabled ? 'disabled style="opacity:0.6;cursor:default;"' : `data-plan="${esc(p.id)}"`}>
-          ${esc(p.cta)}
-        </button>
-      </div>`;
-  }).join('');
 
+  const plans = SITE.content?.planos?.plans || [];
+  grid.innerHTML = plans
+    .map((p) => {
+      const priceInfo = SITE.plans[p.id] || {};
+      const cents = priceInfo.priceCents || 0;
+      const interval = priceInfo.interval;
+
+      const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
+      const suffixText =
+        interval === 'month' ? '/mês' : interval === 'year' ? '/ano' : '';
+
+      return `
+        <div class="plan-card ${p.featured ? 'featured' : ''}">
+          ${p.badge ? `<div class="plan-badge">${esc(p.badge)}</div>` : ''}
+          <div class="plan-name">${esc(p.name)}</div>
+          <div class="plan-price">${esc(priceText)}<small>${esc(suffixText)}</small></div>
+          <p class="plan-desc">${esc(p.desc)}</p>
+          <ul class="plan-features">
+            ${(p.features || [])
+              .map((f) => `<li class="${f.ok ? '' : 'no'}">${esc(f.text)}</li>`)
+              .join('')}
+          </ul>
+          <button class="btn ${p.featured ? 'btn-primary' : 'btn-outline'} btn-block"
+                  ${p.disabled ? 'disabled style="opacity:0.6;cursor:default;"' : `data-plan="${esc(p.id)}"`}>
+            ${esc(p.cta)}
+          </button>
+        </div>`;
+    })
+    .join('');
+
+  // Bind direto nos botões de assinatura
   grid.querySelectorAll('[data-plan]').forEach((btn) => {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
     btn.addEventListener('click', () => subscribe(btn.dataset.plan));
   });
 }
@@ -317,66 +391,103 @@ function renderPlans() {
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
   if (!container) return;
+
   const albums = SITE.albums;
-  const filtered = SITE.filter === 'all' ? albums : albums.filter((a) => a.type === SITE.filter);
+  const filtered =
+    SITE.filter === 'all'
+      ? albums
+      : albums.filter((a) => a.type === SITE.filter);
+
   const q = SITE.shopSearch.trim().toLowerCase();
   const premium = isPremium();
 
   if (!filtered.length) {
-    container.innerHTML = '<p class="album-empty">Nada encontrado neste filtro.</p>';
+    container.innerHTML =
+      '<p class="album-empty">Nada encontrado neste filtro.</p>';
     return;
   }
 
-  const html = filtered.map((album) => {
-    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-    const tracks = albumTracks
-      .map((track, trackIndex) => ({ track, trackIndex }))
-      .filter(({ track }) => !q ||
-        (track.title || '').toLowerCase().includes(q) ||
-        (album.title || '').toLowerCase().includes(q));
+  const html = filtered
+    .map((album) => {
+      const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+      const tracks = albumTracks
+        .map((track, trackIndex) => ({ track, trackIndex }))
+        .filter(
+          ({ track }) =>
+            !q ||
+            (track.title || '').toLowerCase().includes(q) ||
+            (album.title || '').toLowerCase().includes(q)
+        );
 
-    if (!tracks.length && q) return '';
-    const isExpanded = q ? true : SITE.expandedAlbumId === album.id;
+      if (!tracks.length && q) return '';
 
-    return `
-      <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album="${esc(album.id)}">
-        <div class="album-header" data-action="toggle-album" data-album="${esc(album.id)}">
-          <div class="album-cover" ${
-            album.coverImage
-              ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
-              : ''
-          }>
-            ${album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪')}
-          </div>
-          <div class="album-info">
-            <div class="album-title">
-              ${esc(album.title)}
-              <span class="album-badge ${premium ? 'premium' : ''}">${premium ? 'Premium' : 'Prévia'}</span>
+      const isExpanded = q ? true : SITE.expandedAlbumId === album.id;
+
+      return `
+        <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album="${esc(album.id)}">
+          <div class="album-header" data-action="toggle-album" data-album="${esc(album.id)}">
+            <div class="album-cover" ${
+              album.coverImage
+                ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
+                : ''
+            }>
+              ${album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪')}
             </div>
-            <div class="album-meta">
-              <span class="gold">${esc((album.type || 'album').toUpperCase())}</span>
-              · ${album.year || '—'}
-              · ${tracks.length} faixa${tracks.length === 1 ? '' : 's'}
+            <div class="album-info">
+              <div class="album-title">
+                ${esc(album.title)}
+                <span class="album-badge ${premium ? 'premium' : ''}">${
+                  premium ? 'Premium' : 'Prévia'
+                }</span>
+              </div>
+              <div class="album-meta">
+                <span class="gold">${esc((album.type || 'album').toUpperCase())}</span>
+                · ${album.year || '—'}
+                · ${tracks.length} faixa${tracks.length === 1 ? '' : 's'}
+              </div>
+              ${
+                album.description
+                  ? `<div class="album-desc">${esc(album.description)}</div>`
+                  : ''
+              }
+            </div>
+            <div class="album-actions">
+              <button class="album-toggle" aria-label="Expandir/recolher"
+                      data-action="toggle-album" data-album="${esc(album.id)}">▼</button>
             </div>
           </div>
-          <div class="album-actions">
-            <button class="album-toggle" aria-label="Expandir/recolher"
-                    data-action="toggle-album" data-album="${esc(album.id)}">▼</button>
+          <div class="album-tracks">
+            <div class="discography-scroll" data-album="${esc(album.id)}">
+              ${
+                tracks.length
+                  ? tracks
+                      .map(({ track, trackIndex }) =>
+                        renderTrackCard(album, track, trackIndex)
+                      )
+                      .join('')
+                  : '<p class="album-empty">Nenhuma faixa cadastrada neste álbum.</p>'
+              }
+            </div>
           </div>
-        </div>
-        <div class="album-tracks">
-          <div class="discography-scroll" data-album="${esc(album.id)}">
-            ${tracks.length
-              ? tracks.map(({ track, trackIndex }) => renderTrackCard(album, track, trackIndex)).join('')
-              : '<p class="album-empty">Nenhuma faixa cadastrada neste álbum.</p>'}
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+        </div>`;
+    })
+    .join('');
 
   container.dataset.viewMode = SITE.viewMode;
   container.classList.toggle('view-list', SITE.viewMode === 'list');
   container.innerHTML = html || '<p class="album-empty">Nada encontrado.</p>';
+
+  // Bind direto nos botões de alugar da discografia (garantia extra)
+  container.querySelectorAll('[data-action="open-rent"]').forEach((btn) => {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openRentModal(btn.dataset.album, Number(btn.dataset.track));
+    });
+  });
+
   updatePlayingHighlight();
 }
 
@@ -388,33 +499,38 @@ function renderTrackCard(album, track, trackIndex) {
   const premium = isPremium();
   const rented = isRented(album.id, trackIndex);
   const locked = isLocked(album.id, trackIndex);
+
   const identity = `${album.id}:${trackIndex}`;
-  const isPlaying = currentTrackIdentity && currentTrackIdentity.identity === identity;
+  const isPlaying =
+    currentTrackIdentity && currentTrackIdentity.identity === identity;
 
   const coverStyle = album.coverImage
     ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
     : '';
-  const coverText = album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪');
+  const coverText = album.coverImage
+    ? ''
+    : esc(album.coverInitials || album.cover || '♪');
 
   const stateHTML = premium
     ? '<span class="track-state">✓ Premium</span>'
     : rented
     ? '<span class="track-state">✓ Sua</span>'
     : locked
-    ? '<span class="track-state">🔒</span>'
+    ? '<span class="track-state">🔒 Bloqueada</span>'
     : '<span class="track-state">▶</span>';
 
-  const rentBtn = (premium || rented || !forSale) ? '' :
-    `<button class="track-action-icon buy" type="button"
-             data-tooltip="Alugar"
-             data-action="open-rent"
-             data-album="${esc(album.id)}"
-             data-track="${trackIndex}">🎫</button>`;
+  const rentBtn = (premium || rented || !forSale)
+    ? ''
+    : `<button class="track-action-icon buy"
+              type="button"
+              data-action="open-rent"
+              data-album="${esc(album.id)}"
+              data-track="${trackIndex}"
+              title="Alugar">🎫</button>`;
 
   return `
     <div class="discography-track-card ${isPlaying ? 'playing' : ''}"
          data-album="${esc(album.id)}"
-         data-track="${esc(track.title)}"
          data-track-index="${trackIndex}"
          data-identity="${esc(identity)}"
          data-action="open-player">
@@ -437,44 +553,51 @@ function renderTrackCard(album, track, trackIndex) {
 function renderPlaylists() {
   const grid = document.getElementById('playlistsGrid');
   if (!grid) return;
-  const playlists = Array.isArray(SITE.content?.playlists) ? SITE.content.playlists : [];
+
+  const playlists = Array.isArray(SITE.content?.playlists)
+    ? SITE.content.playlists
+    : [];
+
   if (!playlists.length) {
     grid.innerHTML = '<p class="lyrics-empty">Nenhuma playlist disponível.</p>';
     return;
   }
-  grid.innerHTML = playlists.map((playlist, index) => {
-    const tracks = resolvePlaylistTracks(playlist);
-    return `
-      <div class="playlist-card" role="button" tabindex="0"
-           data-action="open-playlist" data-playlist-index="${index}">
-        <span class="playlist-cover">${esc(playlist.cover || '♪')}</span>
-        <span class="playlist-info">
-          <strong>${esc(playlist.title || 'Playlist')}</strong>
-          <small>${esc(playlist.description || '')}</small>
-          <em>${tracks.length} faixa${tracks.length === 1 ? '' : 's'}</em>
-        </span>
-        <span class="playlist-play">▶</span>
-      </div>`;
-  }).join('');
+
+  grid.innerHTML = playlists
+    .map((playlist, index) => {
+      const tracks = resolvePlaylistTracks(playlist);
+      return `
+        <div class="playlist-card" role="button" tabindex="0"
+             data-action="open-playlist" data-playlist-index="${index}">
+          <span class="playlist-cover">${esc(playlist.cover || '♪')}</span>
+          <span class="playlist-info">
+            <strong>${esc(playlist.title || 'Playlist')}</strong>
+            <small>${esc(playlist.description || '')}</small>
+            <em>${tracks.length} faixa${tracks.length === 1 ? '' : 's'}</em>
+          </span>
+          <span class="playlist-play">▶</span>
+        </div>`;
+    })
+    .join('');
 }
 
 function resolvePlaylistTracks(playlist) {
-  return (playlist?.tracks || []).map((ref) => {
-    const [albumId, idxStr] = String(ref).split(':');
-    const album = findAlbum(albumId);
-    const idx = Number(idxStr);
-    if (!album || !Number.isInteger(idx)) return null;
-    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-    if (!albumTracks[idx]) return null;
-    return { album, track: albumTracks[idx], trackIndex: idx };
-  }).filter(Boolean);
+  return (playlist?.tracks || [])
+    .map((ref) => {
+      const [albumId, idxStr] = String(ref).split(':');
+      const album = findAlbum(albumId);
+      const idx = Number(idxStr);
+      if (!album || !Number.isInteger(idx)) return null;
+      const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+      if (!albumTracks[idx]) return null;
+      return { album, track: albumTracks[idx], trackIndex: idx };
+    })
+    .filter(Boolean);
 }
 
 // ─────────────────────────────────────────────────────────────
 // MODAL DE ALUGUEL
 // ─────────────────────────────────────────────────────────────
-let _rentContext = { albumId: null, trackIndex: null, planId: null };
-
 function openRentModal(albumId, trackIndex) {
   const album = findAlbum(albumId);
   const track = album && Array.isArray(album.tracks) ? album.tracks[trackIndex] : null;
@@ -482,6 +605,7 @@ function openRentModal(albumId, trackIndex) {
     toast('Faixa indisponível para aluguel.', '⚠');
     return;
   }
+
   if (isPremium()) {
     toast('Você já é Premium — ouça sem alugar.', '✓');
     return;
@@ -497,6 +621,7 @@ function openRentModal(albumId, trackIndex) {
     planId: RENTAL_PLANS[1]?.id || RENTAL_PLANS[0]?.id
   };
 
+  // Info da faixa
   const cover = document.getElementById('rentTrackCover');
   if (cover) {
     cover.innerHTML = '';
@@ -516,6 +641,7 @@ function openRentModal(albumId, trackIndex) {
   const albumEl = document.getElementById('rentTrackAlbum');
   if (albumEl) albumEl.textContent = `${album.title} · ${track.duration || ''}`.trim();
 
+  // Opções
   const optionsEl = document.getElementById('rentOptions');
   if (optionsEl) {
     optionsEl.innerHTML = RENTAL_PLANS.map((p) => `
@@ -548,6 +674,7 @@ function openRentModal(albumId, trackIndex) {
 
 async function confirmRent() {
   const errEl = document.getElementById('rentError');
+
   if (!SITE.user) {
     closeModal('rentModal');
     toast('Entre na sua conta para alugar.', 'ℹ');
@@ -558,6 +685,7 @@ async function confirmRent() {
     if (errEl) errEl.textContent = 'Escolha um período.';
     return;
   }
+
   try {
     if (errEl) errEl.textContent = 'Abrindo checkout...';
     const r = await fetch('/api/payments?type=rental', {
@@ -595,6 +723,7 @@ async function subscribe(planId) {
     toast('Você já tem este plano.', 'ℹ');
     return;
   }
+
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=subscription', {
@@ -619,49 +748,31 @@ async function subscribe(planId) {
 // DELEGAÇÃO GLOBAL
 // ─────────────────────────────────────────────────────────────
 function bindGlobalEvents() {
+  // 1) Delegação global (fallback)
   document.addEventListener('click', async (e) => {
-    const action = e.target.closest('[data-action]')?.dataset.action;
-    if (!action) return;
+    const actionEl = e.target.closest('[data-action]');
+    if (!actionEl) return;
+    const action = actionEl.dataset.action;
 
     switch (action) {
       case 'toggle-album': {
-        const albumId = e.target.closest('[data-album]')?.dataset.album;
+        const albumId = actionEl.dataset.album;
         if (!albumId) break;
         SITE.expandedAlbumId = SITE.expandedAlbumId === albumId ? null : albumId;
         renderDiscography();
         break;
       }
       case 'open-player': {
-        const card = e.target.closest('[data-action="open-player"]');
-        if (!card || e.target.closest('button')) break;
-        const albumId = card.dataset.album;
-        const trackIndex = Number(card.dataset.trackIndex);
+        if (e.target.closest('button')) break;
+        const albumId = actionEl.dataset.album;
+        const trackIndex = Number(actionEl.dataset.trackIndex);
         openExpandedPlayer(albumId, trackIndex);
         break;
       }
       case 'open-rent': {
-        const btn = e.target.closest('[data-action="open-rent"]');
-        if (!btn) break;
         e.preventDefault();
         e.stopPropagation();
-        openRentModal(btn.dataset.album, Number(btn.dataset.track));
-        break;
-      }
-      case 'play-queue': {
-        const btn = e.target.closest('[data-action="play-queue"]');
-        if (!btn) break;
-        const idx = Number(btn.dataset.queueIndex);
-        if (!Number.isInteger(idx) || !playerQueue[idx]) break;
-        playerQueueIndex = idx;
-        const item = playerQueue[idx];
-        playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
-        renderQueue();
-        break;
-      }
-      case 'open-playlist': {
-        const card = e.target.closest('[data-action="open-playlist"]');
-        if (!card) break;
-        openPlaylistPlayer(Number(card.dataset.playlistIndex));
+        openRentModal(actionEl.dataset.album, Number(actionEl.dataset.track));
         break;
       }
       case 'open-plans': {
@@ -670,9 +781,23 @@ function bindGlobalEvents() {
         openModal('plansModal');
         break;
       }
+      case 'play-queue': {
+        const idx = Number(actionEl.dataset.queueIndex);
+        if (!Number.isInteger(idx) || !playerQueue[idx]) break;
+        playerQueueIndex = idx;
+        const item = playerQueue[idx];
+        playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+        renderQueue();
+        break;
+      }
+      case 'open-playlist': {
+        openPlaylistPlayer(Number(actionEl.dataset.playlistIndex));
+        break;
+      }
     }
   });
 
+  // 2) Busca
   const shopSearch = document.getElementById('shopSearch');
   if (shopSearch && shopSearch.dataset.bound !== '1') {
     shopSearch.dataset.bound = '1';
@@ -682,6 +807,7 @@ function bindGlobalEvents() {
     }, 250));
   }
 
+  // 3) Filtros
   const filterBar = document.getElementById('filterBar');
   if (filterBar && filterBar.dataset.bound !== '1') {
     filterBar.dataset.bound = '1';
@@ -707,6 +833,7 @@ function bindGlobalEvents() {
     });
   }
 
+  // 4) Auth
   document.getElementById('loginBtn')?.addEventListener('click', () => openModal('loginModal'));
   document.getElementById('signupBtn')?.addEventListener('click', () => openModal('signupModal'));
   document.getElementById('userChip')?.addEventListener('click', openAccountModal);
@@ -732,21 +859,29 @@ function bindGlobalEvents() {
 
   document.getElementById('loginForm')?.addEventListener('submit', onLoginSubmit);
   document.getElementById('signupForm')?.addEventListener('submit', onSignupSubmit);
+
   document.getElementById('newsletterForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     toast('Obrigado! Em breve novidades.', '✦');
     e.target.reset();
   });
 
+  // 5) Confirmar aluguel
   document.getElementById('rentConfirmBtn')?.addEventListener('click', confirmRent);
 
+  // 6) Fechar modais
   document.querySelectorAll('[data-close]').forEach((el) => {
+    if (el.dataset.bound === '1') return;
+    el.dataset.bound = '1';
     el.addEventListener('click', () => {
       el.closest('.modal-overlay')?.classList.remove('open');
       document.body.style.overflow = '';
     });
   });
+
   document.querySelectorAll('.modal-overlay').forEach((o) => {
+    if (o.dataset.bound === '1') return;
+    o.dataset.bound = '1';
     o.addEventListener('click', (e) => {
       if (e.target === o) {
         o.classList.remove('open');
@@ -754,11 +889,15 @@ function bindGlobalEvents() {
       }
     });
   });
+
+  // 7) ESC
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     document.querySelectorAll('.modal-overlay.open').forEach((m) => m.classList.remove('open'));
     document.body.style.overflow = '';
   });
+
+  // 8) Espaço play/pause
   document.addEventListener('keydown', (e) => {
     const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
     const pub = document.getElementById('publicSite');
@@ -778,7 +917,12 @@ async function onLoginSubmit(e) {
   const errEl = document.getElementById('loginError');
   const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const password = document.getElementById('loginPassword').value;
-  if (!email || !password) { errEl.textContent = 'Preencha e-mail e senha.'; return; }
+
+  if (!email || !password) {
+    errEl.textContent = 'Preencha e-mail e senha.';
+    return;
+  }
+
   errEl.textContent = 'Validando...';
   try {
     const r = await fetch('/api/auth?action=login', {
@@ -788,7 +932,10 @@ async function onLoginSubmit(e) {
       body: JSON.stringify({ email, password })
     });
     const json = await r.json();
-    if (!r.ok || !json.ok) { errEl.textContent = json.error || 'E-mail ou senha incorretos.'; return; }
+    if (!r.ok || !json.ok) {
+      errEl.textContent = json.error || 'E-mail ou senha incorretos.';
+      return;
+    }
     errEl.textContent = '';
     SITE.user = json.user;
     e.target.reset();
@@ -809,9 +956,11 @@ async function onSignupSubmit(e) {
   const name = document.getElementById('signupName').value.trim();
   const email = document.getElementById('signupEmail').value.trim().toLowerCase();
   const password = document.getElementById('signupPassword').value;
+
   if (name.length < 2) { errEl.textContent = 'Informe seu nome.'; return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent = 'E-mail inválido.'; return; }
   if (password.length < 8) { errEl.textContent = 'Senha deve ter pelo menos 8 caracteres.'; return; }
+
   errEl.textContent = 'Criando conta...';
   try {
     const r = await fetch('/api/auth?action=signup', {
@@ -821,8 +970,14 @@ async function onSignupSubmit(e) {
       body: JSON.stringify({ name, email, password })
     });
     const json = await r.json();
-    if (!r.ok || !json.ok) { errEl.textContent = json.error || 'Não foi possível criar a conta.'; return; }
-    if (json.requiresEmailConfirmation) { errEl.textContent = 'Verifique seu e-mail para ativar a conta.'; return; }
+    if (!r.ok || !json.ok) {
+      errEl.textContent = json.error || 'Não foi possível criar a conta.';
+      return;
+    }
+    if (json.requiresEmailConfirmation) {
+      errEl.textContent = 'Verifique seu e-mail para ativar a conta.';
+      return;
+    }
     SITE.user = json.user;
     e.target.reset();
     closeModal('signupModal');
@@ -842,53 +997,80 @@ async function onSignupSubmit(e) {
 function sanitizeRichText(html) {
   const raw = String(html || '');
   if (typeof DOMParser === 'undefined') return esc(raw);
+
   const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, 'text/html');
   const container = doc.body.firstChild;
+
   const walk = (node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === Node.TEXT_NODE) continue;
       if (child.nodeType !== Node.ELEMENT_NODE) { child.remove(); continue; }
+
       const tag = child.tagName;
       const isBr = tag === 'BR';
       const isGoldSpan = tag === 'SPAN' && child.getAttribute('class') === 'gold';
+
       if (!isBr && !isGoldSpan) {
         child.replaceWith(doc.createTextNode(child.textContent || ''));
         continue;
       }
+
       for (const attr of Array.from(child.attributes)) {
         if (isGoldSpan && attr.name === 'class' && attr.value === 'gold') continue;
         child.removeAttribute(attr.name);
       }
+
       walk(child);
     }
   };
+
   walk(container);
   return container.innerHTML;
 }
 
 function getSocialIconHTML(network) {
   const k = String(network || '').toLowerCase().trim();
+
   if (k === 'audiomack') {
     return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <circle cx="12" cy="12" r="12" fill="currentColor"/>
       <path d="M6.185 13.703l6.518-3.719-6.518-3.72a.687.687 0 1 1 .703-1.174l6.518 3.719 6.518-3.719a.687.687 0 1 1 .703 1.174l-6.518 3.72 6.518 3.719a.687.687 0 1 1-.703 1.174l-6.518-3.72-6.518 3.72a.687.687 0 1 1-.703-1.174z" fill="#000"/>
     </svg>`;
   }
+
   const map = {
-    spotify: 'fab fa-spotify', youtube: 'fab fa-youtube', amazon: 'fab fa-amazon',
-    facebook: 'fab fa-facebook-f', tiktok: 'fab fa-tiktok', apple: 'fab fa-apple',
-    itunes: 'fab fa-itunes', instagram: 'fab fa-instagram', twitter: 'fab fa-x-twitter',
-    x: 'fab fa-x-twitter', deezer: 'fab fa-deezer', soundcloud: 'fab fa-soundcloud',
-    bandcamp: 'fab fa-bandcamp', whatsapp: 'fab fa-whatsapp', telegram: 'fab fa-telegram',
-    linkedin: 'fab fa-linkedin-in', threads: 'fab fa-threads',
-    email: 'fas fa-envelope', website: 'fas fa-globe', link: 'fas fa-link'
+    spotify: 'fab fa-spotify',
+    youtube: 'fab fa-youtube',
+    amazon: 'fab fa-amazon',
+    facebook: 'fab fa-facebook-f',
+    tiktok: 'fab fa-tiktok',
+    apple: 'fab fa-apple',
+    itunes: 'fab fa-itunes',
+    instagram: 'fab fa-instagram',
+    twitter: 'fab fa-x-twitter',
+    x: 'fab fa-x-twitter',
+    deezer: 'fab fa-deezer',
+    soundcloud: 'fab fa-soundcloud',
+    bandcamp: 'fab fa-bandcamp',
+    whatsapp: 'fab fa-whatsapp',
+    telegram: 'fab fa-telegram',
+    linkedin: 'fab fa-linkedin-in',
+    threads: 'fab fa-threads',
+    email: 'fas fa-envelope',
+    website: 'fas fa-globe',
+    link: 'fas fa-link'
   };
-  return `<i class="${map[k] || 'fas fa-link'}" aria-hidden="true"></i>`;
+
+  const cls = map[k] || 'fas fa-link';
+  return `<i class="${cls}" aria-hidden="true"></i>`;
 }
 
 function applyBackgroundImage(url) {
   const safe = safeMediaUrl(url);
-  if (!safe) { document.body.style.backgroundImage = ''; return; }
+  if (!safe) {
+    document.body.style.backgroundImage = '';
+    return;
+  }
   document.body.style.backgroundImage =
     `linear-gradient(rgba(11,10,12,0.85), rgba(11,10,12,0.85)), url('${safe}')`;
   document.body.style.backgroundSize = 'cover';
@@ -913,6 +1095,7 @@ function updateAuthUI() {
   const chip = document.getElementById('userChip');
   const loginBtn = document.getElementById('loginBtn');
   const signupBtn = document.getElementById('signupBtn');
+
   if (u) {
     if (loginBtn) loginBtn.style.display = 'none';
     if (signupBtn) signupBtn.style.display = 'none';
@@ -939,12 +1122,16 @@ function updateAuthUI() {
 function openAccountModal() {
   const u = SITE.user;
   if (!u) { openModal('loginModal'); return; }
+
   const avatar = document.getElementById('accountAvatar');
   if (avatar) avatar.textContent = (u.name || u.email || '?').charAt(0).toUpperCase();
+
   const name = document.getElementById('accountName');
   if (name) name.textContent = u.name || 'Usuário';
+
   const email = document.getElementById('accountEmail');
   if (email) email.textContent = u.email || '';
+
   const planValue = document.getElementById('accountPlanValue');
   if (planValue) {
     planValue.textContent = u.plan === 'anual' ? 'Premium Anual'
@@ -956,16 +1143,20 @@ function openAccountModal() {
       ? 'Acesso a prévias + loja de faixas.'
       : 'Acesso completo + downloads.';
   }
+
   const actions = document.getElementById('accountActions');
   if (actions) {
     const isFree = u.plan === 'free';
-    actions.innerHTML = `<button class="btn ${isFree ? 'btn-primary' : 'btn-outline'} btn-block" id="accountUpgradeBtn">
-      ${isFree ? 'Fazer upgrade para Premium' : 'Gerenciar assinatura'}</button>`;
+    actions.innerHTML = `
+      <button class="btn ${isFree ? 'btn-primary' : 'btn-outline'} btn-block" id="accountUpgradeBtn">
+        ${isFree ? 'Fazer upgrade para Premium' : 'Gerenciar assinatura'}
+      </button>`;
     document.getElementById('accountUpgradeBtn')?.addEventListener('click', () => {
       closeModal('accountModal');
       openModal('plansModal');
     });
   }
+
   openModal('accountModal');
 }
 
@@ -975,7 +1166,9 @@ function openAccountModal() {
 function initPlayer() {
   audio = document.getElementById('audio');
   if (!audio) return;
+
   audio.volume = lastVolume;
+
   audio.addEventListener('timeupdate', onTimeUpdate);
   audio.addEventListener('play', onPlay);
   audio.addEventListener('pause', onPause);
@@ -983,6 +1176,7 @@ function initPlayer() {
   audio.addEventListener('ended', onEnded);
   audio.addEventListener('loadedmetadata', syncProgress);
   audio.addEventListener('loadedmetadata', syncExpandedProgress);
+
   bindPlayerControls();
   bindMobileTabs();
   bindFullscreenBtn();
@@ -991,11 +1185,13 @@ function initPlayer() {
 
 function bindPlayerControls() {
   const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', fn);
+
   bind('playBtn', togglePlay);
   bind('nextBtn', nextTrack);
   bind('prevBtn', prevTrack);
   bind('muteBtn', toggleMute);
   bind('lyricsBtn', () => document.getElementById('lyricsDrawer')?.classList.toggle('open'));
+
   bind('closeExpandedPlayer', closeExpandedPlayer);
   bind('expandedPlayBtn', togglePlay);
   bind('expandedNextBtn', nextTrack);
@@ -1003,6 +1199,7 @@ function bindPlayerControls() {
   bind('expandedMuteBtn', toggleMute);
   bind('expandedShuffleBtn', toggleShuffle);
   bind('closeLyrics', () => document.getElementById('lyricsDrawer')?.classList.remove('open'));
+
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
@@ -1012,6 +1209,7 @@ function bindMobileTabs() {
   const player = document.querySelector('#expandedPlayerModal .music-player');
   const tabs = document.querySelectorAll('#expandedPlayerModal .mobile-tab');
   if (!player || !tabs.length) return;
+
   tabs.forEach((tab) => {
     if (tab.dataset.bound === '1') return;
     tab.dataset.bound = '1';
@@ -1034,9 +1232,11 @@ function bindFullscreenBtn() {
   if (!btn || !player) return;
   if (btn.dataset.bound === '1') return;
   btn.dataset.bound = '1';
+
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   const supportsFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
   if (isIOS || !supportsFullscreen) { btn.style.display = 'none'; return; }
+
   const getFsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
   const requestFs = (el) => {
     if (el.requestFullscreen) return el.requestFullscreen();
@@ -1046,6 +1246,7 @@ function bindFullscreenBtn() {
     if (document.exitFullscreen) return document.exitFullscreen();
     if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
   };
+
   btn.addEventListener('click', async () => {
     try {
       if (getFsElement()) await exitFs();
@@ -1063,14 +1264,19 @@ function buildQueueForAlbum(albumId, startIndex) {
   const album = findAlbum(albumId);
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+
   let indices = albumTracks.map((_, i) => i);
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
     const clickedPos = indices.indexOf(startIndex);
     if (clickedPos > 0) [indices[0], indices[clickedPos]] = [indices[clickedPos], indices[0]];
   }
+
   playerQueue = indices.map((i) => ({ albumId, trackIndex: i }));
-  playerQueueIndex = playerQueue.findIndex((q) => q.albumId === albumId && q.trackIndex === startIndex);
+  playerQueueIndex = playerQueue.findIndex(
+    (q) => q.albumId === albumId && q.trackIndex === startIndex
+  );
+
   const shuffleBtn = document.getElementById('expandedShuffleBtn');
   if (shuffleBtn) {
     shuffleBtn.hidden = albumTracks.length <= 1;
@@ -1103,31 +1309,48 @@ function renderQueue() {
   const list = document.getElementById('expandedQueueList');
   const count = document.getElementById('expandedQueueCount');
   if (!wrap || !list) return;
-  if (playerQueue.length <= 1) { wrap.hidden = true; list.innerHTML = ''; return; }
+
+  if (playerQueue.length <= 1) {
+    wrap.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+
   wrap.hidden = false;
   if (count) count.textContent = `${playerQueue.length} faixas`;
-  list.innerHTML = playerQueue.map((item, idx) => {
-    const album = findAlbum(item.albumId);
-    if (!album) return '';
-    const track = (album.tracks || [])[item.trackIndex];
-    if (!track) return '';
-    const isCurrent = idx === playerQueueIndex;
-    const locked = isLocked(item.albumId, item.trackIndex);
-    const coverStyle = album.coverImage
-      ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"` : '';
-    const coverText = album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪');
-    return `
-      <button class="queue-track ${isCurrent ? 'playing' : ''}"
-              type="button" data-action="play-queue" data-queue-index="${idx}">
-        <span class="queue-track-index">${isCurrent ? '▶' : idx + 1}</span>
-        <span class="queue-track-cover" ${coverStyle}>${coverText}</span>
-        <span class="queue-track-info">
-          <span class="queue-track-title">${esc(track.title)}</span>
-          <span class="queue-track-duration">${esc(track.duration || '—')}</span>
-        </span>
-        <span class="queue-track-lock">${locked ? '🔒' : '▶'}</span>
-      </button>`;
-  }).join('');
+
+  list.innerHTML = playerQueue
+    .map((item, idx) => {
+      const album = findAlbum(item.albumId);
+      if (!album) return '';
+      const track = (album.tracks || [])[item.trackIndex];
+      if (!track) return '';
+
+      const isCurrent = idx === playerQueueIndex;
+      const locked = isLocked(item.albumId, item.trackIndex);
+
+      const coverStyle = album.coverImage
+        ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
+        : '';
+      const coverText = album.coverImage
+        ? ''
+        : esc(album.coverInitials || album.cover || '♪');
+
+      return `
+        <button class="queue-track ${isCurrent ? 'playing' : ''}"
+                type="button"
+                data-action="play-queue"
+                data-queue-index="${idx}">
+          <span class="queue-track-index">${isCurrent ? '▶' : idx + 1}</span>
+          <span class="queue-track-cover" ${coverStyle}>${coverText}</span>
+          <span class="queue-track-info">
+            <span class="queue-track-title">${esc(track.title)}</span>
+            <span class="queue-track-duration">${esc(track.duration || '—')}</span>
+          </span>
+          <span class="queue-track-lock">${locked ? '🔒' : '▶'}</span>
+        </button>`;
+    })
+    .join('');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1139,7 +1362,10 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
   const track = albumTracks[trackIndex];
   if (!track) return;
-  if (!opts.fromQueue) buildQueueForAlbum(albumId, trackIndex);
+
+  if (!opts.fromQueue) {
+    buildQueueForAlbum(albumId, trackIndex);
+  }
 
   let streamData;
   try {
@@ -1148,6 +1374,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
       { credentials: 'same-origin' }
     );
     streamData = await r.json();
+
     if (!r.ok || !streamData?.ok) {
       toast(streamData?.error || 'Faixa indisponível.', '⚠');
       return;
@@ -1160,15 +1387,27 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
 
   const unlocked = !!streamData.unlocked;
   const src = unlocked ? streamData.fullUrl : streamData.previewUrl;
-  if (!src) { toast('Faixa sem áudio cadastrado.', '⚠'); return; }
+
+  if (!src) {
+    toast('Faixa sem áudio cadastrado.', '⚠');
+    return;
+  }
 
   currentTrackIdentity = {
-    albumId, trackIndex, trackTitle: track.title,
+    albumId,
+    trackIndex,
+    trackTitle: track.title,
     identity: `${albumId}:${trackIndex}`
   };
+
   previewState = unlocked
     ? { active: false, start: 0, end: Infinity }
-    : { active: true, start: 0, end: Number(streamData.previewDuration) || 30 };
+    : {
+        active: true,
+        start: 0,
+        end: Number(streamData.previewDuration) || 30
+      };
+
   previewNoticeTrackKey = '';
 
   audio.src = src;
@@ -1180,6 +1419,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   if (artistEl) {
     artistEl.textContent = `Joseph Matthos · ${album.title}${unlocked ? '' : ' (prévia)'}`;
   }
+
   const cover = document.getElementById('playerCover');
   if (cover) {
     const safeCover = safeMediaUrl(album.coverImage);
@@ -1191,6 +1431,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
       cover.style.backgroundImage = '';
     }
   }
+
   document.getElementById('previewBadge')?.classList.toggle('visible', !unlocked);
   document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', !unlocked);
 
@@ -1200,7 +1441,11 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   renderQueue();
   updatePlayingHighlight();
 
-  try { await audio.play(); } catch (err) { console.debug('[player] autoplay bloqueado:', err?.message); }
+  try {
+    await audio.play();
+  } catch (err) {
+    console.debug('[player] autoplay bloqueado:', err?.message);
+  }
 }
 
 function togglePlay() {
@@ -1246,6 +1491,7 @@ function updateMuteButtons() {
   const icon = muted || audio?.volume === 0 ? '🔇' : audio?.volume < 0.5 ? '🔉' : '🔊';
   const btn = document.getElementById('muteBtn');
   if (btn) btn.textContent = icon;
+
   const expBtn = document.getElementById('expandedMuteBtn');
   if (expBtn) {
     const svg = expBtn.querySelector('svg');
@@ -1268,6 +1514,7 @@ function updateVolumeFill() {
 function bindProgressBar(id) {
   const bar = document.getElementById(id);
   if (!bar) return;
+
   const seek = (clientX) => {
     if (!audio || !audio.duration) return;
     const rect = bar.getBoundingClientRect();
@@ -1280,6 +1527,7 @@ function bindProgressBar(id) {
     syncProgress();
     syncExpandedProgress();
   };
+
   bar.addEventListener('click', (e) => seek(e.clientX));
   bar.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(5); }
@@ -1318,6 +1566,7 @@ function bindVolumeBar(id) {
 
 function onTimeUpdate() {
   if (!audio || isSeeking) return;
+
   if (previewState.active && audio.currentTime >= previewState.end) {
     audio.pause();
     audio.currentTime = previewState.end;
@@ -1327,6 +1576,7 @@ function onTimeUpdate() {
       previewNoticeTrackKey = key;
     }
   }
+
   syncProgress();
   syncExpandedProgress();
   updateLyricsPosition();
@@ -1337,11 +1587,13 @@ function syncProgress() {
   const currentTimeEl = document.getElementById('currentTime');
   const durationEl = document.getElementById('duration');
   const bar = document.getElementById('progressBar');
+
   const total = previewState.active ? previewState.end - previewState.start : audio?.duration;
   const current = previewState.active
     ? Math.max(0, (audio?.currentTime || 0) - previewState.start)
     : audio?.currentTime || 0;
   const pct = Number.isFinite(total) && total > 0 ? Math.min(100, (current / total) * 100) : 0;
+
   if (fill) fill.style.width = pct + '%';
   if (currentTimeEl) currentTimeEl.textContent = formatTime(current);
   if (durationEl) durationEl.textContent = formatTime(total);
@@ -1353,11 +1605,13 @@ function syncExpandedProgress() {
   const currentTimeEl = document.getElementById('expandedCurrentTime');
   const durationEl = document.getElementById('expandedDuration');
   const bar = document.getElementById('expandedProgressBar');
+
   const total = previewState.active ? previewState.end - previewState.start : audio?.duration;
   const current = previewState.active
     ? Math.max(0, (audio?.currentTime || 0) - previewState.start)
     : audio?.currentTime || 0;
   const pct = Number.isFinite(total) && total > 0 ? Math.min(100, (current / total) * 100) : 0;
+
   if (fill) fill.style.width = pct + '%';
   if (currentTimeEl) currentTimeEl.textContent = formatTime(current);
   if (durationEl) durationEl.textContent = formatTime(total);
@@ -1369,16 +1623,21 @@ function updateLyricsPosition() {
     document.getElementById('lyricsContent'),
     document.getElementById('expandedLyricsContent')
   ];
+
   for (const container of containers) {
     if (!container) continue;
     const lines = container.querySelectorAll('.lyric-line');
     if (!lines.length) continue;
+
     let active = -1;
     const t = audio?.currentTime || 0;
+
     lines.forEach((line, index) => {
       if (Number(line.dataset.lyricTime) <= t) active = index;
     });
+
     lines.forEach((line, index) => line.classList.toggle('active', index === active));
+
     if (active >= 0 && lines[active].scrollIntoView) {
       lines[active].scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -1390,10 +1649,12 @@ function onPlay() {
   if (btn) btn.textContent = '⏸';
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.add('spinning');
+
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.add('playing');
   if (expandedIcon) expandedIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+
   updateMuteButtons();
 }
 
@@ -1402,13 +1663,14 @@ function onPause() {
   if (btn) btn.textContent = '▶';
   const cover = document.getElementById('playerCover');
   if (cover) cover.classList.remove('spinning');
+
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.remove('playing');
   if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
 }
 
-function onError() {
+function onError(e) {
   if (audio && audio.error && audio.error.code === MediaError.MEDIA_ERR_ABORTED) return;
   toast('Erro ao carregar áudio.', '⚠');
   onPause();
@@ -1427,6 +1689,7 @@ function openExpandedPlayer(albumId, trackIndex) {
   if (!modal) return;
   modal.classList.add('open');
   document.body.style.overflow = 'hidden';
+
   const player = modal.querySelector('.music-player');
   const musicTab = modal.querySelector('.mobile-tab[data-tab="music"]');
   if (player && musicTab) {
@@ -1437,6 +1700,7 @@ function openExpandedPlayer(albumId, trackIndex) {
       t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
     });
   }
+
   playFromDiscography(albumId, trackIndex);
 }
 
@@ -1444,8 +1708,10 @@ function closeExpandedPlayer() {
   const modal = document.getElementById('expandedPlayerModal');
   if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
+
   playerQueue = [];
   playerQueueIndex = -1;
+
   const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
   if (fsEl) {
     if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
@@ -1456,10 +1722,12 @@ function closeExpandedPlayer() {
 function renderExpandedPlayerActions(albumId, trackIndex) {
   const wrap = document.getElementById('expandedPlayerActions');
   if (!wrap) return;
+
   const album = findAlbum(albumId);
   const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
   const track = albumTracks[trackIndex];
   if (!track) { wrap.innerHTML = ''; return; }
+
   if (isPremium()) {
     wrap.innerHTML = '<span class="expanded-access">✓ Premium: acesso completo</span>';
     return;
@@ -1468,13 +1736,24 @@ function renderExpandedPlayerActions(albumId, trackIndex) {
     wrap.innerHTML = '<span class="expanded-access">✓ Você alugou esta faixa</span>';
     return;
   }
+
+  // HTML dos botões — com IDs únicos
   wrap.innerHTML = `
-    <button class="btn btn-primary btn-sm" type="button"
-            data-action="open-rent"
-            data-album="${esc(albumId)}"
-            data-track="${trackIndex}">Alugar</button>
-    <button class="btn btn-ghost btn-sm" type="button"
-            data-action="open-plans">Assinar Premium</button>`;
+    <button class="btn btn-primary btn-sm" type="button" id="expandedRentBtn">Alugar</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="expandedPlansBtn">Assinar Premium</button>`;
+
+  // Bind direto — garante que abre o modal certo
+  document.getElementById('expandedRentBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openRentModal(albumId, trackIndex);
+  });
+
+  document.getElementById('expandedPlansBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openModal('plansModal');
+  });
 }
 
 function syncExpandedPlayer(track, album, unlocked) {
@@ -1482,21 +1761,23 @@ function syncExpandedPlayer(track, album, unlocked) {
   const albumEl = document.getElementById('expandedPlayerAlbum');
   const cover = document.getElementById('expandedPlayerCover');
   const badge = document.getElementById('expandedPreviewBadge');
+
   if (title) title.textContent = track.title;
   if (albumEl) albumEl.textContent = `Joseph Matthos · ${album.title}`;
+
   if (cover) {
     const safeCover = safeMediaUrl(album.coverImage);
     cover.style.backgroundImage = '';
     cover.innerHTML = '';
+
     if (safeCover) {
       const img = document.createElement('img');
       img.src = safeCover;
       img.alt = album.title || 'Capa do álbum';
+      img.loading = 'eager';
       cover.appendChild(img);
-      cover.classList.add('has-image');
     } else {
       cover.textContent = album.coverInitials || album.cover || '♪';
-      cover.classList.remove('has-image');
     }
   }
   if (badge) badge.classList.toggle('visible', !unlocked);
@@ -1506,10 +1787,16 @@ function renderLyrics(track) {
   const html = (() => {
     const lyrics = Array.isArray(track?.lyrics) ? track.lyrics : [];
     if (!lyrics.length) return '<p class="lyrics-empty">Sem letra sincronizada.</p>';
-    return lyrics.map((line, i) =>
-      `<button class="lyric-line" data-lyric-index="${i}" data-lyric-time="${Number(line.time) || 0}">${esc(line.text)}</button>`
-    ).join('');
+    return lyrics
+      .map(
+        (line, i) =>
+          `<button class="lyric-line" data-lyric-index="${i}" data-lyric-time="${
+            Number(line.time) || 0
+          }">${esc(line.text)}</button>`
+      )
+      .join('');
   })();
+
   const main = document.getElementById('lyricsContent');
   if (main) main.innerHTML = html;
   const expanded = document.getElementById('expandedLyricsContent');
@@ -1521,8 +1808,13 @@ function renderLyrics(track) {
 function openPlaylistPlayer(playlistIndex) {
   const playlist = SITE.content?.playlists?.[playlistIndex];
   if (!playlist) return;
+
   const queue = resolvePlaylistTracks(playlist);
-  if (!queue.length) { toast('Esta playlist não tem faixas válidas.', '⚠'); return; }
+  if (!queue.length) {
+    toast('Esta playlist não tem faixas válidas.', '⚠');
+    return;
+  }
+
   const first = queue[0];
   openExpandedPlayer(first.album.id, first.trackIndex);
 }
