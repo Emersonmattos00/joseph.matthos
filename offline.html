@@ -8,12 +8,17 @@
 <meta name="robots" content="noindex, follow">
 <meta name="theme-color" content="#0b0a0c">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+
+<!--
+  ⚠️ NÃO carregar Google Fonts aqui.
+  Esta página é servida offline. Recursos externos falham
+  silenciosamente e atrasam o render.
+  Usamos system fonts com fallback tipográfico.
+-->
 
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
   :root {
     --bg: #0b0a0c;
     --card: #1a181f;
@@ -21,27 +26,39 @@
     --text-dim: #b0a9a0;
     --accent: #d4af37;
     --border: #2b272f;
+
+    /* Tipografia com fallback de sistema */
+    --font-serif: 'Playfair Display', Georgia, 'Times New Roman', 'Liberation Serif', serif;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                 'Helvetica Neue', Arial, 'Liberation Sans', sans-serif;
   }
+
   body {
     min-height: 100vh;
     background: var(--bg);
     color: var(--text);
-    font-family: 'Inter', system-ui, sans-serif;
+    font-family: var(--font-sans);
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 2rem;
     text-align: center;
-    background-image: radial-gradient(circle at 50% 40%, rgba(212, 175, 55, 0.06), transparent 60%);
+    background-image:
+      radial-gradient(circle at 50% 40%, rgba(212, 175, 55, 0.06), transparent 60%);
   }
+
   .container {
     max-width: 520px;
     width: 100%;
     animation: fadeIn 0.5s ease;
   }
+
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   .icon {
@@ -49,28 +66,34 @@
     margin-bottom: 1.5rem;
     display: inline-block;
     animation: pulse 2.4s ease-in-out infinite;
-    filter: drop-shadow(0 0 20px rgba(212, 175, 55, 0.3));
+    /* Fallback de emoji caso a fonte de símbolos não carregue */
+    line-height: 1;
+    font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   }
+
   @keyframes pulse {
-    0%, 100% { transform: scale(1); opacity: 0.6; }
-    50% { transform: scale(1.08); opacity: 1; }
+    0%, 100% { transform: scale(1);    opacity: 0.6; }
+    50%      { transform: scale(1.08); opacity: 1; }
   }
 
   h1 {
-    font-family: 'Playfair Display', Georgia, serif;
+    font-family: var(--font-serif);
     font-size: clamp(2rem, 6vw, 3rem);
     color: var(--accent);
     margin-bottom: 1rem;
     font-style: italic;
     font-weight: 700;
     letter-spacing: -0.02em;
+    line-height: 1.15;
   }
+
   p {
     color: var(--text-dim);
     line-height: 1.7;
     margin-bottom: 1rem;
     font-size: 1rem;
   }
+
   .status {
     display: inline-flex;
     align-items: center;
@@ -82,19 +105,22 @@
     font-size: 0.8rem;
     color: var(--text-dim);
     margin-bottom: 2rem;
-    transition: all 0.3s ease;
+    transition: border-color 0.3s ease, color 0.3s ease;
   }
+
   .status.online {
     border-color: rgba(74, 222, 128, 0.4);
     color: #4ade80;
   }
+
   .status-dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
     background: #f87171;
-    transition: background 0.3s ease;
+    transition: background 0.3s ease, box-shadow 0.3s ease;
   }
+
   .status.online .status-dot {
     background: #4ade80;
     box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
@@ -107,6 +133,7 @@
     margin-top: 2rem;
     align-items: center;
   }
+
   .btn {
     display: inline-flex;
     align-items: center;
@@ -119,22 +146,25 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 0.85rem;
-    transition: all 0.3s ease;
+    transition: background 0.3s ease, color 0.3s ease,
+                border-color 0.3s ease, box-shadow 0.3s ease;
     border: 1px solid transparent;
     cursor: pointer;
     font-family: inherit;
     min-width: 220px;
   }
+
   .btn-primary {
     background: var(--accent);
     color: var(--bg);
     border-color: var(--accent);
   }
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background: transparent;
     color: var(--accent);
     box-shadow: 0 0 25px rgba(212, 175, 55, 0.25);
   }
+
   .btn-outline {
     background: transparent;
     color: var(--text);
@@ -144,10 +174,12 @@
     border-color: var(--accent);
     color: var(--accent);
   }
+
   .btn:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
   }
+
   .btn:disabled {
     opacity: 0.5;
     cursor: wait;
@@ -280,7 +312,12 @@
       e.preventDefault();
       setOffline();
       statusEl.animate(
-        [{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }],
+        [
+          { transform: 'translateX(0)' },
+          { transform: 'translateX(-4px)' },
+          { transform: 'translateX(4px)' },
+          { transform: 'translateX(0)' }
+        ],
         { duration: 250 }
       );
     }
@@ -297,14 +334,7 @@
 
   // Se navigator.onLine disser online, confirma com ping real
   if (navigator.onLine) {
-    ping().then(function (ok) {
-      if (ok) {
-        setOnline();
-        setTimeout(function () { window.location.reload(); }, 600);
-      } else {
-        setOffline();
-      }
-    });
+    checkAndMaybeReload();
   }
 })();
 </script>
