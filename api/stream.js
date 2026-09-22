@@ -11,6 +11,14 @@
         c) aluguel de faixa ativo         → libera
      3. SEM acesso → retorna previewUrl (público)
      4. COM acesso → retorna fullUrl ASSINADA (expira em 10 min)
+
+   🛡️ SEGURANÇA
+   ------------------------------------------------------------
+   - Cache-Control: private, no-store (nunca cachear)
+   - Vary: Cookie, Authorization (resposta muda por usuário)
+   - Referrer-Policy: no-referrer (não vaza URL assinada)
+   - X-Content-Type-Options: nosniff
+   - URLs assinadas NUNCA vão para CDN/browser cache
    ============================================================ */
 
 'use strict';
@@ -29,7 +37,16 @@ const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
+  // ── Headers de segurança e cache (CRÍTICO — sempre antes de tudo)
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+  res.setHeader('Vary', 'Cookie, Authorization');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Allow', 'GET, HEAD');
+
+  const method = (req.method || 'GET').toUpperCase();
+
+  if (method !== 'GET' && method !== 'HEAD') {
     return methodNotAllowed(res, 'GET, HEAD');
   }
 
@@ -133,7 +150,7 @@ module.exports = async function handler(req, res) {
 
   // ── 4) Sem acesso → só preview
   if (!unlocked) {
-    return sendJson(res, 200, {
+    return respond(res, method, {
       ok: true,
       unlocked: false,
       reason,
@@ -147,7 +164,7 @@ module.exports = async function handler(req, res) {
 
   // ── 5) Com acesso → URL assinada
   if (!track.full_path) {
-    return sendJson(res, 200, {
+    return respond(res, method, {
       ok: true,
       unlocked: true,
       reason,
@@ -166,7 +183,7 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 502, { ok: false, error: 'Falha ao gerar URL de áudio.' });
   }
 
-  return sendJson(res, 200, {
+  return respond(res, method, {
     ok: true,
     unlocked: true,
     reason,
@@ -224,4 +241,16 @@ async function createSignedUrl(bucket, path, expiresInSec) {
     console.error('[stream] sign error:', err.message);
     return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Resposta genérica (trata HEAD)
+// ─────────────────────────────────────────────────────────────
+function respond(res, method, payload) {
+  if (method === 'HEAD') {
+    res.status(200);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return res.end();
+  }
+  return sendJson(res, 200, payload);
 }
