@@ -4,15 +4,16 @@
    - CRUD completo via /api/admin?action=albums|album|tracks|track
    - Upload integrado de preview e áudio full
    - Delegação de eventos no document (imune a re-render)
-   - Sem binds duplicados
+   - Letra aceita texto puro OU JSON (converte automaticamente)
 
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
-   1. Event delegation no document (não no container)
+   1. Event delegation no document
    2. data-action explícito em CADA botão
    3. Guard contra binds duplicados
-   4. renderAlbumsEditor() pode ser chamada múltiplas vezes
-   5. Logs de debug para diagnóstico
+   4. parseLyricsInput() — aceita texto puro ou JSON
+   5. Guards nos addEventListener (não crasha se modal vazio)
+   6. Logs de diagnóstico
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -30,6 +31,58 @@ const State = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// parseLyricsInput — aceita JSON ou texto puro
+// ------------------------------------------------------------
+// Se o usuário colar texto puro (uma linha por verso),
+// converte para o formato [{ time, text }] automaticamente.
+// Distribui 4 segundos por linha.
+//
+// Retorna:
+//   - Array de { time, text } se conseguir parsear
+//   - null se for inválido
+// ─────────────────────────────────────────────────────────────
+function parseLyricsInput(raw) {
+  if (!raw || typeof raw !== 'string') return [];
+
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  // ── Tentar JSON primeiro
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => ({
+            time: Number(item.time) || 0,
+            text: String(item.text || '').trim()
+          }))
+          .filter((item) => item.text);
+      }
+      return [];
+    } catch {
+      return null; // JSON malformado
+    }
+  }
+
+  // ── Texto puro → converte
+  const lines = trimmed
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (!lines.length) return [];
+
+  const SECONDS_PER_LINE = 4;
+
+  return lines.map((text, i) => ({
+    time: i * SECONDS_PER_LINE,
+    text
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────
 // Delegação global — UMA VEZ SÓ
 // ─────────────────────────────────────────────────────────────
 let _delegationBound = false;
@@ -43,12 +96,11 @@ function bindDelegation() {
     const editor = e.target.closest('#albumsEditor');
     if (!editor) return;
 
-    // ── Toggle álbum (header OU botão de seta)
+    // ── Toggle álbum
     const toggle = e.target.closest('[data-album-toggle]');
     if (toggle) {
       e.preventDefault();
       const albumId = toggle.dataset.albumToggle;
-      console.log('[albums] toggle:', albumId);
       if (State.expandedAlbumIds.has(albumId)) {
         State.expandedAlbumIds.delete(albumId);
       } else {
@@ -67,7 +119,6 @@ function bindDelegation() {
       e.preventDefault();
       e.stopPropagation();
       const albumId = editAlbum.dataset.albumEdit;
-      console.log('[albums] editar álbum:', albumId);
       const album = State.albums.find((a) => a.id === albumId);
       if (album) openAlbumModal(album);
       return;
@@ -79,10 +130,7 @@ function bindDelegation() {
       e.preventDefault();
       e.stopPropagation();
       const albumId = delAlbum.dataset.albumDelete;
-      console.log('[albums] excluir álbum:', albumId);
-      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) {
-        return;
-      }
+      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
       try {
         await apiFetch('album', {
           method: 'DELETE',
@@ -104,9 +152,7 @@ function bindDelegation() {
     if (newTrack) {
       e.preventDefault();
       e.stopPropagation();
-      const albumId = newTrack.dataset.trackNew;
-      console.log('[albums] nova faixa:', albumId);
-      openTrackModal(albumId, null);
+      openTrackModal(newTrack.dataset.trackNew, null);
       return;
     }
 
@@ -117,7 +163,6 @@ function bindDelegation() {
       e.stopPropagation();
       const trackId = Number(editTrack.dataset.trackEdit);
       const albumId = editTrack.dataset.trackAlbum;
-      console.log('[albums] editar faixa:', trackId, 'album:', albumId);
       if (!albumId) return;
       const list = State.tracks.get(albumId) || [];
       const track = list.find((t) => Number(t.id) === trackId);
@@ -133,14 +178,10 @@ function bindDelegation() {
       e.stopPropagation();
       const trackId = Number(delTrack.dataset.trackDelete);
       const albumId = delTrack.dataset.trackAlbum;
-      console.log('[albums] excluir faixa:', trackId);
       if (!albumId) return;
       if (!confirm('Excluir esta faixa?')) return;
       try {
-        await apiFetch('track', {
-          method: 'DELETE',
-          query: { id: trackId }
-        });
+        await apiFetch('track', { method: 'DELETE', query: { id: trackId } });
         toast('Faixa excluída.', '🗑');
         await loadTracksForAlbum(albumId);
         repaint();
@@ -179,12 +220,9 @@ export function renderAlbumsEditor(_content) {
     return;
   }
 
-  // Bind global (uma vez só)
   bindDelegation();
 
-  // Se já está montado, só repinta o corpo (mantém o header)
   if (container.dataset.mounted === '1') {
-    console.log('[albums] já montado, repintando corpo');
     const body = container.querySelector('[data-albums-body]');
     if (body) paintBody(body);
     return;
@@ -252,14 +290,8 @@ async function loadAlbums() {
 
 async function loadTracksForAlbum(albumId) {
   try {
-    const res = await apiFetch('tracks', {
-      method: 'GET',
-      query: { albumId }
-    });
-    State.tracks.set(
-      albumId,
-      Array.isArray(res?.tracks) ? res.tracks : []
-    );
+    const res = await apiFetch('tracks', { method: 'GET', query: { albumId } });
+    State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
   } catch (err) {
     console.warn(`[albums] falha ao carregar faixas de ${albumId}:`, err);
     State.tracks.set(albumId, []);
@@ -304,9 +336,7 @@ function paintBody(body) {
     return;
   }
 
-  body.innerHTML = State.albums
-    .map((album) => renderAlbumBlock(album))
-    .join('');
+  body.innerHTML = State.albums.map((a) => renderAlbumBlock(a)).join('');
 }
 
 function renderAlbumBlock(album) {
@@ -342,16 +372,13 @@ function renderAlbumBlock(album) {
         <div class="album-actions" style="display:flex;gap:0.4rem;align-items:center;">
           <button class="btn btn-ghost btn-sm"
                   data-album-edit="${escAttr(album.id)}"
-                  type="button"
-                  title="Editar álbum">✎</button>
+                  type="button" title="Editar álbum">✎</button>
           <button class="btn btn-ghost btn-sm"
                   data-album-delete="${escAttr(album.id)}"
-                  type="button"
-                  title="Excluir álbum">🗑</button>
+                  type="button" title="Excluir álbum">🗑</button>
           <button class="album-toggle"
                   data-album-toggle="${escAttr(album.id)}"
-                  type="button"
-                  aria-label="Expandir/recolher">▼</button>
+                  type="button" aria-label="Expandir/recolher">▼</button>
         </div>
       </div>
 
@@ -452,16 +479,10 @@ function renderTrackRow(albumId, track, idx) {
 function openAlbumModal(album) {
   const isNew = !album;
   const a = album || {
-    id: '',
-    title: '',
-    artist: 'Joseph Matthos',
-    year: new Date().getFullYear(),
-    type: 'album',
-    cover_initials: '',
-    cover_image: '',
-    description: '',
-    published: false,
-    order_index: 0
+    id: '', title: '', artist: 'Joseph Matthos',
+    year: new Date().getFullYear(), type: 'album',
+    cover_initials: '', cover_image: '', description: '',
+    published: false, order_index: 0
   };
 
   openAdminModal(`
@@ -539,9 +560,15 @@ function openAlbumModal(album) {
     </div>
   `);
 
-  document.getElementById('albumSave').addEventListener('click', async () => {
+  const saveBtn = document.getElementById('albumSave');
+  if (!saveBtn) {
+    console.error('[albums] #albumSave não encontrado após openAdminModal');
+    return;
+  }
+
+  saveBtn.addEventListener('click', async () => {
     const errEl = document.getElementById('albumError');
-    errEl.textContent = '';
+    if (errEl) errEl.textContent = '';
 
     const payload = {
       id: document.getElementById('albumId').value.trim(),
@@ -557,11 +584,11 @@ function openAlbumModal(album) {
     };
 
     if (!payload.id || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(payload.id)) {
-      errEl.textContent = 'ID inválido.';
+      if (errEl) errEl.textContent = 'ID inválido.';
       return;
     }
     if (!payload.title) {
-      errEl.textContent = 'Título obrigatório.';
+      if (errEl) errEl.textContent = 'Título obrigatório.';
       return;
     }
 
@@ -583,7 +610,7 @@ function openAlbumModal(album) {
       await loadAlbums();
     } catch (err) {
       console.error('[albums] save:', err);
-      errEl.textContent = err?.message || 'Falha ao salvar álbum.';
+      if (errEl) errEl.textContent = err?.message || 'Falha ao salvar álbum.';
     }
   });
 }
@@ -594,20 +621,18 @@ function openAlbumModal(album) {
 function openTrackModal(albumId, track) {
   const isNew = !track;
   const t = track || {
-    id: null,
-    album_id: albumId,
-    track_index: 0,
-    title: '',
-    duration: '',
-    preview_start: 0,
-    preview_duration: 30,
-    price_cents: 499,
-    for_sale: true,
-    published: false,
-    preview_path: null,
-    full_path: null,
-    lyrics: []
+    id: null, album_id: albumId, track_index: 0,
+    title: '', duration: '', preview_start: 0, preview_duration: 30,
+    price_cents: 499, for_sale: true, published: false,
+    preview_path: null, full_path: null, lyrics: []
   };
+
+  // Mostra a letra como texto puro se for array simples
+  const lyricsText = (() => {
+    if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '';
+    // Se todas as linhas têm time === 0 ou times sequenciais, mostra texto puro
+    return t.lyrics.map((l) => l.text || '').join('\n');
+  })();
 
   openAdminModal(`
     <h3>${isNew ? 'Nova faixa' : 'Editar faixa'}</h3>
@@ -677,10 +702,11 @@ function openTrackModal(albumId, track) {
     </div>
 
     <div class="form-group">
-      <label for="trackLyrics">Letra (JSON)</label>
-      <textarea id="trackLyrics" rows="4" style="font-family:monospace;font-size:0.8rem;">${
-        t.lyrics && t.lyrics.length ? esc(JSON.stringify(t.lyrics, null, 2)) : '[]'
-      }</textarea>
+      <label for="trackLyrics">Letra (texto puro ou JSON)</label>
+      <textarea id="trackLyrics" rows="6" style="font-family:inherit;font-size:0.9rem;">${esc(lyricsText)}</textarea>
+      <div class="form-hint">
+        Uma linha por verso. Os tempos são distribuídos automaticamente (4s por linha).
+      </div>
     </div>
 
     <div class="form-error" id="trackError"></div>
@@ -715,17 +741,23 @@ function openTrackModal(albumId, track) {
     track: t
   });
 
-  document.getElementById('trackSave').addEventListener('click', async () => {
-    const errEl = document.getElementById('trackError');
-    errEl.textContent = '';
+  const saveBtn = document.getElementById('trackSave');
+  if (!saveBtn) {
+    console.error('[albums] #trackSave não encontrado após openAdminModal');
+    return;
+  }
 
-    let lyrics = [];
-    try {
-      const raw = document.getElementById('trackLyrics').value.trim() || '[]';
-      lyrics = JSON.parse(raw);
-      if (!Array.isArray(lyrics)) lyrics = [];
-    } catch {
-      errEl.textContent = 'Letra inválida (JSON malformado).';
+  saveBtn.addEventListener('click', async () => {
+    const errEl = document.getElementById('trackError');
+    if (errEl) errEl.textContent = '';
+
+    // ⚡ Aceita texto puro OU JSON
+    const lyrics = parseLyricsInput(
+      document.getElementById('trackLyrics').value
+    );
+
+    if (lyrics === null) {
+      if (errEl) errEl.textContent = 'Letra inválida. Use texto puro ou JSON válido.';
       return;
     }
 
@@ -741,7 +773,7 @@ function openTrackModal(albumId, track) {
     };
 
     if (!payload.title) {
-      errEl.textContent = 'Título obrigatório.';
+      if (errEl) errEl.textContent = 'Título obrigatório.';
       return;
     }
 
@@ -765,7 +797,7 @@ function openTrackModal(albumId, track) {
       repaint();
     } catch (err) {
       console.error('[albums] save track:', err);
-      errEl.textContent = err?.message || 'Falha ao salvar faixa.';
+      if (errEl) errEl.textContent = err?.message || 'Falha ao salvar faixa.';
     }
   });
 }
@@ -774,14 +806,7 @@ function openTrackModal(albumId, track) {
 // Upload de áudio associado a uma faixa
 // ─────────────────────────────────────────────────────────────
 function bindTrackUpload({
-  buttonSel,
-  inputId,
-  statusSel,
-  kind,
-  uploadFn,
-  field,
-  albumId,
-  track
+  buttonSel, inputId, statusSel, kind, uploadFn, field, albumId, track
 }) {
   const button = document.querySelector(buttonSel);
   const input = document.getElementById(inputId);
@@ -806,37 +831,26 @@ function bindTrackUpload({
     try {
       button.disabled = true;
       button.textContent = 'Enviando…';
-      if (statusEl) {
-        statusEl.innerHTML = '<span class="audio-chip">⬆ 0%</span>';
-      }
+      if (statusEl) statusEl.innerHTML = '<span class="audio-chip">⬆ 0%</span>';
 
       const result = await uploadFn(file, (pct) => {
-        if (statusEl) {
-          statusEl.innerHTML = `<span class="audio-chip">⬆ ${pct}%</span>`;
-        }
+        if (statusEl) statusEl.innerHTML = `<span class="audio-chip">⬆ ${pct}%</span>`;
       });
 
-      if (!result?.path) {
-        throw new Error('Upload não retornou path.');
-      }
+      if (!result?.path) throw new Error('Upload não retornou path.');
 
-      const patch = { [field]: result.path };
       await apiFetch('track', {
         method: 'PATCH',
         query: { id: track.id },
-        body: patch
+        body: { [field]: result.path }
       });
 
       track[field] = result.path;
 
-      if (statusEl) {
-        statusEl.innerHTML = `<span class="audio-chip">✓ ${esc(result.path)}</span>`;
-      }
+      if (statusEl) statusEl.innerHTML = `<span class="audio-chip">✓ ${esc(result.path)}</span>`;
 
       toast(
-        kind === 'audio-full'
-          ? 'Áudio completo associado.'
-          : 'Prévia associada.',
+        kind === 'audio-full' ? 'Áudio completo associado.' : 'Prévia associada.',
         '✓'
       );
 
@@ -844,9 +858,7 @@ function bindTrackUpload({
     } catch (err) {
       console.error('[albums] upload:', err);
       toast(err?.message || 'Falha no upload.', '⚠');
-      if (statusEl) {
-        statusEl.innerHTML = '<span class="audio-chip none">Falha no upload</span>';
-      }
+      if (statusEl) statusEl.innerHTML = '<span class="audio-chip none">Falha no upload</span>';
     } finally {
       button.disabled = false;
       button.textContent = original;
