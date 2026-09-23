@@ -9,11 +9,13 @@
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
    1. Event delegation no document
-   2. data-action explícito em CADA botão
-   3. Guard contra binds duplicados
-   4. parseLyricsInput() — aceita texto puro ou JSON
-   5. Guards nos addEventListener (não crasha se modal vazio)
-   6. Logs de diagnóstico
+   2. ⚡ ORDEM DOS HANDLERS: específicos primeiro, toggle último
+      (corrige botões ✎ e 🗑 dos álbuns que eram engolidos pelo
+      data-album-toggle do .album-header)
+   3. data-action explícito em CADA botão
+   4. Guard contra binds duplicados
+   5. parseLyricsInput() — aceita texto puro ou JSON
+   6. Guards nos addEventListener (não crasha se modal vazio)
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -32,14 +34,6 @@ const State = {
 
 // ─────────────────────────────────────────────────────────────
 // parseLyricsInput — aceita JSON ou texto puro
-// ------------------------------------------------------------
-// Se o usuário colar texto puro (uma linha por verso),
-// converte para o formato [{ time, text }] automaticamente.
-// Distribui 4 segundos por linha.
-//
-// Retorna:
-//   - Array de { time, text } se conseguir parsear
-//   - null se for inválido
 // ─────────────────────────────────────────────────────────────
 function parseLyricsInput(raw) {
   if (!raw || typeof raw !== 'string') return [];
@@ -47,7 +41,6 @@ function parseLyricsInput(raw) {
   const trimmed = raw.trim();
   if (!trimmed) return [];
 
-  // ── Tentar JSON primeiro
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
     try {
       const parsed = JSON.parse(trimmed);
@@ -62,11 +55,10 @@ function parseLyricsInput(raw) {
       }
       return [];
     } catch {
-      return null; // JSON malformado
+      return null;
     }
   }
 
-  // ── Texto puro → converte
   const lines = trimmed
     .split('\n')
     .map((l) => l.trim())
@@ -96,24 +88,12 @@ function bindDelegation() {
     const editor = e.target.closest('#albumsEditor');
     if (!editor) return;
 
-    // ── Toggle álbum
-    const toggle = e.target.closest('[data-album-toggle]');
-    if (toggle) {
-      e.preventDefault();
-      const albumId = toggle.dataset.albumToggle;
-      if (State.expandedAlbumIds.has(albumId)) {
-        State.expandedAlbumIds.delete(albumId);
-      } else {
-        State.expandedAlbumIds.add(albumId);
-        if (!State.tracks.has(albumId)) {
-          await loadTracksForAlbum(albumId);
-        }
-      }
-      repaint();
-      return;
-    }
+    // ⚡ ORDEM IMPORTA: botões específicos PRIMEIRO, toggle POR ÚLTIMO.
+    // Motivo: o `.album-header` tem `data-album-toggle` e envolve TODOS
+    // os botões. Se o toggle fosse checado primeiro, ele "engoliria"
+    // os cliques de ✎ (editar) e 🗑 (excluir).
 
-    // ── Editar álbum
+    // ── 1. Editar álbum (específico)
     const editAlbum = e.target.closest('[data-album-edit]');
     if (editAlbum) {
       e.preventDefault();
@@ -124,7 +104,7 @@ function bindDelegation() {
       return;
     }
 
-    // ── Excluir álbum
+    // ── 2. Excluir álbum (específico)
     const delAlbum = e.target.closest('[data-album-delete]');
     if (delAlbum) {
       e.preventDefault();
@@ -147,16 +127,7 @@ function bindDelegation() {
       return;
     }
 
-    // ── Nova faixa
-    const newTrack = e.target.closest('[data-track-new]');
-    if (newTrack) {
-      e.preventDefault();
-      e.stopPropagation();
-      openTrackModal(newTrack.dataset.trackNew, null);
-      return;
-    }
-
-    // ── Editar faixa
+    // ── 3. Editar faixa (específico)
     const editTrack = e.target.closest('[data-track-edit]');
     if (editTrack) {
       e.preventDefault();
@@ -171,7 +142,7 @@ function bindDelegation() {
       return;
     }
 
-    // ── Excluir faixa
+    // ── 4. Excluir faixa (específico)
     const delTrack = e.target.closest('[data-track-delete]');
     if (delTrack) {
       e.preventDefault();
@@ -192,7 +163,16 @@ function bindDelegation() {
       return;
     }
 
-    // ── Atualizar
+    // ── 5. Nova faixa (específico)
+    const newTrack = e.target.closest('[data-track-new]');
+    if (newTrack) {
+      e.preventDefault();
+      e.stopPropagation();
+      openTrackModal(newTrack.dataset.trackNew, null);
+      return;
+    }
+
+    // ── 6. Atualizar (específico)
     const refresh = e.target.closest('[data-albums-refresh]');
     if (refresh) {
       e.preventDefault();
@@ -200,11 +180,28 @@ function bindDelegation() {
       return;
     }
 
-    // ── Novo álbum
+    // ── 7. Novo álbum (específico)
     const newAlbum = e.target.closest('[data-albums-new]');
     if (newAlbum) {
       e.preventDefault();
       openAlbumModal(null);
+      return;
+    }
+
+    // ── 8. Toggle álbum (POR ÚLTIMO — genérico)
+    const toggle = e.target.closest('[data-album-toggle]');
+    if (toggle) {
+      e.preventDefault();
+      const albumId = toggle.dataset.albumToggle;
+      if (State.expandedAlbumIds.has(albumId)) {
+        State.expandedAlbumIds.delete(albumId);
+      } else {
+        State.expandedAlbumIds.add(albumId);
+        if (!State.tracks.has(albumId)) {
+          await loadTracksForAlbum(albumId);
+        }
+      }
+      repaint();
       return;
     }
   });
@@ -627,10 +624,8 @@ function openTrackModal(albumId, track) {
     preview_path: null, full_path: null, lyrics: []
   };
 
-  // Mostra a letra como texto puro se for array simples
   const lyricsText = (() => {
     if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '';
-    // Se todas as linhas têm time === 0 ou times sequenciais, mostra texto puro
     return t.lyrics.map((l) => l.text || '').join('\n');
   })();
 
@@ -751,7 +746,6 @@ function openTrackModal(albumId, track) {
     const errEl = document.getElementById('trackError');
     if (errEl) errEl.textContent = '';
 
-    // ⚡ Aceita texto puro OU JSON
     const lyrics = parseLyricsInput(
       document.getElementById('trackLyrics').value
     );
