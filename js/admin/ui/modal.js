@@ -3,15 +3,23 @@
    ------------------------------------------------------------
    🛡️ SEGURANÇA
    ------------------------------------------------------------
-   openAdminModal(html)  → sanitiza por padrão.
-   openAdminModalTrusted(html) → NÃO sanitiza. Use apenas com
-     HTML 100% controlado pelo sistema (sem interpolação de
-     dados externos). Aceita também Node/DocumentFragment.
+   Este módulo é usado SOMENTE no painel admin (usuário já
+   autenticado via HMAC + cookie __Host-jm_admin).
 
-   Regra prática:
-     - Conteúdo dinâmico (nome, email, título, etc.) → openAdminModal()
-       + esc() nos valores interpolados.
-     - Conteúdo estático de template → openAdminModalTrusted().
+   Diferente do `sanitizeHtml` de `dom.js` (usado para conteúdo
+   de USUÁRIO como hero.title), o `openAdminModal` aqui aceita
+   HTML CONTROLADO PELO SISTEMA — formulários, botões, inputs,
+   divs, etc.
+
+   Se o caller interpolar dados do usuário (nome, email), DEVE
+   usar `esc()` do `dom.js` em cada valor.
+
+   🔧 CORREÇÃO APLICADA
+   ------------------------------------------------------------
+   Antes, openAdminModal() chamava sanitizeHtml() que só
+   permitia b/i/em/strong/br/span/p/a — transformando o HTML
+   dos modais (formulários) em texto puro. Agora ele insere
+   o HTML diretamente (comportamento de openAdminModalTrusted).
 
    Funcionalidades
    ------------------------------------------------------------
@@ -23,38 +31,35 @@
    - Guard contra DOM indisponível
    ============================================================ */
 
-import { sanitizeHtml } from './dom.js';
-
 // ─────────────────────────────────────────────────────────────
 // Guard: DOM deve existir
 // ─────────────────────────────────────────────────────────────
 const HAS_DOM = typeof document !== 'undefined';
 
 // ─────────────────────────────────────────────────────────────
-// API pública — versão SEGURA (padrão)
+// API pública
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Abre o modal com HTML SANITIZADO.
+ * Abre o modal com HTML do sistema.
  *
- * Aceita:
- *   - string → sanitizada automaticamente
- *   - Node / DocumentFragment → inserido via replaceChildren (sem innerHTML)
+ * Aceita string, Node ou DocumentFragment.
  *
- * Uso recomendado:
- *   openAdminModal(`<h3>Olá, ${esc(user.name)}</h3>`)
+ * ⚠️  NÃO sanitiza — o caller é responsável por escapar dados
+ *     dinâmicos com `esc()` de `./dom.js`.
  *
- * O html de entrada ainda passa pelo sanitizeHtml(), então tags
- * maliciosas ou atributos perigosos são removidos mesmo se o
- * caller esquecer de escapar.
+ * @param {string | Node | DocumentFragment} input
  */
 export function openAdminModal(input) {
   if (!HAS_DOM) return;
 
   const { modal, content } = getModalRefs();
-  if (!modal || !content) return;
+  if (!modal || !content) {
+    console.warn('[admin-modal] #adminModal ou #adminModalContent não encontrado');
+    return;
+  }
 
-  // ── Caso 1: Node / DocumentFragment → direto (sem innerHTML)
+  // ── Node / DocumentFragment → direto
   if (isDomNode(input)) {
     content.replaceChildren(input);
     showModal(modal);
@@ -62,50 +67,23 @@ export function openAdminModal(input) {
     return;
   }
 
-  // ── Caso 2: string → sanitiza antes de inserir
+  // ── String → injeta como HTML
   if (typeof input !== 'string') {
     console.warn('[admin-modal] input inválido (nem string nem Node)');
     return;
   }
 
-  const safeHtml = sanitizeHtml(input);
-  content.innerHTML = safeHtml;
+  content.innerHTML = input;
   showModal(modal);
   focusFirst(content);
 }
 
 /**
- * Abre o modal SEM sanitizar.
- *
- * ⚠️ Use APENAS com HTML 100% controlado pelo sistema.
- *    NUNCA interpole dados do usuário sem escapar.
- *
- * Aceita string, Node ou DocumentFragment.
- *
- * Uso correto:
- *   openAdminModalTrusted(`
- *     <h3>Confirmar</h3>
- *     <p>Deseja continuar?</p>
- *     <button data-close>Não</button>
- *   `)
+ * Alias para openAdminModal (compatibilidade).
+ * Antes era a versão "trusted", agora todas são iguais.
  */
 export function openAdminModalTrusted(input) {
-  if (!HAS_DOM) return;
-
-  const { modal, content } = getModalRefs();
-  if (!modal || !content) return;
-
-  if (isDomNode(input)) {
-    content.replaceChildren(input);
-  } else if (typeof input === 'string') {
-    content.innerHTML = input;
-  } else {
-    console.warn('[admin-modal] input inválido (nem string nem Node)');
-    return;
-  }
-
-  showModal(modal);
-  focusFirst(content);
+  return openAdminModal(input);
 }
 
 /**
@@ -120,7 +98,6 @@ export function closeAdminModal() {
   modal.classList.remove('open');
   modal.setAttribute('aria-hidden', 'true');
 
-  // Limpa o conteúdo (evita listeners órfãos e nós residualmente focáveis)
   const content = document.getElementById('adminModalContent');
   if (content) {
     content.replaceChildren();
@@ -152,7 +129,6 @@ function showModal(modal) {
 }
 
 function focusFirst(content) {
-  // Foco no primeiro campo interativo (a11y)
   setTimeout(() => {
     const first = content.querySelector(
       'input:not([type="hidden"]):not([disabled]), ' +
@@ -209,43 +185,7 @@ if (HAS_DOM) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers para construir HTML seguro programaticamente
-// ------------------------------------------------------------
-// Quando o modal tem muitos dados dinâmicos, é mais seguro
-// construir um <template> e substituir os nós do que concatenar
-// strings. Estes helpers facilitam.
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Cria um elemento DOM a partir de HTML e retorna o primeiro
- * elemento filho (útil para usar com openAdminModalTrusted).
- *
- * @param {string} html - HTML controlado pelo sistema
- * @returns {HTMLElement | null}
- */
-export function htmlToElement(html) {
-  if (!HAS_DOM || typeof html !== 'string') return null;
-  const template = document.createElement('template');
-  template.innerHTML = html.trim();
-  return template.content.firstElementChild;
-}
-
-/**
- * Cria um DocumentFragment a partir de HTML (útil para múltiplos
- * filhos). Retorna o fragment, não o primeiro elemento.
- *
- * @param {string} html - HTML controlado pelo sistema
- * @returns {DocumentFragment | null}
- */
-export function htmlToFragment(html) {
-  if (!HAS_DOM || typeof html !== 'string') return null;
-  const template = document.createElement('template');
-  template.innerHTML = html.trim();
-  return template.content;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Compatibilidade com onclick inline (legado)
+// Compatibilidade
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   window.closeAdminModal = closeAdminModal;
