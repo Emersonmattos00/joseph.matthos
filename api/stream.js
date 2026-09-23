@@ -2,14 +2,14 @@
    api/stream.js — Resolve URL de áudio com verificação de permissão
    ------------------------------------------------------------
    GET /api/stream?albumId=X&trackIndex=Y
+   GET /api/stream?albumId=X&trackIndex=Y&debug=1
 
    Fluxo:
      1. Busca a faixa no banco
      2. Verifica permissão:
         a) premium / anual                → libera
-        b) aluguel de álbum ativo         → libera
-        c) aluguel de faixa ativo         → libera
-     3. SEM acesso → retorna previewUrl (público)
+        b) aluguel de faixa ativo         → libera
+     3. SEM acesso → retorna previewUrl (público) + previewStart
      4. COM acesso → retorna fullUrl ASSINADA (expira em TTL configurável)
 
    🛡️ SEGURANÇA
@@ -20,6 +20,15 @@
    - X-Content-Type-Options: nosniff
    - URLs assinadas NUNCA vão para CDN/browser cache
    - TTL configurável via env, com clamp entre 60s e 3600s
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. Inclui `preview_start` no SELECT e na resposta (previewStart)
+   2. Remove `scope=eq.track` (coluna inexistente no schema)
+   3. Remove verificação de aluguel de álbum (não suportado no schema)
+   4. TTL padrão elevado para 1800s (30 min) — cobre músicas longas
+   5. Modo `?debug=1` devolve estado completo da faixa (sem URLs)
+   6. Respostas de erro estruturadas (code + message)
    ============================================================ */
 
 'use strict';
@@ -36,14 +45,14 @@ const {
 // ─────────────────────────────────────────────────────────────
 // TTL da URL assinada
 // ------------------------------------------------------------
-// Default: 10 minutos (600s) — folgado para streaming contínuo
+// Default: 30 minutos (1800s) — cobre músicas longas + pausas
 // Mínimo:  1 minuto  (60s)   — evita configuração absurda
 // Máximo:  1 hora    (3600s) — evita link quase permanente
 //
 // Env opcional:
-//   SIGNED_URL_TTL_SEC=600
+//   SIGNED_URL_TTL_SEC=1800
 // ─────────────────────────────────────────────────────────────
-const DEFAULT_SIGNED_URL_TTL_SEC = 600;
+const DEFAULT_SIGNED_URL_TTL_SEC = 1800;
 const MIN_SIGNED_URL_TTL_SEC = 60;
 const MAX_SIGNED_URL_TTL_SEC = 3600;
 
@@ -66,9 +75,14 @@ module.exports = async function handler(req, res) {
 
   const albumId = String(req.query?.albumId || '').trim();
   const trackIndex = Number(req.query?.trackIndex);
+  const debug = String(req.query?.debug || '') === '1';
 
   if (!albumId || !Number.isInteger(trackIndex) || trackIndex < 0) {
-    return sendJson(res, 400, { ok: false, error: 'Parâmetros inválidos.' });
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Parâmetros inválidos.',
+      code: 'INVALID_PARAMS'
+    });
   }
 
   // ── 1) Buscar a faixa
@@ -77,24 +91,70 @@ module.exports = async function handler(req, res) {
     const r = await supabaseAdminRequest(
       `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
       `&track_index=eq.${trackIndex}` +
-      `&select=id,album_id,track_index,title,full_path,preview_path,preview_duration` +
+      `&select=id,album_id,track_index,title,` +
+      `full_path,preview_path,preview_start,preview_duration,` +
+      `published,for_sale,price_cents` +
       `&limit=1`,
       { method: 'GET' }
     );
 
-    if (!r.response.ok || !Array.isArray(r.body) || !r.body[0]) {
-      return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    if (!r.response.ok) {
+      console.error('[stream] Supabase erro:', r.response.status, r.body);
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Serviço indisponível.',
+        code: 'DB_ERROR'
+      });
     }
+
+    if (!Array.isArray(r.body) || !r.body[0]) {
+      return sendJson(res, 404, {
+        ok: false,
+        error: 'Faixa não encontrada.',
+        code: 'TRACK_NOT_FOUND'
+      });
+    }
+
     track = r.body[0];
   } catch (err) {
     console.error('[stream] erro ao buscar faixa:', err.message);
-    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Serviço indisponível.',
+      code: 'DB_ERROR'
+    });
+  }
+
+  // ── Modo debug: devolve estado sem URLs assinadas
+  if (debug) {
+    return respond(res, method, {
+      ok: true,
+      debug: true,
+      track: {
+        id: track.id,
+        albumId: track.album_id,
+        trackIndex: track.track_index,
+        title: track.title,
+        published: !!track.published,
+        forSale: !!track.for_sale,
+        priceCents: Number(track.price_cents) || 0,
+        hasPreviewPath: !!track.preview_path,
+        hasFullPath: !!track.full_path,
+        previewPath: track.preview_path || null,
+        fullPath: track.full_path || null,
+        previewStart: Number(track.preview_start) || 0,
+        previewDuration: Number(track.preview_duration) || 30
+      }
+    });
   }
 
   // ── 2) Preview é sempre público
   const previewUrl = track.preview_path
     ? buildPublicUrl(PREVIEW_BUCKET, track.preview_path)
     : null;
+
+  const previewStart = Number(track.preview_start) || 0;
+  const previewDuration = Number(track.preview_duration) || 30;
 
   // ── 3) Verificar permissão
   let unlocked = false;
@@ -113,13 +173,14 @@ module.exports = async function handler(req, res) {
         unlocked = true;
         reason = 'premium';
       } else {
+        // 3.2) Aluguel de FAIXA ativo?
+        // ⚠️  rentals NÃO tem coluna `scope` nem `album_id` no schema.
+        //     Só verificamos por track_id.
         const nowIso = new Date().toISOString();
 
-        // 3.2) Aluguel de ÁLBUM ativo?
-        const albumRental = await supabaseAdminRequest(
+        const trackRental = await supabaseAdminRequest(
           `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
-          `&album_id=eq.${encodeURIComponent(albumId)}` +
-          `&scope=eq.album` +
+          `&track_id=eq.${encodeURIComponent(track.id)}` +
           `&status=eq.active` +
           `&expires_at=gt.${encodeURIComponent(nowIso)}` +
           `&select=id,expires_at` +
@@ -128,33 +189,14 @@ module.exports = async function handler(req, res) {
           { method: 'GET' }
         );
 
-        if (albumRental.response.ok
-            && Array.isArray(albumRental.body)
-            && albumRental.body[0]) {
+        if (
+          trackRental.response.ok &&
+          Array.isArray(trackRental.body) &&
+          trackRental.body[0]
+        ) {
           unlocked = true;
-          reason = 'album_rental_active';
-          rentalExpiresAt = albumRental.body[0].expires_at || null;
-        } else {
-          // 3.3) Aluguel de FAIXA ativo?
-          const trackRental = await supabaseAdminRequest(
-            `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
-            `&track_id=eq.${track.id}` +
-            `&scope=eq.track` +
-            `&status=eq.active` +
-            `&expires_at=gt.${encodeURIComponent(nowIso)}` +
-            `&select=id,expires_at` +
-            `&order=expires_at.desc` +
-            `&limit=1`,
-            { method: 'GET' }
-          );
-
-          if (trackRental.response.ok
-              && Array.isArray(trackRental.body)
-              && trackRental.body[0]) {
-            unlocked = true;
-            reason = 'track_rental_active';
-            rentalExpiresAt = trackRental.body[0].expires_at || null;
-          }
+          reason = 'track_rental_active';
+          rentalExpiresAt = trackRental.body[0].expires_at || null;
         }
       }
     }
@@ -169,7 +211,8 @@ module.exports = async function handler(req, res) {
       unlocked: false,
       reason,
       previewUrl,
-      previewDuration: track.preview_duration || 30,
+      previewStart,
+      previewDuration,
       fullUrl: null,
       expiresIn: null,
       rentalExpiresAt: null
@@ -183,11 +226,13 @@ module.exports = async function handler(req, res) {
       unlocked: true,
       reason,
       previewUrl,
-      previewDuration: track.preview_duration || 30,
+      previewStart,
+      previewDuration,
       fullUrl: null,
       expiresIn: null,
       rentalExpiresAt,
-      warning: 'Áudio completo não cadastrado.'
+      warning: 'Áudio completo não cadastrado.',
+      code: 'FULL_PATH_MISSING'
     });
   }
 
@@ -195,7 +240,11 @@ module.exports = async function handler(req, res) {
   const signedUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, ttl);
 
   if (!signedUrl) {
-    return sendJson(res, 502, { ok: false, error: 'Falha ao gerar URL de áudio.' });
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Falha ao gerar URL de áudio.',
+      code: 'SIGN_FAILED'
+    });
   }
 
   return respond(res, method, {
@@ -203,7 +252,8 @@ module.exports = async function handler(req, res) {
     unlocked: true,
     reason,
     previewUrl,
-    previewDuration: track.preview_duration || 30,
+    previewStart,
+    previewDuration,
     fullUrl: signedUrl,
     expiresIn: ttl,
     rentalExpiresAt
