@@ -6,7 +6,13 @@
    POST   /api/admin?action=logout       → encerra sessão
    GET    /api/admin?action=content      → lê conteúdo
    PUT    /api/admin?action=content      → salva conteúdo
-   POST   /api/admin?action=upload       → upload (imagem/áudio)
+
+   ── Upload ───────────────────────────────────────────────────
+   POST   /api/admin?action=upload        → upload Base64 (imagens)
+   POST   /api/admin?action=upload-sign   → gera URL assinada de PUT
+   POST   /api/admin?action=upload-confirm → confirma upload e
+                                             grava path no banco
+
    GET    /api/admin?action=users        → lista usuários + planos
    PATCH  /api/admin?action=users        → altera plano manualmente
    GET    /api/admin?action=sales        → assinaturas + rentals + eventos
@@ -30,9 +36,9 @@
    - Rate limit por IP no login (fail-closed: bloqueia se KV cair)
    - Auditoria em toda escrita
    - Upload roteia para o bucket correto:
-       image         → site-assets     (público)
-       audio-preview → audio-preview   (público)
-       audio-full    → audio-premium   (privado)
+       image         → site-assets     (público, Base64)
+       audio-preview → audio-preview   (público, presigned)
+       audio-full    → audio-premium   (privado, presigned)
    - Playlists: sanitizadas para aceitar apenas track.id (integer)
    - Ao mudar plano para "free", assinaturas no MP são canceladas
    ============================================================ */
@@ -97,12 +103,17 @@ const SALES_LIMIT = 500;
 const AUDIT_LIMIT = 100;
 const AUDIT_MAX_LIMIT = 500;
 
+// ── Upload — limites e buckets
+// Imagens: Base64 (cabe no body da Vercel)
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;              // 5 MB
+const MAX_AUDIO_SIZE = 200 * 1024 * 1024;            // 200 MB (presigned)
+const MAX_AUDIO_SIZE_LEGACY = 4 * 1024 * 1024;       // 4 MB (Base64 legado)
+const UPLOAD_TIMEOUT_MS = 180_000;                   // 3 min
+const SIGNED_UPLOAD_TTL_SEC = 900;                   // 15 min para concluir o PUT
+
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg']);
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_AUDIO_SIZE = 4 * 1024 * 1024;
 
-// Buckets válidos por tipo de upload
 const BUCKET_BY_KIND = {
   'image': 'site-assets',
   'audio-preview': 'audio-preview',
@@ -115,6 +126,8 @@ const VALID_ACTIONS = new Set([
   'logout',
   'content',
   'upload',
+  'upload-sign',
+  'upload-confirm',
   'users',
   'sales',
   'audit',
@@ -206,9 +219,18 @@ module.exports = async function handler(req, res) {
       if (method === 'PUT') return handlePutContent(req, res, session);
       return methodNotAllowed(res, 'GET, PUT');
 
+    // ── Upload — 3 modos
     case 'upload':
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return handleUpload(req, res, session);
+
+    case 'upload-sign':
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      return handleUploadSign(req, res, session);
+
+    case 'upload-confirm':
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      return handleUploadConfirm(req, res, session);
 
     case 'users':
       if (method === 'GET') return handleGetUsers(req, res);
@@ -561,12 +583,10 @@ function sanitizePlaylists(playlists) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOAD
+// UPLOAD — Base64 (imagens e áudio pequeno legado)
 // ------------------------------------------------------------
-// Direciona para o bucket correto conforme `kind`:
-//   - 'image'          → site-assets     (público)
-//   - 'audio-preview'  → audio-preview   (público)
-//   - 'audio-full'     → audio-premium   (privado)
+// ⚠️  Base64 infla ~33% e a Vercel corta body em ~4.5 MB.
+//     Para áudio grande, use upload-sign (presigned).
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
@@ -604,26 +624,45 @@ async function handleUpload(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Base64 inválido.' });
   }
 
-  if (isImage && buffer.length > MAX_IMAGE_SIZE) {
-    return sendJson(res, 413, { ok: false, error: 'Imagem muito grande (máx 5 MB).' });
-  }
-  if (isAudio && buffer.length > MAX_AUDIO_SIZE) {
+  // ⚠️  Áudio via Base64 tem limite duro de 4 MB (Vercel body = 4.5 MB)
+  const maxBytes = isImage ? MAX_IMAGE_SIZE : MAX_AUDIO_SIZE_LEGACY;
+
+  if (buffer.length > maxBytes) {
+    const maxMb = Math.round(maxBytes / 1024 / 1024);
     return sendJson(res, 413, {
       ok: false,
-      error: `Áudio muito grande (máx ${Math.round(MAX_AUDIO_SIZE / 1024 / 1024)} MB).`
+      error: isImage
+        ? `Imagem muito grande (máx ${maxMb} MB).`
+        : `Áudio muito grande para upload Base64 (máx ${maxMb} MB). Use upload-sign.`,
+      code: 'FILE_TOO_LARGE',
+      hint: isAudio ? 'Use action=upload-sign (presigned URL)' : null,
+      maxBytes
     });
   }
 
   // Nome único do arquivo
   const ext = filename.split('.').pop() || (isImage ? 'jpg' : 'mp3');
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
-
-  // Imagens ficam em subpasta 'images/'; áudio na raiz do bucket
   const path = isImage ? `images/${uniqueName}` : uniqueName;
 
   const uploadResult = await supabaseStorageUpload(bucket, path, buffer, contentType);
+
   if (!uploadResult.ok) {
-    return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
+    console.error('[admin/upload] Storage falhou:', {
+      bucket,
+      path,
+      contentType,
+      size: buffer.length,
+      status: uploadResult.status,
+      error: uploadResult.error
+    });
+
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Falha no upload para o Storage.',
+      code: 'STORAGE_UPLOAD_FAILED',
+      status: uploadResult.status
+    });
   }
 
   // URL pública só para buckets públicos
@@ -646,30 +685,375 @@ async function handleUpload(req, res, session) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────
+// UPLOAD SIGN — gera URL assinada de PUT para o Supabase Storage
+// ------------------------------------------------------------
+// Body esperado:
+//   { kind, filename, contentType, size }
+//
+// Resposta:
+//   { ok: true, uploadUrl, path, bucket, expiresIn }
+//
+// O browser faz PUT direto no Supabase, sem passar pela Vercel.
+// ─────────────────────────────────────────────────────────────
+async function handleUploadSign(req, res, session) {
+  const body = parseBody(req);
+  const kind = String(body.kind || '').trim();
+  const filename = String(body.filename || '').replace(/[^\w.\-]/g, '_').slice(0, 120);
+  const contentType = String(body.contentType || '').trim();
+  const size = Number(body.size);
+
+  const bucket = BUCKET_BY_KIND[kind];
+  if (!bucket) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Tipo inválido.',
+      code: 'INVALID_KIND'
+    });
+  }
+
+  if (!filename || !contentType || !Number.isFinite(size) || size <= 0) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Payload incompleto.',
+      code: 'INVALID_PAYLOAD'
+    });
+  }
+
+  const isImage = kind === 'image';
+  const isAudio = kind === 'audio-preview' || kind === 'audio-full';
+
+  if (isImage && !ALLOWED_IMAGE_TYPES.has(contentType)) {
+    return sendJson(res, 415, {
+      ok: false,
+      error: 'Formato de imagem não suportado.',
+      code: 'INVALID_MIME'
+    });
+  }
+  if (isAudio && !ALLOWED_AUDIO_TYPES.has(contentType)) {
+    return sendJson(res, 415, {
+      ok: false,
+      error: 'Formato de áudio não suportado.',
+      code: 'INVALID_MIME'
+    });
+  }
+
+  const maxSize = isImage ? MAX_IMAGE_SIZE : MAX_AUDIO_SIZE;
+  if (size > maxSize) {
+    const maxMb = Math.round(maxSize / 1024 / 1024);
+    return sendJson(res, 413, {
+      ok: false,
+      error: `Arquivo muito grande (máx ${maxMb} MB).`,
+      code: 'FILE_TOO_LARGE',
+      maxBytes: maxSize
+    });
+  }
+
+  // Nome único
+  const ext = filename.split('.').pop() || (isImage ? 'jpg' : 'mp3');
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
+  const path = isImage ? `images/${uniqueName}` : uniqueName;
+
+  // Gera URL assinada de PUT
+  const signed = await createSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
+
+  if (!signed.ok) {
+    console.error('[admin/upload-sign] falha ao gerar signed URL:', signed.error);
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Falha ao preparar upload.',
+      code: 'SIGN_FAILED'
+    });
+  }
+
+  await audit('upload.sign', {
+    actor: session.user,
+    target: `${bucket}/${path}`,
+    metadata: { size, contentType, bucket }
+  });
+
+  return sendJson(res, 200, {
+    ok: true,
+    uploadUrl: signed.uploadUrl,
+    token: signed.token,
+    path,
+    bucket,
+    expiresIn: SIGNED_UPLOAD_TTL_SEC
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// UPLOAD CONFIRM — registra o path no banco após o PUT
+// ------------------------------------------------------------
+// Body esperado:
+//   { kind, path, albumId?, trackIndex? }
+//
+// Sem albumId/trackIndex: só valida que o arquivo existe.
+// Com albumId/trackIndex: atualiza tracks.preview_path ou
+//                         tracks.full_path.
+// ─────────────────────────────────────────────────────────────
+async function handleUploadConfirm(req, res, session) {
+  const body = parseBody(req);
+  const kind = String(body.kind || '').trim();
+  const path = String(body.path || '').trim();
+  const albumId = body.albumId ? String(body.albumId).trim() : null;
+  const trackIndex = Number.isInteger(Number(body.trackIndex))
+    ? Number(body.trackIndex)
+    : null;
+
+  const bucket = BUCKET_BY_KIND[kind];
+  if (!bucket) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Tipo inválido.',
+      code: 'INVALID_KIND'
+    });
+  }
+
+  if (!path) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Path ausente.',
+      code: 'INVALID_PAYLOAD'
+    });
+  }
+
+  // Verifica se o arquivo realmente existe no Storage
+  const exists = await objectExists(bucket, path);
+  if (!exists) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Arquivo não encontrado no Storage.',
+      code: 'FILE_NOT_FOUND'
+    });
+  }
+
+  // ── Associação a uma faixa específica (opcional)
+  if (albumId && trackIndex !== null) {
+    const field = kind === 'audio-full'
+      ? 'full_path'
+      : kind === 'audio-preview'
+      ? 'preview_path'
+      : null;
+
+    if (!field) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'Só áudio pode ser associado a faixas.',
+        code: 'INVALID_KIND'
+      });
+    }
+
+    const patch = { [field]: path, updated_at: new Date().toISOString() };
+
+    const r = await supabaseAdminRequest(
+      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
+      `&track_index=eq.${trackIndex}`,
+      {
+        method: 'PATCH',
+        headers: { Prefer: 'return=representation' },
+        body: JSON.stringify(patch)
+      }
+    );
+
+    if (!r.response.ok) {
+      console.error('[admin/upload-confirm] PATCH track falhou:', r.response.status, r.body);
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Falha ao associar áudio à faixa.',
+        code: 'DB_ERROR'
+      });
+    }
+
+    await audit('upload.confirm', {
+      actor: session.user,
+      target: `${albumId}:${trackIndex}`,
+      metadata: { bucket, path, field }
+    });
+
+    const updated = Array.isArray(r.body) ? r.body[0] : null;
+
+    const isPublic = bucket !== 'audio-premium';
+    const publicUrl = isPublic
+      ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
+      : null;
+
+    return sendJson(res, 200, {
+      ok: true,
+      path,
+      bucket,
+      url: publicUrl,
+      albumId,
+      trackIndex,
+      field,
+      track: updated
+    });
+  }
+
+  // ── Sem associação: só confirma
+  const isPublic = bucket !== 'audio-premium';
+  const publicUrl = isPublic
+    ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
+    : null;
+
+  await audit('upload.confirm', {
+    actor: session.user,
+    target: `${bucket}/${path}`,
+    metadata: { bucket, standalone: true }
+  });
+
+  return sendJson(res, 200, {
+    ok: true,
+    path,
+    bucket,
+    url: publicUrl,
+    standalone: true
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Storage — helpers
+// ─────────────────────────────────────────────────────────────
+
 async function supabaseStorageUpload(bucket, path, buffer, contentType) {
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
+  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${encodeURIComponent(bucket)}/${String(path)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/')}`;
+
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+  if (!key) {
+    return { ok: false, status: 500, error: 'SUPABASE_SERVICE_ROLE_KEY ausente.' };
+  }
+
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+  const timeout = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
+        apikey: key,
         'Content-Type': contentType,
+        'Content-Length': String(buffer.length),
         'x-upsert': 'true'
       },
       body: buffer,
       signal: controller.signal
     });
-    return { ok: response.ok, status: response.status };
+
+    const responseText = await response.text().catch(() => '');
+
+    if (!response.ok) {
+      console.error(
+        '[admin/upload] Supabase Storage:',
+        response.status,
+        responseText.slice(0, 1000)
+      );
+    }
+
+    return {
+      ok: response.ok,
+      status: response.status,
+      error: response.ok ? null : responseText
+    };
   } catch (err) {
-    console.error('[admin/upload] storage fetch:', err.message);
-    return { ok: false };
+    console.error('[admin/upload] Storage fetch:', err);
+    return {
+      ok: false,
+      status: 0,
+      error: err?.name === 'AbortError'
+        ? 'Upload excedeu o tempo limite.'
+        : err?.message || 'Erro de rede.'
+    };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function createSignedUploadUrl(bucket, path, expiresInSec) {
+  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+
+  if (!url || !key) {
+    return { ok: false, error: 'Supabase não configurado.' };
+  }
+
+  const clean = String(path)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+  const endpoint = `${url}/storage/v1/object/upload/sign/${encodeURIComponent(bucket)}/${clean}`;
+
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ expiresIn: expiresInSec })
+    });
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('[admin/sign] Supabase:', r.status, text.slice(0, 300));
+      return { ok: false, error: `http_${r.status}` };
+    }
+
+    const data = await r.json();
+
+    if (!data?.url) {
+      return { ok: false, error: 'signed_url_missing' };
+    }
+
+    let uploadUrl = String(data.url);
+    if (!/^https?:\/\//i.test(uploadUrl)) {
+      uploadUrl = `${url}/storage/v1${uploadUrl.startsWith('/') ? '' : '/'}${uploadUrl}`;
+    }
+
+    return {
+      ok: true,
+      uploadUrl,
+      token: data.token || null
+    };
+  } catch (err) {
+    console.error('[admin/sign] erro de rede:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function objectExists(bucket, path) {
+  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+
+  if (!url || !key || !bucket || !path) return false;
+
+  const clean = String(path)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+  const endpoint = `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${clean}`;
+
+  try {
+    const r = await fetch(endpoint, {
+      method: 'HEAD',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`
+      }
+    });
+    return r.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -723,15 +1107,6 @@ async function handleGetUsers(req, res) {
 
 // ─────────────────────────────────────────────────────────────
 // USERS — PATCH
-// ------------------------------------------------------------
-// Ao mudar para "free":
-//   1. Cancela assinaturas ativas no MP (provider=mercadopago)
-//   2. Marca assinaturas locais como "canceled"
-//   3. Auditoria com contagem de cancelamentos no MP
-// ------------------------------------------------------------
-// Ao mudar para "premium" ou "anual":
-//   - Cria assinatura manual no banco (provider=manual)
-//   - Cancela outras assinaturas ativas do mesmo usuário
 // ─────────────────────────────────────────────────────────────
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
@@ -760,7 +1135,6 @@ async function handlePatchUser(req, res, session) {
     // MUDANÇA PARA "free" — cancelar no MP + banco
     // ═══════════════════════════════════════════════════════════
     if (plan === 'free') {
-      // ── 1) Buscar assinaturas ativas (antes de cancelar)
       const subsRes = await supabaseAdminRequest(
         `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}` +
           `&status=in.(authorized,trialing)` +
@@ -770,7 +1144,6 @@ async function handlePatchUser(req, res, session) {
 
       const activeSubs = Array.isArray(subsRes.body) ? subsRes.body : [];
 
-      // ── 2) Cancelar no Mercado Pago (se provider for mercadopago)
       const mpToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
       let mpCancelledCount = 0;
 
@@ -804,13 +1177,11 @@ async function handlePatchUser(req, res, session) {
               mpCancelledCount++;
             }
           } catch (err) {
-            // Não bloqueia — cancelamos localmente de qualquer forma
             console.error('[admin/users] MP cancel error:', err.message);
           }
         }
       }
 
-      // ── 3) Cancelar localmente
       const cancelRes = await supabaseAdminRequest(
         `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)`,
         {
@@ -827,7 +1198,6 @@ async function handlePatchUser(req, res, session) {
         return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
       }
 
-      // ── 4) Auditoria estendida
       await audit('user.plan.change', {
         actor: session.user,
         target: userId,
@@ -1192,7 +1562,6 @@ async function handleDeleteAlbum(req, res, session) {
   if (!id) return sendJson(res, 400, { ok: false, error: 'ID ausente.' });
 
   try {
-    // 1) Verifica se tem faixas
     const tracksRes = await supabaseAdminRequest(
       `/rest/v1/tracks?album_id=eq.${encodeURIComponent(id)}&select=id&limit=1`,
       { method: 'GET' }
@@ -1208,7 +1577,6 @@ async function handleDeleteAlbum(req, res, session) {
       });
     }
 
-    // 2) Se force=true, exclui as faixas primeiro
     if (hasTracks && force) {
       await supabaseAdminRequest(
         `/rest/v1/tracks?album_id=eq.${encodeURIComponent(id)}`,
@@ -1216,7 +1584,6 @@ async function handleDeleteAlbum(req, res, session) {
       );
     }
 
-    // 3) Exclui o álbum
     const r = await supabaseAdminRequest(
       `/rest/v1/albums?id=eq.${encodeURIComponent(id)}`,
       { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
@@ -1276,7 +1643,6 @@ async function handleCreateTrack(req, res, session) {
   if (!albumId) return sendJson(res, 400, { ok: false, error: 'album_id obrigatório.' });
   if (!title) return sendJson(res, 400, { ok: false, error: 'Título obrigatório.' });
 
-  // Calcula próximo track_index (maior + 1)
   let nextIndex = 0;
   try {
     const maxRes = await supabaseAdminRequest(
@@ -1428,7 +1794,6 @@ async function handleReorderTracks(req, res, session) {
   }
 
   try {
-    // Aplica em paralelo
     const results = await Promise.all(order.map((item) =>
       supabaseAdminRequest(
         `/rest/v1/tracks?id=eq.${Number(item.id)}`,
