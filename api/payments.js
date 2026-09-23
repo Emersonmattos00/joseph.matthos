@@ -6,10 +6,17 @@
    POST /api/payments?type=webhook      → processa notificação MP
 
    - Assinatura: preapproval (cobrança recorrente)
-   - Rental: preference (pagamento único, 48h de acesso)
+   - Rental: preference (pagamento único, duração variável)
    - Webhook: valida HMAC + idempotência via payments_events
    - Preços SEMPRE do servidor (envs + tracks.price_cents)
    - Webhook duplicado NÃO processado → reprocessa (retry_count)
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. `planId` respeitado no aluguel (24h, 48h, 3d, 5d, 10d, 15d)
+   2. Duração calculada a partir do planId (não mais fixa em 48h)
+   3. Preço lido da env correspondente (RENTAL_PRICE_*)
+   4. Fallback para tracks.price_cents se planId inválido (legado)
    ============================================================ */
 
 'use strict';
@@ -40,7 +47,6 @@ const MAX_ATTEMPTS_PER_USER = 10;
 const MAX_ATTEMPTS_PER_IP = 20;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 
-const RENTAL_DURATION_HOURS = 48;
 const MAX_TRACK_INDEX = 10000;
 const MAX_ALBUM_ID_LENGTH = 64;
 
@@ -49,6 +55,21 @@ const MAX_RETRY_COUNT = 10;
 
 const GENERIC_ERROR = 'Não foi possível iniciar o pagamento.';
 const GENERIC_RATE = 'Muitas tentativas. Tente novamente mais tarde.';
+
+// ─────────────────────────────────────────────────────────────
+// Rental plans — fonte de verdade da duração + preço
+// ─────────────────────────────────────────────────────────────
+const RENTAL_PLAN_DEFS = {
+  '24h': { hours: 24,  envKey: 'RENTAL_PRICE_24H', label: '24 horas' },
+  '48h': { hours: 48,  envKey: 'RENTAL_PRICE_48H', label: '48 horas' },
+  '3d':  { hours: 72,  envKey: 'RENTAL_PRICE_3D',  label: '3 dias'   },
+  '5d':  { hours: 120, envKey: 'RENTAL_PRICE_5D',  label: '5 dias'   },
+  '10d': { hours: 240, envKey: 'RENTAL_PRICE_10D', label: '10 dias'  },
+  '15d': { hours: 360, envKey: 'RENTAL_PRICE_15D', label: '15 dias'  }
+};
+
+// Fallback legado (quando planId não vem — compatibilidade)
+const RENTAL_DURATION_HOURS_LEGACY = 48;
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -82,7 +103,12 @@ async function handleSubscription(req, res) {
   const cfg = loadSubscriptionConfig();
   if (!cfg.ok) {
     console.error('[payments/subscription] Config ausente:', cfg.missing);
-    return sendJson(res, 503, { ok: false, error: 'Pagamento indisponível.' });
+    return sendJson(res, 503, {
+      ok: false,
+      error: 'Pagamento indisponível.',
+      code: 'MP_NOT_CONFIGURED',
+      missing: cfg.missing
+    });
   }
 
   const ip = clientIp(req);
@@ -317,13 +343,18 @@ async function createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user
 }
 
 // ─────────────────────────────────────────────────────────────
-// RENTAL
+// RENTAL — com planId respeitado
 // ─────────────────────────────────────────────────────────────
 async function handleRental(req, res) {
   const cfg = loadRentalConfig();
   if (!cfg.ok) {
     console.error('[payments/rental] Config ausente:', cfg.missing);
-    return sendJson(res, 503, { ok: false, error: 'Pagamento indisponível.' });
+    return sendJson(res, 503, {
+      ok: false,
+      error: 'Pagamento indisponível.',
+      code: 'MP_NOT_CONFIGURED',
+      missing: cfg.missing
+    });
   }
 
   const ip = clientIp(req);
@@ -362,6 +393,7 @@ async function handleRental(req, res) {
     ? body.albumId.trim().slice(0, MAX_ALBUM_ID_LENGTH)
     : '';
   const trackIndex = Number(body.trackIndex);
+  const planId = typeof body.planId === 'string' ? body.planId.trim().toLowerCase() : '';
 
   if (
     !albumId ||
@@ -372,6 +404,35 @@ async function handleRental(req, res) {
   ) {
     await audit('payment_rental', { userId: user.id, ip, userAgent, success: false, reason: 'invalid_input' });
     return sendJson(res, 400, { ok: false, error: 'Faixa inválida.' });
+  }
+
+  // ── Resolve duração + preço a partir do planId
+  const planDef = RENTAL_PLAN_DEFS[planId] || null;
+
+  let rentalHours;
+  let unitPrice;
+  let priceSource;
+
+  if (planDef) {
+    // planId válido → duração + preço das envs
+    rentalHours = planDef.hours;
+
+    const envPrice = Number(process.env[planDef.envKey]);
+    if (Number.isFinite(envPrice) && envPrice > 0) {
+      unitPrice = Number(envPrice.toFixed(2));
+      priceSource = planDef.envKey;
+    } else {
+      // env não configurada → cai para tracks.price_cents
+      console.warn(
+        `[payments/rental] ${planDef.envKey} não configurada, usando tracks.price_cents`
+      );
+      priceSource = 'tracks.price_cents';
+    }
+  } else {
+    // planId inválido/ausente → fallback legado
+    rentalHours = RENTAL_DURATION_HOURS_LEGACY;
+    priceSource = 'legacy_48h';
+    console.warn('[payments/rental] planId ausente/inválido, usando fallback 48h');
   }
 
   let track;
@@ -386,13 +447,15 @@ async function handleRental(req, res) {
     return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
   }
 
-  const priceCents = Number(track.price_cents);
-  if (!Number.isInteger(priceCents) || priceCents <= 0 || priceCents > 1_000_000) {
-    console.error('[payments/rental] preço inválido:', track.id, track.price_cents);
-    return sendJson(res, 500, { ok: false, error: 'Preço indisponível.' });
+  // Se não veio preço da env, usa tracks.price_cents
+  if (!unitPrice) {
+    const priceCents = Number(track.price_cents);
+    if (!Number.isInteger(priceCents) || priceCents <= 0 || priceCents > 1_000_000) {
+      console.error('[payments/rental] preço inválido:', track.id, track.price_cents);
+      return sendJson(res, 500, { ok: false, error: 'Preço indisponível.' });
+    }
+    unitPrice = Number((priceCents / 100).toFixed(2));
   }
-
-  const unitPrice = Number((priceCents / 100).toFixed(2));
 
   try {
     const activeRental = await getActiveRental(user.id, track.id);
@@ -461,7 +524,8 @@ async function handleRental(req, res) {
   let preference;
   try {
     preference = await createMercadoPagoPreference({
-      cfg, user, track, albumId, trackIndex, unitPrice, externalRef
+      cfg, user, track, albumId, trackIndex,
+      unitPrice, externalRef, planId, rentalHours, priceSource
     });
   } catch (error) {
     await markAttemptFailed(attemptId, error.code || 'mp_error');
@@ -491,9 +555,18 @@ async function handleRental(req, res) {
     console.error('[payments/rental] PATCH attempt:', error.message);
   }
 
-  await audit('payment_rental', { userId: user.id, ip, userAgent, success: true, reason: 'created' });
+  await audit('payment_rental', {
+    userId: user.id, ip, userAgent, success: true, reason: 'created',
+    metadata: { planId, rentalHours, priceSource }
+  });
 
-  return sendJson(res, 200, { ok: true, checkoutUrl: preference.checkoutUrl, preferenceId: preference.id });
+  return sendJson(res, 200, {
+    ok: true,
+    checkoutUrl: preference.checkoutUrl,
+    preferenceId: preference.id,
+    planId: planId || null,
+    rentalHours
+  });
 }
 
 function loadRentalConfig() {
@@ -517,12 +590,15 @@ function loadRentalConfig() {
   };
 }
 
-async function createMercadoPagoPreference({ cfg, user, track, albumId, trackIndex, unitPrice, externalRef }) {
+async function createMercadoPagoPreference({
+  cfg, user, track, albumId, trackIndex,
+  unitPrice, externalRef, planId, rentalHours, priceSource
+}) {
   const body = {
     items: [{
       id: String(track.id),
-      title: `Aluguel 48h: ${String(track.title || 'Faixa').slice(0, 200)}`,
-      description: `Acesso por ${RENTAL_DURATION_HOURS}h`,
+      title: `Aluguel ${rentalHours}h: ${String(track.title || 'Faixa').slice(0, 200)}`,
+      description: `Acesso por ${rentalHours}h`,
       quantity: 1,
       currency_id: 'BRL',
       unit_price: unitPrice
@@ -539,7 +615,10 @@ async function createMercadoPagoPreference({ cfg, user, track, albumId, trackInd
     metadata: {
       kind: 'rental',
       album_id: albumId,
-      track_index: trackIndex
+      track_index: trackIndex,
+      plan_id: planId || null,
+      rental_hours: rentalHours,
+      price_source: priceSource
     }
   };
 
@@ -575,15 +654,6 @@ async function createMercadoPagoPreference({ cfg, user, track, albumId, trackInd
 
 // ─────────────────────────────────────────────────────────────
 // WEBHOOK
-// ------------------------------------------------------------
-// Fluxo:
-//   1. Valida assinatura HMAC
-//   2. Insere evento em payments_events (idempotência)
-//   3. Se duplicado:
-//       - se processed_at preenchido → ignora
-//       - se NÃO processado → REPROCESSA (retry_count até 10)
-//   4. Processa (preapproval ou payment)
-//   5. Marca processed_at
 // ─────────────────────────────────────────────────────────────
 async function handleWebhook(req, res) {
   const sig = validateMPSignature(req);
@@ -626,9 +696,6 @@ async function handleWebhook(req, res) {
       return sendJson(res, 502, { ok: false });
     }
 
-    // ── Evento já existia (duplicata do MP)
-    // Verificar se foi REALMENTE processado.
-    // Se não, reprocessar (evita perder pagamento em queda no meio).
     if (!Array.isArray(inserted.body) || inserted.body.length === 0) {
       let existing = null;
       try {
@@ -646,7 +713,6 @@ async function handleWebhook(req, res) {
       }
 
       if (existing && existing.processed_at) {
-        // Já processado com sucesso — não reprocessar
         await audit('payment_webhook', {
           success: true,
           reason: 'duplicated_processed',
@@ -656,7 +722,6 @@ async function handleWebhook(req, res) {
       }
 
       if (existing && !existing.processed_at) {
-        // Existe mas NÃO foi processado → reprocessar
         const retryCount = Number(existing.retry_count) || 0;
         if (retryCount >= MAX_RETRY_COUNT) {
           console.error('[payments/webhook] retry limit atingido:', providerEvent);
@@ -668,7 +733,6 @@ async function handleWebhook(req, res) {
           return sendJson(res, 200, { ok: true, ignored: 'retry_limit' });
         }
 
-        // Incrementa contador de retry
         await supabaseAdminRequest(
           `/rest/v1/payments_events?id=eq.${encodeURIComponent(existing.id)}`,
           {
@@ -685,9 +749,7 @@ async function handleWebhook(req, res) {
           'retry:',
           retryCount + 1
         );
-        // segue o fluxo normal (não retorna)
       } else {
-        // Não encontrado (corrida) — fail-safe
         console.error('[payments/webhook] evento duplicado sem registro:', providerEvent);
         return sendJson(res, 502, { ok: false });
       }
@@ -843,8 +905,12 @@ async function applyPayment({ resourceId, token }) {
     return;
   }
 
+  // ── Duração vem do metadata (definido na criação da preferência)
+  const metadata = data.metadata || {};
+  const rentalHours = Number(metadata.rental_hours) || RENTAL_DURATION_HOURS_LEGACY;
+
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + RENTAL_DURATION_HOURS * 3600 * 1000);
+  const expiresAt = new Date(now.getTime() + rentalHours * 3600 * 1000);
 
   const insert = await supabaseAdminRequest(
     '/rest/v1/rentals?on_conflict=user_id,track_id,payment_id',
