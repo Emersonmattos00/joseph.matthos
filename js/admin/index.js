@@ -3,10 +3,20 @@
    ------------------------------------------------------------
    - Registra atalho Ctrl+Shift+A antes de qualquer API
    - Detecta URL /?admin e abre o painel automaticamente
-   - FLUXO CORRIGIDO: sessão → conteúdo → dashboard
+   - FLUXO: sessão → conteúdo → dashboard
    - Binds resilientes (try/catch por editor)
    - Nav tabs com bind único (MutationObserver só no <nav>)
-   - Uploads roteiam para o bucket correto via `kind`
+   - Uploads de imagem (bg, vinil, sobre) via Base64
+   - Uploads de áudio agora vivem em editors/albums.js
+     (com PATCH automático em tracks.preview_path / full_path)
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. Removidos binds órfãos de previewUpload / fullUpload
+      (o editor de álbuns cuida disso com PATCH automático)
+   2. Comentários atualizados para refletir o fluxo real
+   3. `bindUpload` de imagem mantido — imagens continuam Base64
+   4. Resiliente a falhas (safeRender, safeCall)
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -71,7 +81,6 @@ async function bootstrap() {
   //    openAdminSite() verifica a sessão ANTES de carregar conteúdo.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('admin')) {
-    // setTimeout garante que os binds iniciais da UI já foram registrados
     setTimeout(() => {
       openAdminSite();
     }, 0);
@@ -100,7 +109,6 @@ export async function loadAdminContentAndRender() {
       return;
     }
     console.error('[admin] loadContent falhou:', err);
-    // Fallback: usa defaults para não travar a UI
     AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
     AdminState.contentVersion = 0;
   }
@@ -201,6 +209,9 @@ async function onClickNavButton(event) {
       loadAllAdminFields();
     } else if (tab === 'contato') {
       renderSocialEditor(AdminState.content);
+    } else if (tab === 'discografia') {
+      // Editor de álbuns/faixas — agora funcional
+      renderAlbumsEditor(AdminState.content);
     }
   } catch (err) {
     if (err && (err.status === 401 || err.status === 403)) {
@@ -304,8 +315,8 @@ function bindContentInputs() {
 // ─────────────────────────────────────────────────────────────
 // Botões dos editores
 // ------------------------------------------------------------
-// Nota: bindAlbumsAddButton foi removido — editor de álbuns
-// agora é apenas informativo (álbuns vivem no Supabase).
+// Nota: bindAlbumsAddButton foi removido — o editor de álbuns
+// agora cuida dos próprios binds (CRUD + upload).
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
@@ -329,11 +340,14 @@ function bindEditorButtons() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload zones
+// Upload zones — IMAGENS
 // ------------------------------------------------------------
-// Uploads agora retornam { url, path, bucket }.
-// - Imagens e previews → usar `url` (bucket público)
-// - Áudio full        → usar `path` (bucket privado)
+// Uploads de imagem retornam { url, path, bucket } e continuam
+// via Base64 (imagens são pequenas e cabem no body da Vercel).
+//
+// ⚠️  Uploads de ÁUDIO não são mais tratados aqui.
+//     Eles vivem em editors/albums.js, com presigned URL
+//     e PATCH automático em tracks.preview_path / full_path.
 // ─────────────────────────────────────────────────────────────
 function bindUploadZones() {
   document.querySelectorAll('[data-upload-target]').forEach((zone) => {
@@ -400,26 +414,9 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Uploads de áudio (opcionais — só funcionam se os inputs existirem no HTML)
-  // Se o painel tiver <input id="previewUpload"> ou <input id="fullUpload">,
-  // eles serão ligados aqui e os `path`s ficam disponíveis em window.__*.
-  // O CRUD de faixas (fase 2) vai consumir esses valores.
-
-  try {
-    bindUpload('previewUpload', ({ path }) => {
-      if (!path) return;
-      window.__lastPreviewPath = path;
-      toast('Preview enviado. Copie o path em tracks.preview_path.', '🎵');
-    }, 'audio-preview');
-  } catch (e) { console.warn(e); }
-
-  try {
-    bindUpload('fullUpload', ({ path }) => {
-      if (!path) return;
-      window.__lastFullPath = path;
-      toast('Áudio completo enviado. Copie o path em tracks.full_path.', '🎵');
-    }, 'audio-full');
-  } catch (e) { console.warn(e); }
+  // ⚠️  Uploads de áudio (previewUpload / fullUpload) foram REMOVIDOS.
+  //     O editor de álbuns (editors/albums.js) agora cuida disso
+  //     via presigned URL + PATCH automático em tracks.*_path.
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -670,17 +667,9 @@ Object.defineProperty(window, '__admin', {
       }
     },
     rebind: () => window.__adminRebind(),
-    /**
-     * Recarrega o conteúdo — mas SEMPRE via fluxo validado.
-     * Delega para loadAdminContentAndRender(), que só roda
-     * depois que a sessão já foi confirmada pelo openAdminSite().
-     */
     async reload() {
       await loadAdminContentAndRender();
     },
-    /**
-     * Exposto para o auth.js chamar após login bem-sucedido.
-     */
     bootContent: () => loadAdminContentAndRender()
   }),
   writable: false,
