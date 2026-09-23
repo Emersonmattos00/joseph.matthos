@@ -21,6 +21,14 @@
                       success, reason, created_at
      admin_audit    → id, actor, action, target, metadata, ip,
                       user_agent, created_at
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. getPlanForUserDetailed() — distingue "free real" de "não
+      consegui confirmar" (falha de rede, erro 5xx, plano inválido).
+   2. getPlanForUser() mantida como wrapper simples (string),
+      retrocompatível com o código existente.
+   3. Cache KV só guarda planos confirmados (não cacheia fallback).
    ============================================================ */
 
 'use strict';
@@ -308,11 +316,6 @@ async function getAuthUser(req) {
 let _redis = null;
 let _redisInitFailed = false;
 
-/**
- * Inicializa o cliente Redis (Upstash / Vercel KV).
- * Retorna null se não configurado ou se a dependência falhar.
- * Nunca lança — permite fallback gracioso.
- */
 function getRedis() {
   if (_redis) return _redis;
   if (_redisInitFailed) return null;
@@ -343,18 +346,6 @@ function getRedis() {
   }
 }
 
-/**
- * Verifica e incrementa o contador de rate limit.
- *
- * @param {string} bucket - Identificador do bucket (ex: 'admin-login:1.2.3.4')
- * @param {number} max - Máximo de requisições permitidas na janela
- * @param {number} [windowMs=900000] - Tamanho da janela em ms (padrão: 15 min)
- * @param {object} [options]
- * @param {boolean} [options.failClosed=false] - Se true, bloqueia quando o KV
- *   estiver indisponível. **Use `true` em endpoints críticos (login admin,
- *   signup, reset de senha).** Se false, permite (fail-open).
- * @returns {Promise<{ limited: boolean, retryAfter: number, reason?: string }>}
- */
 async function checkAndIncrement(
   bucket,
   max,
@@ -434,13 +425,6 @@ async function resetBucket(bucket) {
 // 6. AUDITORIA — roteamento entre auth_audit_log e admin_audit
 // ═════════════════════════════════════════════════════════════
 
-/**
- * Decide em qual tabela o evento será persistido.
- * - Prefixos `admin_`, `content.`, `upload`, `user.plan` → admin_audit
- * - Todo o resto → auth_audit_log
- *
- * Pode ser sobrescrito via options.table = 'admin' | 'auth'.
- */
 function resolveAuditTable(event, override) {
   if (override === 'admin') return 'admin_audit';
   if (override === 'auth') return 'auth_audit_log';
@@ -464,12 +448,6 @@ function hashEmail(email) {
     .slice(0, 32);
 }
 
-/**
- * Payload para auth_audit_log.
- * Schema real:
- *   id bigint, event text, email_hash text, user_id uuid, ip inet,
- *   user_agent text, success boolean, reason text, created_at timestamptz
- */
 function buildAuthAuditPayload(event, opts) {
   const { email, userId, ip, userAgent, success, reason } = opts;
   return {
@@ -484,15 +462,6 @@ function buildAuthAuditPayload(event, opts) {
   };
 }
 
-/**
- * Payload para admin_audit.
- * Schema real:
- *   id bigint, actor text, action text NOT NULL, target text,
- *   metadata jsonb, ip inet, user_agent text, created_at timestamptz
- *
- * ⚠️ Não existe `event`, `success` nem `reason` — esses dois últimos
- *    são embutidos em `metadata` para preservar a informação.
- */
 function buildAdminAuditPayload(event, opts) {
   const { actor, target, ip, userAgent, success, reason, metadata } = opts;
 
@@ -513,23 +482,6 @@ function buildAdminAuditPayload(event, opts) {
   };
 }
 
-/**
- * Persiste um evento de auditoria na tabela correta.
- * Nunca lança — falhas são logadas mas não interrompem o fluxo.
- *
- * @param {string} event - Nome do evento (ex: 'login', 'admin_login', 'content.update')
- * @param {object} [options]
- * @param {string} [options.email] - Para auth_audit_log
- * @param {string} [options.userId] - Para auth_audit_log
- * @param {string} [options.actor] - Para admin_audit
- * @param {string} [options.target] - Para admin_audit
- * @param {string} [options.ip]
- * @param {string} [options.userAgent]
- * @param {boolean} [options.success]
- * @param {string} [options.reason]
- * @param {object} [options.metadata]
- * @param {'admin'|'auth'} [options.table] - Força a tabela (opcional)
- */
 async function audit(event, options = {}) {
   const table = resolveAuditTable(event, options.table);
 
@@ -537,7 +489,6 @@ async function audit(event, options = {}) {
     ? buildAdminAuditPayload(event, options)
     : buildAuthAuditPayload(event, options);
 
-  // Log estruturado sempre
   try {
     console.info('[_lib audit]', JSON.stringify({
       table,
@@ -547,7 +498,6 @@ async function audit(event, options = {}) {
     }));
   } catch {}
 
-  // Persiste best-effort
   try {
     const result = await supabaseAdminRequest(`/rest/v1/${table}`, {
       method: 'POST',
@@ -571,11 +521,30 @@ async function audit(event, options = {}) {
 
 // ═════════════════════════════════════════════════════════════
 // 7. PLANO EFETIVO — com cache KV
+// ------------------------------------------------------------
+// getPlanForUserDetailed()  → { plan, degraded, reason }
+// getPlanForUser()          → 'free' | 'premium' | 'anual'
+//
+// `degraded: true` significa que NÃO conseguimos confirmar o
+// plano (rede, 5xx, valor inválido). Nesse caso, `plan` cai em
+// 'free' por segurança, mas o caller pode avisar o usuário.
+//
+// Regras:
+//   - Cache KV só guarda planos CONFIRMADOS (não cacheia fallback)
+//   - Cache TTL: 60s
 // ═════════════════════════════════════════════════════════════
 const PLAN_CACHE_TTL_SEC = 60;
 
-async function getPlanForUser(userId) {
-  if (!userId) return 'free';
+/**
+ * Versão detalhada — distingue free real de falha de lookup.
+ *
+ * @param {string} userId
+ * @returns {Promise<{ plan: string, degraded: boolean, reason: string|null }>}
+ */
+async function getPlanForUserDetailed(userId) {
+  if (!userId) {
+    return { plan: 'free', degraded: false, reason: 'no_user_id' };
+  }
 
   const cacheKey = `plan:${userId}`;
   const redis = getRedis();
@@ -584,35 +553,77 @@ async function getPlanForUser(userId) {
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
-      if (cached && VALID_PLANS.has(cached)) return cached;
+      if (cached && VALID_PLANS.has(cached)) {
+        return { plan: cached, degraded: false, reason: 'cache_hit' };
+      }
     } catch { /* cache miss ou KV off */ }
   }
 
   // 2) Banco
   let plan = 'free';
+  let degraded = false;
+  let reason = null;
+
   try {
     const result = await supabaseAdminRequest(
       `/rest/v1/effective_plan?user_id=eq.${encodeURIComponent(userId)}&select=plan&limit=1`,
       { method: 'GET' }
     );
 
-    if (result.response.ok && Array.isArray(result.body) && result.body[0]) {
+    if (!result.response.ok) {
+      // 5xx, 4xx → não conseguimos confirmar
+      degraded = true;
+      reason = `http_${result.response.status}`;
+      console.warn(
+        `[_lib] getPlanForUserDetailed: HTTP ${result.response.status} para user ${userId}`
+      );
+    } else if (Array.isArray(result.body) && result.body[0]) {
       const candidate = result.body[0].plan;
-      if (VALID_PLANS.has(candidate)) plan = candidate;
+      if (VALID_PLANS.has(candidate)) {
+        plan = candidate;
+        reason = 'ok';
+      } else {
+        degraded = true;
+        reason = 'invalid_plan_value';
+      }
+    } else {
+      // Sem linha → usuário realmente free (não é degradação)
+      plan = 'free';
+      reason = 'no_row';
     }
   } catch (err) {
-    console.warn('[_lib] getPlanForUser query falhou:', err.code || err.message);
-    return 'free';
+    // Erro de rede, timeout, etc.
+    degraded = true;
+    reason = err.code || 'query_error';
+    console.warn(
+      '[_lib] getPlanForUserDetailed query falhou:',
+      reason
+    );
   }
 
-  // 3) Cacheia
-  if (redis) {
+  // 3) Cacheia APENAS se foi confirmado com sucesso
+  if (redis && !degraded) {
     try {
       await redis.set(cacheKey, plan, { ex: PLAN_CACHE_TTL_SEC });
     } catch { /* KV off */ }
   }
 
-  return plan;
+  return { plan, degraded, reason };
+}
+
+/**
+ * Versão simples — retrocompatível.
+ * Retorna 'free' | 'premium' | 'anual'.
+ *
+ * ⚠️  Em caso de falha de lookup, retorna 'free' (fail-secure).
+ *     Se o caller precisar distinguir, use getPlanForUserDetailed().
+ *
+ * @param {string} userId
+ * @returns {Promise<string>}
+ */
+async function getPlanForUser(userId) {
+  const result = await getPlanForUserDetailed(userId);
+  return result.plan;
 }
 
 async function invalidatePlanCache(userId) {
@@ -759,6 +770,7 @@ module.exports = {
 
   // Plano efetivo
   getPlanForUser,
+  getPlanForUserDetailed,   // ← NOVO
   invalidatePlanCache,
 
   // CSRF
