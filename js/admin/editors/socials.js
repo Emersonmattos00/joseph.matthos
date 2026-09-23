@@ -7,9 +7,15 @@
           (javascript:, data:, file:, vbscript:, blob:)
        2. Whitelist: apenas http(s)
        3. Detecção de disfarces (unicode, percent-encoding)
+   - 🧹 Limpeza automática de itens vazios (evita erro no save)
    - Salva apenas URLs http(s) válidas
-   - Renderização pública utiliza safeExternalUrl()
-     em js/utils.js — defesa em profundidade
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. pruneEmptySocials() remove itens sem URL antes de
+      renderizar — evita erro "contato.socials[N].url obrigatório"
+   2. Bind do botão "+ Adicionar" agora é idempotente
+   3. Validação de URL mantida intacta (3 camadas)
    ============================================================ */
 
 import { AdminState, markDirty } from '../state.js';
@@ -20,17 +26,17 @@ import { toast } from '../ui/toast.js';
 // Redes permitidas
 // ─────────────────────────────────────────────────────────────
 const NETWORKS = [
-  { key: 'spotify',   label: 'Spotify' },
-  { key: 'youtube',   label: 'YouTube' },
-  { key: 'amazon',    label: 'Amazon Music' },
-  { key: 'facebook',  label: 'Facebook' },
-  { key: 'tiktok',    label: 'TikTok' },
-  { key: 'apple',     label: 'Apple Music' },
-  { key: 'audiomack', label: 'Audiomack' },
-  { key: 'deezer',    label: 'Deezer' },
-  { key: 'soundcloud',label: 'SoundCloud' },
-  { key: 'instagram', label: 'Instagram' },
-  { key: 'x',         label: 'X (Twitter)' }
+  { key: 'spotify',    label: 'Spotify' },
+  { key: 'youtube',    label: 'YouTube' },
+  { key: 'amazon',     label: 'Amazon Music' },
+  { key: 'facebook',   label: 'Facebook' },
+  { key: 'tiktok',     label: 'TikTok' },
+  { key: 'apple',      label: 'Apple Music' },
+  { key: 'audiomack',  label: 'Audiomack' },
+  { key: 'deezer',     label: 'Deezer' },
+  { key: 'soundcloud', label: 'SoundCloud' },
+  { key: 'instagram',  label: 'Instagram' },
+  { key: 'x',          label: 'X (Twitter)' }
 ];
 
 const LABEL_BY_KEY = Object.fromEntries(
@@ -64,6 +70,19 @@ const FORBIDDEN_PROTOCOLS = new Set([
 ]);
 
 // ─────────────────────────────────────────────────────────────
+// 🧹 Limpeza — remove itens vazios (sem rede OU sem URL)
+// ─────────────────────────────────────────────────────────────
+function pruneEmptySocials(socials) {
+  if (!Array.isArray(socials)) return [];
+  return socials.filter((s) => {
+    if (!s || typeof s !== 'object') return false;
+    const network = String(s.network || '').trim();
+    const url = String(s.url || '').trim();
+    return network && url;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────
 export function renderSocialEditor(content = AdminState.content) {
@@ -75,13 +94,21 @@ export function renderSocialEditor(content = AdminState.content) {
     content.contato.socials = [];
   }
 
+  // ⚡ Remove itens vazios antes de renderizar
+  const before = content.contato.socials.length;
+  content.contato.socials = pruneEmptySocials(content.contato.socials);
+  const removed = before - content.contato.socials.length;
+  if (removed > 0) {
+    console.log(`[socials] ${removed} item(ns) vazio(s) removido(s)`);
+  }
+
   const socials = content.contato.socials;
 
   if (!socials.length) {
     wrap.innerHTML = `
       <p class="hint" style="color:var(--text-dim);padding:1rem;">
         Nenhuma rede social configurada.
-        Clique em "+ Adicionar rede".
+        Clique em "+ Rede social".
       </p>`;
     return;
   }
@@ -224,7 +251,7 @@ export function renderSocialEditor(content = AdminState.content) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Botão "+ Adicionar rede"
+// Botão "+ Rede social"
 // ─────────────────────────────────────────────────────────────
 export function bindSocialsAddButton() {
   const btn = document.getElementById('addSocialBtn');
@@ -235,6 +262,9 @@ export function bindSocialsAddButton() {
     const content = AdminState.content;
     if (!content.contato) content.contato = {};
     if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
+
+    // ⚡ Limpa itens vazios ANTES de verificar duplicatas
+    content.contato.socials = pruneEmptySocials(content.contato.socials);
 
     const existing = new Set(content.contato.socials.map((s) => s.network));
     const firstFree = NETWORKS.find((n) => !existing.has(n.key));
@@ -276,12 +306,10 @@ function sanitizeInput(raw) {
 
 /**
  * Detecta tentativas de disfarce de protocolo.
- * Ex: "java\nscript:", "jav&#x09;ascript:", "%6a%61%76%61script:"
  */
 function looksLikeProtocolDisguise(input) {
   const lower = input.toLowerCase();
 
-  // Decodifica percent-encoding simples
   let decoded = lower;
   try {
     decoded = decodeURIComponent(lower);
@@ -289,10 +317,8 @@ function looksLikeProtocolDisguise(input) {
     // Se decodeURIComponent falhar, mantém o original
   }
 
-  // Remove caracteres que podem quebrar o parser
   const stripped = decoded.replace(/[\s\u0000-\u001F]/g, '');
 
-  // Verifica se algum protocolo proibido aparece (com ou sem disfarce)
   for (const proto of FORBIDDEN_PROTOCOLS) {
     if (
       lower.includes(proto) ||
@@ -303,7 +329,7 @@ function looksLikeProtocolDisguise(input) {
     }
   }
 
-  // Detecta "java script:" / "jav ascript:" (com espaços no meio)
+  // Detecta "java script:" / "jav ascript:"
   if (/j\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t\s*:/i.test(stripped)) {
     return true;
   }
@@ -312,8 +338,7 @@ function looksLikeProtocolDisguise(input) {
 }
 
 /**
- * Valida uma URL externa.
- * Aceita apenas http(s) com host válido.
+ * Valida uma URL externa. Aceita apenas http(s) com host válido.
  */
 function isValidExternalUrl(raw) {
   if (typeof raw !== 'string') return false;
@@ -323,8 +348,7 @@ function isValidExternalUrl(raw) {
   // 🛡️ Camada 1: bloqueia disfarces de protocolo perigoso
   if (looksLikeProtocolDisguise(cleaned)) return false;
 
-  // Se não tem esquema explícito, considera inválido para validação
-  // (a normalização cuida de adicionar "https://" no blur)
+  // Exige esquema explícito para validação
   if (!/^[a-z][a-z0-9+.\-]*:/i.test(cleaned)) {
     return false;
   }
@@ -346,8 +370,7 @@ function isValidExternalUrl(raw) {
 }
 
 /**
- * Normaliza uma URL.
- * Adiciona "https://" se o usuário digitou sem esquema.
+ * Normaliza uma URL. Adiciona "https://" se o usuário digitou sem esquema.
  * Retorna null se inválida.
  */
 function normalizeExternalUrl(raw) {
@@ -384,10 +407,7 @@ function normalizeExternalUrl(raw) {
 }
 
 /**
- * Detecta hostnames que não deveriam aparecer em URLs públicas:
- *  - localhost
- *  - IPs privados (10.x, 172.16-31.x, 192.168.x, 127.x)
- *  - link-local (169.254.x)
+ * Detecta hostnames que não deveriam aparecer em URLs públicas.
  */
 function isPrivateHostname(hostname) {
   const h = hostname.toLowerCase();
