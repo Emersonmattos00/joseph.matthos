@@ -13,8 +13,25 @@
    - Cache HTTP por recurso
    - Rate limit por IP (opcional)
    - NUNCA expõe URLs de áudio (vêm via /api/stream)
+   - NUNCA expõe paths de áudio (preview_path / full_path)
    - NUNCA expõe dados sensíveis
    - Preços vêm das envs (fonte de verdade)
+
+   🛡️ REGRA DE OURO
+   ------------------------------------------------------------
+   Este endpoint é CEGO ao áudio. Ele devolve apenas METADADOS
+   da faixa (id, título, duração, preço, preview_start...).
+
+   A resolução do áudio acontece em /api/stream, que verifica
+   a permissão do usuário ANTES de gerar qualquer URL.
+
+   ❌ NUNCA fazer aqui:
+      fullUrl = supabaseStoragePublicUrl('audio-premium', track.full_path)
+      previewUrl = supabaseStoragePublicUrl('audio-preview', track.preview_path)
+
+   ✅ Fazemos aqui:
+      hasPreview = !!track.preview_path   (booleano, não o path)
+      hasFull    = !!track.full_path      (booleano, não o path)
    ============================================================ */
 
 'use strict';
@@ -56,6 +73,24 @@ const RENTAL_PLAN_DEFS = [
   { id: '10d', envKey: 'RENTAL_PRICE_10D', label: '10 dias',  days: 10, popular: false },
   { id: '15d', envKey: 'RENTAL_PRICE_15D', label: '15 dias',  days: 15, popular: false }
 ];
+
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão (diagnóstico)
+// ─────────────────────────────────────────────────────────────
+const MIME_BY_EXT = {
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  mp4: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  webm: 'audio/webm',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff'
+};
 
 module.exports = async function handler(req, res) {
   res.setHeader('Allow', 'GET, HEAD');
@@ -190,6 +225,8 @@ async function fetchContent() {
 //
 // ⚠️  NÃO retorna full_path nem preview_path.
 //     URLs de áudio vêm via /api/stream (com verificação de permissão).
+//
+// ✅ Retorna hasPreview / hasFull como BOOLEANOS (seguro).
 // ─────────────────────────────────────────────────────────────
 async function fetchAlbumsWithTracks() {
   const [albumsRes, tracksRes] = await Promise.all([
@@ -202,7 +239,9 @@ async function fetchAlbumsWithTracks() {
     ),
     supabaseAdminRequest(
       `/rest/v1/tracks?published=eq.true` +
-        `&select=id,album_id,track_index,title,duration,preview_start,preview_duration,price_cents,for_sale,lyrics` +
+        `&select=id,album_id,track_index,title,duration,` +
+        `preview_start,preview_duration,price_cents,for_sale,lyrics,` +
+        `preview_path,full_path` +
         `&order=album_id.asc,track_index.asc` +
         `&limit=${MAX_TRACKS}`,
       { method: 'GET' }
@@ -250,7 +289,8 @@ async function fetchTracks() {
   const result = await supabaseAdminRequest(
     `/rest/v1/tracks?published=eq.true` +
       `&select=id,album_id,track_index,title,duration,` +
-      `preview_start,preview_duration,price_cents,for_sale,lyrics` +
+      `preview_start,preview_duration,price_cents,for_sale,lyrics,` +
+      `preview_path,full_path` +
       `&order=album_id.asc,track_index.asc` +
       `&limit=${MAX_TRACKS}`,
     { method: 'GET' }
@@ -269,8 +309,15 @@ async function fetchTracks() {
 // ─────────────────────────────────────────────────────────────
 // Mapeia uma linha de `tracks` para o formato do cliente
 // ------------------------------------------------------------
-// ⚠️ Inclui o campo `id` (track.id) — obrigatório para
-//    playlists (que referenciam faixas por ID imutável).
+// ⚠️  NUNCA expõe:
+//     - preview_path (path no bucket)
+//     - full_path (path no bucket)
+//     - URLs públicas ou assinadas
+//
+// ✅ Expõe:
+//     - hasPreview / hasFull (booleanos) — segurança preservada
+//     - previewStart / previewDuration (metadados)
+//     - id (track.id) — obrigatório para playlists
 // ─────────────────────────────────────────────────────────────
 function mapTrack(t) {
   return {
@@ -283,8 +330,16 @@ function mapTrack(t) {
     previewDuration: Number(t.preview_duration) || 30,
     priceCents: Number(t.price_cents) || 0,
     forSale: t.for_sale !== false,
-    // fullAudio / previewAudio: resolvidos em /api/stream
-    lyrics: Array.isArray(t.lyrics) ? t.lyrics : []
+    lyrics: Array.isArray(t.lyrics) ? t.lyrics : [],
+
+    // ── Booleanos de existência (seguros)
+    //    Servem para UI: mostrar 🔒 se não tem full, etc.
+    hasPreview: !!t.preview_path,
+    hasFull: !!t.full_path,
+
+    // ── MIME inferido (útil para diagnóstico; não expõe paths)
+    previewMime: guessMime(t.preview_path),
+    fullMime: guessMime(t.full_path)
   };
 }
 
@@ -350,6 +405,12 @@ function parsePriceCents(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n * 100);
+}
+
+function guessMime(path) {
+  if (!path) return null;
+  const ext = String(path).split('.').pop().toLowerCase();
+  return MIME_BY_EXT[ext] || null;
 }
 
 function respond(res, method, payload) {
