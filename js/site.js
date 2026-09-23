@@ -5,11 +5,22 @@
    - URLs de áudio vêm de /api/stream (com verificação)
    - Usuário + aluguéis vêm de /api/auth?action=me
    - Login/signup/logout via /api/auth?action=*
-   - Aluguel de faixa via /api/payments?type=rental → MP checkout
-   - Assinatura via /api/payments?type=subscription → MP checkout
-   - Preços de aluguel vêm de /api/public (rentalPlans[]) — envs do servidor
+   - Aluguel de faixa/álbum via /api/payments?type=rental → MP
+   - Assinatura via /api/payments?type=subscription → MP
+   - Preços de aluguel vêm de /api/public (rentalPlans[])
    - Nenhum localStorage para dados de negócio
    - Sem onclick inline; tudo via data-action + delegação
+
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. previewStart é respeitado (vem de /api/stream)
+   2. waitForAudioReady() com timeout + canplay/canplaythrough
+   3. onError() detalhado por MediaError.code
+   4. Renovação automática de URL assinada (80% do TTL)
+   5. Renovação on-demand se NETWORK falhar em faixa 'full'
+   6. AbortController em playFromDiscography (evita corrida)
+   7. Log estruturado para diagnóstico
+   8. source: 'preview' | 'full' usado para decidir comportamento
    ============================================================ */
 
 import {
@@ -39,7 +50,7 @@ export const SITE = {
   albums: [],
   tracks: {},
   plans: {},
-  rentalPlans: [],       // ← preços vêm de /api/public
+  rentalPlans: [],
   user: null,
   rentals: [],
   viewMode: 'cards',
@@ -61,6 +72,12 @@ let muted = false;
 let playerQueue = [];
 let playerQueueIndex = -1;
 let shuffleEnabled = false;
+
+// Estado do stream atual (para renovação)
+let currentStream = null;           // { albumId, trackIndex, unlocked, source, expiresIn, loadedAt }
+let renewTimer = null;              // timer de renovação preventiva
+let currentAbortController = null;  // aborta fetch anterior
+let isRenewing = false;             // evita renovação concorrente
 
 // Contexto do modal de aluguel
 let _rentContext = { albumId: null, trackIndex: null, planId: null };
@@ -132,7 +149,6 @@ async function loadPublicData() {
       for (const p of json.plans) if (p && p.id) SITE.plans[p.id] = p;
     }
 
-    // ── Rental plans (preços vêm do backend)
     SITE.rentalPlans = [];
     if (Array.isArray(json.rentalPlans)) {
       SITE.rentalPlans = json.rentalPlans
@@ -247,7 +263,6 @@ function applyContentToSite() {
   const footer = document.getElementById('footerText');
   if (footer) footer.textContent = c.branding?.footer || '';
 
-  // Aparência
   const a = c.aparencia || {};
   const root = document.documentElement.style;
   if (a.bg) root.setProperty('--bg', a.bg);
@@ -258,7 +273,6 @@ function applyContentToSite() {
 
   applyBackgroundImage(c.branding?.bgImage);
 
-  // Hero
   const heroTitle = document.getElementById('heroTitle');
   if (heroTitle) heroTitle.innerHTML = sanitizeRichText(c.hero?.title);
   const heroSub = document.getElementById('heroSub');
@@ -290,7 +304,6 @@ function applyContentToSite() {
     vinyl.classList.toggle('has-cover', !!c.hero?.vinyl?.image);
   }
 
-  // Sobre
   const sobreTitle = document.getElementById('sobreTitle');
   if (sobreTitle) sobreTitle.innerHTML = sanitizeRichText(c.sobre?.title);
   const sobreSub = document.getElementById('sobreSub');
@@ -307,7 +320,6 @@ function applyContentToSite() {
       (c.sobre?.quote ? `<div class="quote">${esc(c.sobre.quote)}</div>` : '');
   }
 
-  // Filosofia
   const filTitle = document.getElementById('filosofiaTitle');
   if (filTitle) filTitle.innerHTML = sanitizeRichText(c.filosofia?.title);
   const filSub = document.getElementById('filosofiaSub');
@@ -326,20 +338,17 @@ function applyContentToSite() {
       .join('');
   }
 
-  // Discografia
   const discoTitle = document.getElementById('discoTitle');
   if (discoTitle) discoTitle.innerHTML = sanitizeRichText(c.discografia?.title);
   const discoSub = document.getElementById('discoSub');
   if (discoSub) discoSub.textContent = c.discografia?.subtitle || '';
 
-  // Planos
   const plansTitle = document.getElementById('plansModalTitle');
   if (plansTitle) plansTitle.innerHTML = sanitizeRichText(c.planos?.title);
   const plansSub = document.getElementById('plansModalSub');
   if (plansSub) plansSub.textContent = c.planos?.subtitle || '';
   renderPlans();
 
-  // Contato
   const cTitle = document.getElementById('contatoTitle');
   if (cTitle) cTitle.innerHTML = sanitizeRichText(c.contato?.title);
   const cSub = document.getElementById('contatoSub');
@@ -502,7 +511,6 @@ function renderDiscography() {
   container.classList.toggle('view-list', SITE.viewMode === 'list');
   container.innerHTML = html || '<p class="album-empty">Nada encontrado.</p>';
 
-  // Bind direto nos botões de alugar da discografia
   container.querySelectorAll('[data-action="open-rent"]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
@@ -609,7 +617,6 @@ function renderPlaylists() {
 function resolvePlaylistTracks(playlist) {
   if (!playlist || !Array.isArray(playlist.tracks)) return [];
 
-  // Constrói índice trackId → {album, track, trackIndex}
   const index = new Map();
   for (const album of SITE.albums || []) {
     const tracks = Array.isArray(album.tracks) ? album.tracks : [];
@@ -620,7 +627,6 @@ function resolvePlaylistTracks(playlist) {
     });
   }
 
-  // Fallback legado: "albumId:index"
   const legacyIndex = new Map();
   for (const album of SITE.albums || []) {
     const tracks = Array.isArray(album.tracks) ? album.tracks : [];
@@ -631,14 +637,12 @@ function resolvePlaylistTracks(playlist) {
 
   const out = [];
   for (const ref of playlist.tracks) {
-    // Formato novo: number
     if (typeof ref === 'number' && Number.isFinite(ref)) {
       const entry = index.get(ref);
       if (entry) out.push(entry);
       continue;
     }
 
-    // Formato legado: string
     if (typeof ref === 'string') {
       const trimmed = ref.trim();
       const asNum = Number(trimmed);
@@ -680,7 +684,6 @@ function openRentModal(albumId, trackIndex) {
     planId: plans.find((p) => p.popular)?.id || plans[0]?.id || null
   };
 
-  // Info da faixa
   const cover = document.getElementById('rentTrackCover');
   if (cover) {
     cover.innerHTML = '';
@@ -757,7 +760,6 @@ async function confirmRent() {
     return;
   }
 
-  // ── Verificação: o plano selecionado tem preço conhecido?
   const selected = SITE.rentalPlans.find((p) => p.id === _rentContext.planId);
   if (!selected || selected.price <= 0) {
     if (errEl) errEl.textContent = 'Preço indisponível. Reabra o modal.';
@@ -1328,6 +1330,167 @@ function bindFullscreenBtn() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// DIAGNÓSTICO DE ERRO DE ÁUDIO
+// ─────────────────────────────────────────────────────────────
+function getAudioErrorMessage(audioElement) {
+  const error = audioElement?.error;
+  if (!error) return 'Erro desconhecido ao carregar o áudio.';
+
+  switch (error.code) {
+    case MediaError.MEDIA_ERR_ABORTED:
+      return 'O carregamento do áudio foi interrompido.';
+    case MediaError.MEDIA_ERR_NETWORK:
+      return 'Erro de rede ao acessar o áudio.';
+    case MediaError.MEDIA_ERR_DECODE:
+      return 'O navegador não conseguiu decodificar o áudio.';
+    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+      return 'Formato de áudio não suportado ou arquivo indisponível.';
+    default:
+      return 'Erro ao carregar o áudio.';
+  }
+}
+
+/**
+ * Espera o áudio estar pronto para tocar.
+ * Resolve em canplay/canplaythrough, rejeita em error/timeout.
+ */
+function waitForAudioReady(audioElement, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    if (!audioElement) {
+      reject(new Error('Elemento de áudio não encontrado.'));
+      return;
+    }
+
+    if (audioElement.readyState >= 3) {
+      resolve();
+      return;
+    }
+
+    let finished = false;
+
+    const cleanup = () => {
+      audioElement.removeEventListener('canplay', onReady);
+      audioElement.removeEventListener('canplaythrough', onReady);
+      audioElement.removeEventListener('error', onError);
+      clearTimeout(timeoutId);
+    };
+
+    const onReady = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve();
+    };
+
+    const onError = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error(getAudioErrorMessage(audioElement)));
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error('Tempo limite ao carregar o áudio.'));
+    }, timeoutMs);
+
+    audioElement.addEventListener('canplay', onReady);
+    audioElement.addEventListener('canplaythrough', onReady);
+    audioElement.addEventListener('error', onError);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// RENOVAÇÃO DE URL ASSINADA
+// ─────────────────────────────────────────────────────────────
+function clearRenewTimer() {
+  if (renewTimer) {
+    clearTimeout(renewTimer);
+    renewTimer = null;
+  }
+}
+
+/**
+ * Agenda renovação preventiva em 80% do TTL.
+ * Só se aplica a faixas premium (source === 'full').
+ */
+function scheduleRenewal() {
+  clearRenewTimer();
+
+  if (!currentStream || currentStream.source !== 'full') return;
+  if (!currentStream.expiresIn || currentStream.expiresIn <= 0) return;
+
+  const renewAfterMs = Math.floor(currentStream.expiresIn * 1000 * 0.8);
+
+  renewTimer = setTimeout(() => {
+    renewSignedUrl().catch((err) => {
+      console.warn('[player] renovação preventiva falhou:', err?.message);
+    });
+  }, renewAfterMs);
+}
+
+/**
+ * Renova a URL assinada sem interromper a reprodução.
+ * Preserva currentTime e estado play/pause.
+ */
+async function renewSignedUrl() {
+  if (isRenewing) return;
+  if (!currentStream || currentStream.source !== 'full') return;
+
+  isRenewing = true;
+
+  const { albumId, trackIndex } = currentStream;
+  const wasPlaying = audio && !audio.paused;
+  const savedTime = audio?.currentTime || 0;
+  const savedVolume = audio?.volume ?? lastVolume;
+
+  try {
+    const r = await fetch(
+      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(trackIndex)}`,
+      { credentials: 'same-origin', cache: 'no-store' }
+    );
+    const json = await r.json();
+
+    if (!r.ok || !json?.ok || !json.fullUrl) {
+      throw new Error(json?.error || 'URL não renovada');
+    }
+
+    currentStream.url = json.fullUrl;
+    currentStream.expiresIn = Number(json.expiresIn) || currentStream.expiresIn;
+    currentStream.loadedAt = Date.now();
+
+    audio.src = json.fullUrl;
+    audio.volume = savedVolume;
+    audio.load();
+
+    // Restaura posição após metadata
+    const restore = () => {
+      try {
+        if (Number.isFinite(audio.duration) && savedTime < audio.duration) {
+          audio.currentTime = savedTime;
+        }
+      } catch (err) {
+        console.debug('[player] falha ao restaurar posição:', err);
+      }
+      if (wasPlaying) audio.play().catch(() => {});
+    };
+
+    audio.addEventListener('loadedmetadata', restore, { once: true });
+
+    scheduleRenewal();
+
+    console.log('[player] URL renovada');
+  } catch (err) {
+    console.warn('[player] renovação falhou:', err?.message);
+    // Não derruba o usuário — próxima interação tenta de novo
+  } finally {
+    isRenewing = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // FILA E SHUFFLE
 // ─────────────────────────────────────────────────────────────
 function buildQueueForAlbum(albumId, startIndex) {
@@ -1424,7 +1587,7 @@ function renderQueue() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLAYER — playFromDiscography
+// PLAYER — playFromDiscography (CORRIGIDO)
 // ─────────────────────────────────────────────────────────────
 async function playFromDiscography(albumId, trackIndex, opts = {}) {
   const album = findAlbum(albumId);
@@ -1437,29 +1600,56 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     buildQueueForAlbum(albumId, trackIndex);
   }
 
+  // Aborta requisição anterior (evita corrida)
+  if (currentAbortController) {
+    currentAbortController.abort();
+  }
+  currentAbortController = new AbortController();
+
+  clearRenewTimer();
+  isRenewing = false;
+
   let streamData;
   try {
     const r = await fetch(
-      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${trackIndex}`,
-      { credentials: 'same-origin' }
+      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(trackIndex)}`,
+      {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: currentAbortController.signal
+      }
     );
-    streamData = await r.json();
 
-    if (!r.ok || !streamData?.ok) {
-      toast(streamData?.error || 'Faixa indisponível.', '⚠');
-      return;
+    let json = null;
+    try { json = await r.json(); } catch { json = null; }
+
+    if (!r.ok || !json?.ok) {
+      throw new Error(json?.error || `Falha ao obter áudio (${r.status})`);
     }
+
+    streamData = json;
   } catch (err) {
-    console.error('[player] stream fetch:', err);
-    toast('Erro de rede ao carregar faixa.', '⚠');
+    if (err?.name === 'AbortError') return;
+
+    console.error('[player] erro ao obter stream:', err);
+    toast(err?.message || 'Não foi possível carregar a música.', '⚠');
     return;
   }
 
-  const unlocked = !!streamData.unlocked;
-  const src = unlocked ? streamData.fullUrl : streamData.previewUrl;
+  const unlocked = Boolean(streamData.unlocked);
+  const source = streamData.source || (unlocked ? 'full' : 'preview');
+  const src = source === 'full' ? streamData.fullUrl : streamData.previewUrl;
 
   if (!src) {
-    toast('Faixa sem áudio cadastrado.', '⚠');
+    console.error('[player] nenhuma URL de áudio:', streamData);
+    toast(
+      streamData.warning ||
+        (unlocked
+          ? 'O áudio completo não está disponível.'
+          : 'Esta música não possui uma prévia cadastrada.'),
+      '⚠'
+    );
     return;
   }
 
@@ -1470,24 +1660,59 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     identity: `${albumId}:${trackIndex}`
   };
 
-  previewState = unlocked
-    ? { active: false, start: 0, end: Infinity }
-    : {
-        active: true,
-        start: 0,
-        end: Number(streamData.previewDuration) || 30
-      };
+  // ── Configura estado de preview (respeitando previewStart)
+  if (source === 'full') {
+    previewState = { active: false, start: 0, end: Infinity };
+  } else {
+    const start = Math.max(0, Number(streamData.previewStart) || 0);
+    const duration = Math.max(1, Number(streamData.previewDuration) || 30);
+    previewState = { active: true, start, end: start + duration };
+  }
 
   previewNoticeTrackKey = '';
 
+  // ── Guarda estado do stream (para renovação)
+  currentStream = {
+    albumId,
+    trackIndex,
+    unlocked,
+    source,
+    url: src,
+    expiresIn: Number(streamData.expiresIn) || null,
+    loadedAt: Date.now()
+  };
+
+  // ── Troca de faixa com segurança
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.preload = 'auto';
+  audio.load();
   audio.src = src;
+
+  // ── Posição inicial da prévia (após metadata)
+  if (source === 'preview' && previewState.start > 0) {
+    const setPreviewStart = () => {
+      try {
+        if (Number.isFinite(audio.duration) && audio.duration > previewState.start) {
+          audio.currentTime = previewState.start;
+        }
+      } catch (err) {
+        console.debug('[player] não foi possível posicionar prévia:', err);
+      }
+    };
+    audio.addEventListener('loadedmetadata', setPreviewStart, { once: true });
+  }
+
   audio.load();
 
+  // ── UI
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
   if (artistEl) {
-    artistEl.textContent = `Joseph Matthos · ${album.title}${unlocked ? '' : ' (prévia)'}`;
+    artistEl.textContent =
+      `Joseph Matthos · ${album.title}` +
+      (source === 'preview' ? ' (prévia)' : '');
   }
 
   const cover = document.getElementById('playerCover');
@@ -1502,8 +1727,8 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     }
   }
 
-  document.getElementById('previewBadge')?.classList.toggle('visible', !unlocked);
-  document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', !unlocked);
+  document.getElementById('previewBadge')?.classList.toggle('visible', source === 'preview');
+  document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', source === 'preview');
 
   renderLyrics(track);
   syncExpandedPlayer(track, album, unlocked);
@@ -1511,10 +1736,25 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   renderQueue();
   updatePlayingHighlight();
 
+  // ── Aguarda áudio pronto e toca
   try {
+    await waitForAudioReady(audio);
     await audio.play();
+
+    // Agenda renovação se for URL assinada
+    if (source === 'full') scheduleRenewal();
   } catch (err) {
-    console.debug('[player] autoplay bloqueado:', err?.message);
+    console.error('[player] falha na reprodução:', err);
+
+    const code = audio?.error?.code;
+    if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+      toast('O formato deste áudio não é suportado pelo navegador.', '⚠');
+    } else if (code === MediaError.MEDIA_ERR_NETWORK) {
+      toast('Não foi possível acessar o arquivo de áudio.', '⚠');
+    } else {
+      // Provavelmente autoplay bloqueado — não é erro do usuário
+      console.debug('[player] reprodução não iniciada:', err?.message);
+    }
   }
 }
 
@@ -1740,10 +1980,58 @@ function onPause() {
   if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
 }
 
-function onError(e) {
-  if (audio && audio.error && audio.error.code === MediaError.MEDIA_ERR_ABORTED) return;
-  toast('Erro ao carregar áudio.', '⚠');
+/**
+ * onError — detalhado por MediaError.code
+ * Também tenta renovar URL assinada se aplicável.
+ */
+async function onError(e) {
+  if (!audio || !audio.error) return;
+
+  const code = audio.error.code;
+
+  if (code === MediaError.MEDIA_ERR_ABORTED) return;
+
+  const message = getAudioErrorMessage(audio);
+
+  console.error('[player] erro de áudio:', {
+    code,
+    message,
+    src: audio.currentSrc || audio.src,
+    identity: currentTrackIdentity,
+    stream: currentStream
+  });
+
+  // Tentativa de renovação automática em faixa premium
+  if (
+    currentStream &&
+    currentStream.source === 'full' &&
+    (code === MediaError.MEDIA_ERR_NETWORK ||
+     code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)
+  ) {
+    console.warn('[player] tentando renovar URL assinada...');
+    try {
+      await renewSignedUrl();
+      return; // renovação cuidou do resto
+    } catch (err) {
+      console.warn('[player] renovação falhou:', err?.message);
+    }
+  }
+
   onPause();
+
+  switch (code) {
+    case MediaError.MEDIA_ERR_NETWORK:
+      toast('Não foi possível acessar o arquivo de música.', '⚠');
+      break;
+    case MediaError.MEDIA_ERR_DECODE:
+      toast('O arquivo de música não pôde ser decodificado.', '⚠');
+      break;
+    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+      toast('Formato de áudio não suportado ou arquivo inexistente.', '⚠');
+      break;
+    default:
+      toast('Erro ao carregar áudio.', '⚠');
+  }
 }
 
 function updatePlayingHighlight() {
@@ -1781,6 +2069,8 @@ function closeExpandedPlayer() {
 
   playerQueue = [];
   playerQueueIndex = -1;
+
+  clearRenewTimer();
 
   const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
   if (fsEl) {
@@ -1919,6 +2209,7 @@ if (document.readyState === 'loading') {
 window.__site = {
   get state() { return { ...SITE }; },
   get rentalPlans() { return SITE.rentalPlans.slice(); },
+  get currentStream() { return currentStream ? { ...currentStream } : null; },
   async reload() {
     await loadUser();
     applyContentToSite();
