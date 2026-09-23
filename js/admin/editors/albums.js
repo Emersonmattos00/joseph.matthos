@@ -3,29 +3,16 @@
    ------------------------------------------------------------
    - CRUD completo via /api/admin?action=albums|album|tracks|track
    - Upload integrado de preview e áudio full
-     → presigned URL (Supabase direto, sem limite de body)
-     → PATCH automático em tracks.preview_path / full_path
-   - Modal de edição de faixa
-   - Reordenar faixas
-   - Publicar/despublicar
+   - Delegação de eventos no document (imune a re-render)
+   - Sem binds duplicados
 
-   🎯 FLUXO DO UPLOAD (agora automático)
+   🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
-     Seleciona MP3
-        ↓
-     uploadAudioFull()   → Supabase Storage via presigned
-        ↓
-     retorna { path, bucket }
-        ↓
-     PATCH /api/admin?action=track&id=X  { full_path: path }
-        ↓
-     tracks.full_path atualizado
-        ↓
-     /api/stream encontra
-        ↓
-     🎵 reprodução
-
-   NÃO é mais necessário copiar/colar path manualmente.
+   1. Event delegation no document (não no container)
+   2. data-action explícito em CADA botão
+   3. Guard contra binds duplicados
+   4. renderAlbumsEditor() pode ser chamada múltiplas vezes
+   5. Logs de debug para diagnóstico
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -34,38 +21,182 @@ import { esc, escAttr } from '../ui/dom.js';
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
 
-// ─────────────────────────────────────────────────────────────
-// Estado local do editor
-// ─────────────────────────────────────────────────────────────
 const State = {
   albums: [],
-  tracks: new Map(),          // albumId → [tracks]
-  selectedAlbumId: null,
+  tracks: new Map(),
   expandedAlbumIds: new Set(),
   loading: false,
   error: null
 };
 
 // ─────────────────────────────────────────────────────────────
-// Ponto de entrada (chamado por index.js)
+// Delegação global — UMA VEZ SÓ
+// ─────────────────────────────────────────────────────────────
+let _delegationBound = false;
+
+function bindDelegation() {
+  if (_delegationBound) return;
+  _delegationBound = true;
+
+  document.addEventListener('click', async (e) => {
+    // Só processa cliques DENTRO do editor de álbuns
+    const editor = e.target.closest('#albumsEditor');
+    if (!editor) return;
+
+    // ── Toggle álbum (header OU botão de seta)
+    const toggle = e.target.closest('[data-album-toggle]');
+    if (toggle) {
+      e.preventDefault();
+      const albumId = toggle.dataset.albumToggle;
+      console.log('[albums] toggle:', albumId);
+      if (State.expandedAlbumIds.has(albumId)) {
+        State.expandedAlbumIds.delete(albumId);
+      } else {
+        State.expandedAlbumIds.add(albumId);
+        if (!State.tracks.has(albumId)) {
+          await loadTracksForAlbum(albumId);
+        }
+      }
+      repaint();
+      return;
+    }
+
+    // ── Editar álbum
+    const editAlbum = e.target.closest('[data-album-edit]');
+    if (editAlbum) {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = editAlbum.dataset.albumEdit;
+      console.log('[albums] editar álbum:', albumId);
+      const album = State.albums.find((a) => a.id === albumId);
+      if (album) openAlbumModal(album);
+      return;
+    }
+
+    // ── Excluir álbum
+    const delAlbum = e.target.closest('[data-album-delete]');
+    if (delAlbum) {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = delAlbum.dataset.albumDelete;
+      console.log('[albums] excluir álbum:', albumId);
+      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) {
+        return;
+      }
+      try {
+        await apiFetch('album', {
+          method: 'DELETE',
+          query: { id: albumId, force: 'true' }
+        });
+        State.expandedAlbumIds.delete(albumId);
+        State.tracks.delete(albumId);
+        toast('Álbum excluído.', '🗑');
+        await loadAlbums();
+      } catch (err) {
+        console.error('[albums] delete album:', err);
+        toast(err?.message || 'Falha ao excluir álbum.', '⚠');
+      }
+      return;
+    }
+
+    // ── Nova faixa
+    const newTrack = e.target.closest('[data-track-new]');
+    if (newTrack) {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = newTrack.dataset.trackNew;
+      console.log('[albums] nova faixa:', albumId);
+      openTrackModal(albumId, null);
+      return;
+    }
+
+    // ── Editar faixa
+    const editTrack = e.target.closest('[data-track-edit]');
+    if (editTrack) {
+      e.preventDefault();
+      e.stopPropagation();
+      const trackId = Number(editTrack.dataset.trackEdit);
+      const albumId = editTrack.dataset.trackAlbum;
+      console.log('[albums] editar faixa:', trackId, 'album:', albumId);
+      if (!albumId) return;
+      const list = State.tracks.get(albumId) || [];
+      const track = list.find((t) => Number(t.id) === trackId);
+      if (track) openTrackModal(albumId, track);
+      else toast('Faixa não encontrada.', '⚠');
+      return;
+    }
+
+    // ── Excluir faixa
+    const delTrack = e.target.closest('[data-track-delete]');
+    if (delTrack) {
+      e.preventDefault();
+      e.stopPropagation();
+      const trackId = Number(delTrack.dataset.trackDelete);
+      const albumId = delTrack.dataset.trackAlbum;
+      console.log('[albums] excluir faixa:', trackId);
+      if (!albumId) return;
+      if (!confirm('Excluir esta faixa?')) return;
+      try {
+        await apiFetch('track', {
+          method: 'DELETE',
+          query: { id: trackId }
+        });
+        toast('Faixa excluída.', '🗑');
+        await loadTracksForAlbum(albumId);
+        repaint();
+      } catch (err) {
+        console.error('[albums] delete track:', err);
+        toast(err?.message || 'Falha ao excluir faixa.', '⚠');
+      }
+      return;
+    }
+
+    // ── Atualizar
+    const refresh = e.target.closest('[data-albums-refresh]');
+    if (refresh) {
+      e.preventDefault();
+      await loadAlbums();
+      return;
+    }
+
+    // ── Novo álbum
+    const newAlbum = e.target.closest('[data-albums-new]');
+    if (newAlbum) {
+      e.preventDefault();
+      openAlbumModal(null);
+      return;
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ponto de entrada
 // ─────────────────────────────────────────────────────────────
 export function renderAlbumsEditor(_content) {
-  // `_content` não é mais usado — álbuns/faixas vivem no Supabase.
-  // Mantido na assinatura para compatibilidade.
   const container = document.getElementById('albumsEditor');
-  if (!container) return;
+  if (!container) {
+    console.warn('[albums] #albumsEditor não encontrado');
+    return;
+  }
 
-  // Evita re-render desnecessário se já está montado
-  if (container.dataset.mounted === '1') return;
+  // Bind global (uma vez só)
+  bindDelegation();
+
+  // Se já está montado, só repinta o corpo (mantém o header)
+  if (container.dataset.mounted === '1') {
+    console.log('[albums] já montado, repintando corpo');
+    const body = container.querySelector('[data-albums-body]');
+    if (body) paintBody(body);
+    return;
+  }
+
   container.dataset.mounted = '1';
-
   paintShell(container);
-  bindShellEvents(container);
   loadAlbums();
 }
 
 // ─────────────────────────────────────────────────────────────
-// Shell (cabeçalho + área de conteúdo)
+// Shell
 // ─────────────────────────────────────────────────────────────
 function paintShell(container) {
   container.innerHTML = `
@@ -91,24 +222,8 @@ function paintShell(container) {
   `;
 }
 
-function bindShellEvents(container) {
-  container.addEventListener('click', async (e) => {
-    const refresh = e.target.closest('[data-albums-refresh]');
-    if (refresh) {
-      await loadAlbums();
-      return;
-    }
-
-    const newBtn = e.target.closest('[data-albums-new]');
-    if (newBtn) {
-      openAlbumModal(null);
-      return;
-    }
-  });
-}
-
 // ─────────────────────────────────────────────────────────────
-// Fetch de álbuns
+// Fetch
 // ─────────────────────────────────────────────────────────────
 async function loadAlbums() {
   const body = document.querySelector('[data-albums-body]');
@@ -122,14 +237,11 @@ async function loadAlbums() {
     const res = await apiFetch('albums', { method: 'GET' });
     State.albums = Array.isArray(res?.albums) ? res.albums : [];
 
-    // Pré-carrega as faixas dos álbuns expandidos
     await Promise.all(
       Array.from(State.expandedAlbumIds).map((id) => loadTracksForAlbum(id))
     );
   } catch (err) {
-    if (err?.status === 401 || err?.status === 403) {
-      throw err; // index.js trata redirecionando
-    }
+    if (err?.status === 401 || err?.status === 403) throw err;
     State.error = err?.message || 'Falha ao carregar álbuns.';
     State.albums = [];
   } finally {
@@ -155,8 +267,13 @@ async function loadTracksForAlbum(albumId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Pintura do corpo (lista de álbuns)
+// Pintura
 // ─────────────────────────────────────────────────────────────
+function repaint() {
+  const body = document.querySelector('[data-albums-body]');
+  if (body) paintBody(body);
+}
+
 function paintBody(body) {
   if (State.loading) {
     body.innerHTML = '<div class="admin-loading">Carregando álbuns…</div>';
@@ -190,8 +307,6 @@ function paintBody(body) {
   body.innerHTML = State.albums
     .map((album) => renderAlbumBlock(album))
     .join('');
-
-  bindBodyEvents(body);
 }
 
 function renderAlbumBlock(album) {
@@ -202,7 +317,7 @@ function renderAlbumBlock(album) {
 
   return `
     <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(album.id)}">
-      <div class="album-header" data-album-toggle="${escAttr(album.id)}">
+      <div class="album-header" data-album-toggle="${escAttr(album.id)}" style="cursor:pointer;">
         <div class="album-cover" ${
           album.cover_image
             ? `style="background-image:url('${escAttr(album.cover_image)}')"`
@@ -224,7 +339,7 @@ function renderAlbumBlock(album) {
           </div>
           ${album.description ? `<div class="album-desc">${esc(album.description)}</div>` : ''}
         </div>
-        <div class="album-actions">
+        <div class="album-actions" style="display:flex;gap:0.4rem;align-items:center;">
           <button class="btn btn-ghost btn-sm"
                   data-album-edit="${escAttr(album.id)}"
                   type="button"
@@ -319,108 +434,16 @@ function renderTrackRow(albumId, track, idx) {
         <div class="actions">
           <button class="btn btn-ghost btn-sm"
                   data-track-edit="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
                   type="button">✎ Editar</button>
           <button class="btn btn-ghost btn-sm"
                   data-track-delete="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
                   type="button">🗑</button>
         </div>
       </td>
     </tr>
   `;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Eventos do corpo
-// ─────────────────────────────────────────────────────────────
-function bindBodyEvents(body) {
-  body.addEventListener('click', async (e) => {
-    // Expandir/recolher álbum
-    const toggle = e.target.closest('[data-album-toggle]');
-    if (toggle) {
-      const albumId = toggle.dataset.albumToggle;
-      if (State.expandedAlbumIds.has(albumId)) {
-        State.expandedAlbumIds.delete(albumId);
-      } else {
-        State.expandedAlbumIds.add(albumId);
-        if (!State.tracks.has(albumId)) {
-          await loadTracksForAlbum(albumId);
-        }
-      }
-      paintBody(body);
-      return;
-    }
-
-    // Editar álbum
-    const editAlbum = e.target.closest('[data-album-edit]');
-    if (editAlbum) {
-      const album = State.albums.find((a) => a.id === editAlbum.dataset.albumEdit);
-      if (album) openAlbumModal(album);
-      return;
-    }
-
-    // Excluir álbum
-    const delAlbum = e.target.closest('[data-album-delete]');
-    if (delAlbum) {
-      const albumId = delAlbum.dataset.albumDelete;
-      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) {
-        return;
-      }
-      try {
-        await apiFetch('album', {
-          method: 'DELETE',
-          query: { id: albumId, force: 'true' }
-        });
-        State.expandedAlbumIds.delete(albumId);
-        State.tracks.delete(albumId);
-        toast('Álbum excluído.', '🗑');
-        await loadAlbums();
-      } catch (err) {
-        toast(err?.message || 'Falha ao excluir álbum.', '⚠');
-      }
-      return;
-    }
-
-    // Nova faixa
-    const newTrack = e.target.closest('[data-track-new]');
-    if (newTrack) {
-      openTrackModal(newTrack.dataset.trackNew, null);
-      return;
-    }
-
-    // Editar faixa
-    const editTrack = e.target.closest('[data-track-edit]');
-    if (editTrack) {
-      const trackId = Number(editTrack.dataset.trackEdit);
-      const albumId = editTrack.closest('[data-album-id]')?.dataset.albumId;
-      if (!albumId) return;
-      const list = State.tracks.get(albumId) || [];
-      const track = list.find((t) => Number(t.id) === trackId);
-      if (track) openTrackModal(albumId, track);
-      return;
-    }
-
-    // Excluir faixa
-    const delTrack = e.target.closest('[data-track-delete]');
-    if (delTrack) {
-      const trackId = Number(delTrack.dataset.trackDelete);
-      const albumId = delTrack.closest('[data-album-id]')?.dataset.albumId;
-      if (!albumId) return;
-      if (!confirm('Excluir esta faixa?')) return;
-
-      try {
-        await apiFetch('track', {
-          method: 'DELETE',
-          query: { id: trackId }
-        });
-        toast('Faixa excluída.', '🗑');
-        await loadTracksForAlbum(albumId);
-        paintBody(body);
-      } catch (err) {
-        toast(err?.message || 'Falha ao excluir faixa.', '⚠');
-      }
-      return;
-    }
-  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -450,7 +473,7 @@ function openAlbumModal(album) {
         <input type="text" id="albumId" value="${escAttr(a.id)}"
                ${isNew ? '' : 'disabled'}
                placeholder="album-bbb" maxlength="64">
-        <div class="form-hint">Letras, números e hífens. Não pode ser alterado depois.</div>
+        <div class="form-hint">Letras, números e hífens.</div>
       </div>
       <div class="form-group">
         <label for="albumType">Tipo</label>
@@ -480,7 +503,7 @@ function openAlbumModal(album) {
 
     <div class="form-row">
       <div class="form-group">
-        <label for="albumCoverInitials">Iniciais da capa (fallback)</label>
+        <label for="albumCoverInitials">Iniciais da capa</label>
         <input type="text" id="albumCoverInitials" value="${escAttr(a.cover_initials || '')}" maxlength="8" placeholder="JM">
       </div>
       <div class="form-group">
@@ -502,7 +525,7 @@ function openAlbumModal(album) {
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
         <input type="checkbox" id="albumPublished" ${a.published ? 'checked' : ''}>
-        Publicar álbum (visível no site)
+        Publicar álbum
       </label>
     </div>
 
@@ -534,7 +557,7 @@ function openAlbumModal(album) {
     };
 
     if (!payload.id || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(payload.id)) {
-      errEl.textContent = 'ID inválido. Use letras, números e hífens.';
+      errEl.textContent = 'ID inválido.';
       return;
     }
     if (!payload.title) {
@@ -559,13 +582,14 @@ function openAlbumModal(album) {
       closeAdminModal();
       await loadAlbums();
     } catch (err) {
+      console.error('[albums] save:', err);
       errEl.textContent = err?.message || 'Falha ao salvar álbum.';
     }
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal — Faixa (com upload integrado)
+// Modal — Faixa
 // ─────────────────────────────────────────────────────────────
 function openTrackModal(albumId, track) {
   const isNew = !track;
@@ -626,51 +650,34 @@ function openTrackModal(albumId, track) {
       </label>
     </div>
 
-    <!-- ═══════════════════════════════════════════════════════
-         UPLOAD — PREVIEW
-         ═══════════════════════════════════════════════════════ -->
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
-      <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">
-        🎧 Prévia (30s)
-      </h4>
-
+      <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">🎧 Prévia (30s)</h4>
       <div data-preview-status style="font-size:0.85rem;margin-bottom:0.5rem;">
         ${t.preview_path
           ? `<span class="audio-chip">✓ ${esc(t.preview_path)}</span>`
           : '<span class="audio-chip none">Nenhum arquivo</span>'}
       </div>
-
       <button class="btn btn-outline btn-sm" data-upload-preview type="button">
         ${t.preview_path ? '↻ Substituir prévia' : '⬆ Enviar prévia'}
       </button>
-
       <input type="file" id="trackPreviewInput" accept="audio/*" hidden>
     </div>
 
-    <!-- ═══════════════════════════════════════════════════════
-         UPLOAD — ÁUDIO COMPLETO
-         ═══════════════════════════════════════════════════════ -->
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
-      <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">
-        🎵 Áudio completo
-      </h4>
-
+      <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">🎵 Áudio completo</h4>
       <div data-full-status style="font-size:0.85rem;margin-bottom:0.5rem;">
         ${t.full_path
           ? `<span class="audio-chip">✓ ${esc(t.full_path)}</span>`
           : '<span class="audio-chip none">Nenhum arquivo</span>'}
       </div>
-
       <button class="btn btn-outline btn-sm" data-upload-full type="button">
         ${t.full_path ? '↻ Substituir áudio completo' : '⬆ Enviar áudio completo'}
       </button>
-
       <input type="file" id="trackFullInput" accept="audio/*" hidden>
     </div>
 
-    <!-- Letras (JSON) -->
     <div class="form-group">
-      <label for="trackLyrics">Letra (JSON: [{ "time": 12, "text": "..." }])</label>
+      <label for="trackLyrics">Letra (JSON)</label>
       <textarea id="trackLyrics" rows="4" style="font-family:monospace;font-size:0.8rem;">${
         t.lyrics && t.lyrics.length ? esc(JSON.stringify(t.lyrics, null, 2)) : '[]'
       }</textarea>
@@ -686,7 +693,6 @@ function openTrackModal(albumId, track) {
     </div>
   `);
 
-  // ── Upload de preview (associa automaticamente)
   bindTrackUpload({
     buttonSel: '[data-upload-preview]',
     inputId: 'trackPreviewInput',
@@ -698,7 +704,6 @@ function openTrackModal(albumId, track) {
     track: t
   });
 
-  // ── Upload de áudio completo (associa automaticamente)
   bindTrackUpload({
     buttonSel: '[data-upload-full]',
     inputId: 'trackFullInput',
@@ -710,7 +715,6 @@ function openTrackModal(albumId, track) {
     track: t
   });
 
-  // ── Salvar
   document.getElementById('trackSave').addEventListener('click', async () => {
     const errEl = document.getElementById('trackError');
     errEl.textContent = '';
@@ -758,8 +762,9 @@ function openTrackModal(albumId, track) {
       }
       closeAdminModal();
       await loadTracksForAlbum(albumId);
-      paintBody(document.querySelector('[data-albums-body]'));
+      repaint();
     } catch (err) {
+      console.error('[albums] save track:', err);
       errEl.textContent = err?.message || 'Falha ao salvar faixa.';
     }
   });
@@ -767,8 +772,6 @@ function openTrackModal(albumId, track) {
 
 // ─────────────────────────────────────────────────────────────
 // Upload de áudio associado a uma faixa
-// ------------------------------------------------------------
-// Faz upload → recebe path → PATCH automático na faixa.
 // ─────────────────────────────────────────────────────────────
 function bindTrackUpload({
   buttonSel,
@@ -792,7 +795,6 @@ function bindTrackUpload({
     const file = input.files && input.files[0];
     if (!file) return;
 
-    // Se a faixa ainda não existe, precisa salvar primeiro
     if (!track.id) {
       toast('Salve a faixa antes de enviar o áudio.', '⚠');
       input.value = '';
@@ -808,7 +810,6 @@ function bindTrackUpload({
         statusEl.innerHTML = '<span class="audio-chip">⬆ 0%</span>';
       }
 
-      // 1) Upload com progresso
       const result = await uploadFn(file, (pct) => {
         if (statusEl) {
           statusEl.innerHTML = `<span class="audio-chip">⬆ ${pct}%</span>`;
@@ -819,7 +820,6 @@ function bindTrackUpload({
         throw new Error('Upload não retornou path.');
       }
 
-      // 2) Associa à faixa via PATCH
       const patch = { [field]: result.path };
       await apiFetch('track', {
         method: 'PATCH',
@@ -827,7 +827,6 @@ function bindTrackUpload({
         body: patch
       });
 
-      // 3) Atualiza estado local + UI
       track[field] = result.path;
 
       if (statusEl) {
@@ -841,11 +840,7 @@ function bindTrackUpload({
         '✓'
       );
 
-      // Recarrega a lista de faixas em background
-      loadTracksForAlbum(albumId).then(() => {
-        const body = document.querySelector('[data-albums-body]');
-        if (body) paintBody(body);
-      });
+      loadTracksForAlbum(albumId).then(() => repaint());
     } catch (err) {
       console.error('[albums] upload:', err);
       toast(err?.message || 'Falha no upload.', '⚠');
