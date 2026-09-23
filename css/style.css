@@ -46,6 +46,7 @@
    41. RESPONSIVO — admin
    42. PLAYER — botão tela cheia + fullscreen
    43. CORREÇÃO — capa do álbum (mobile + fullscreen)
+   44. ADMIN — MODAL GENÉRICO (#adminModal)
    ============================================================ */
 
 
@@ -2656,7 +2657,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-bottom: none;
     overflow-y: visible;
   }
-  /* Capa no mobile — quadrada, centralizada, 280px */
   .music-player .album-cover {
     width: min(70vw, 280px) !important;
     max-width: min(70vw, 280px) !important;
@@ -2733,7 +2733,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     font-size: 0.78rem;
     padding: 0.6rem 0.9rem;
   }
-  /* Discografia lista compacta — mobile */
   .discography-track-card {
     grid-template-columns: 30px 44px minmax(0, 1fr) auto;
     gap: 10px;
@@ -2844,7 +2843,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .player-fullscreen { display: flex; }
 }
 
-/* Fullscreen — capa grande, layout expandido */
 .music-player:fullscreen,
 .music-player:-webkit-full-screen {
   width: 100vw;
@@ -2935,697 +2933,69 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   padding: 0 !important;
 }
 
-/* ============================================================
-   ADMIN — dashboard: loading, erro e retry
-   ============================================================ */
-.stat-card .loading-hint {
-  color: var(--text-dim);
-  font-style: italic;
-}
-.stat-card.is-error {
-  border-color: rgba(248, 113, 113, 0.3);
-}
-.stat-card.is-error .label {
-  color: var(--danger);
-}
-.btn-retry {
-  display: inline-block;
-  margin-top: 0.35rem;
-  padding: 0.25rem 0.7rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--accent);
-  background: transparent;
-  border: 1px solid rgba(212, 175, 55, 0.4);
-  border-radius: 20px;
-  cursor: pointer;
-  transition: background 0.2s, color 0.2s, border-color 0.2s;
-}
-.btn-retry:hover {
-  background: rgba(212, 175, 55, 0.12);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.btn-retry:active {
-  transform: translateY(1px);
-}
 
 /* ============================================================
-   ADMIN — Users toolbar + paginação + confirmação
+   44. ADMIN — MODAL GENÉRICO (#adminModal)
+   ------------------------------------------------------------
+   Bloco dedicado ao modal genérico usado por openAdminModal().
+   Complementa a seção 25 (que já tinha .admin-modal-overlay),
+   garantindo scroll interno, fechamento e espaçamento.
    ============================================================ */
-
-/* Toolbar */
-.users-toolbar {
-  margin-bottom: 1rem;
-  padding-bottom: 0.9rem;
-  border-bottom: 1px solid var(--border);
-}
-.users-toolbar__row {
-  display: flex;
-  gap: 0.7rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.users-toolbar__row .shop-search {
-  flex: 1 1 240px;
-  min-width: 200px;
-}
-.users-toolbar__row select {
-  padding: 0.55rem 1rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 30px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-  outline: none;
-  cursor: pointer;
-}
-.users-toolbar__row select:focus {
-  border-color: var(--accent);
+#adminModal {
+  z-index: 1000;
 }
 
-/* Paginação */
-.users-pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  margin-top: 1.2rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--border);
-}
-.users-pagination__btn {
-  min-width: 34px;
-  height: 34px;
-  padding: 0 0.55rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.users-pagination__btn:hover:not(:disabled) {
-  background: rgba(212, 175, 55, 0.08);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.users-pagination__btn.is-active {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
-.users-pagination__btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.users-pagination__info {
-  margin-left: 0.8rem;
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-/* Confirmação de troca de plano */
-.plan-change-preview {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  padding: 0.8rem 1rem;
-  background: rgba(212, 175, 55, 0.05);
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: 10px;
-  margin-top: 0.8rem;
-}
-.plan-change-preview__label {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.plan-change-preview__arrow {
-  color: var(--accent);
-  font-weight: 700;
-  font-size: 1rem;
-}
-
-/* ============================================================
-   ADMIN — sales toolbar + paginação
-   ============================================================ */
-.sales-toolbar {
-  margin-bottom: 1rem;
-  padding-bottom: 0.9rem;
-  border-bottom: 1px solid var(--border);
-}
-.sales-toolbar__row {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.sales-toolbar__label {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-}
-.sales-toolbar__row select {
-  padding: 0.5rem 0.9rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 30px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 0.82rem;
-  outline: none;
-  cursor: pointer;
-}
-.sales-toolbar__row select:focus {
-  border-color: var(--accent);
-}
-
-.sales-group-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-.sales-group-title .hint {
-  font-family: var(--font-sans);
-  font-size: 0.72rem;
-  font-weight: 400;
-  color: var(--text-dim);
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.sales-pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  margin-top: 1rem;
-  padding-top: 0.9rem;
-  border-top: 1px solid var(--border);
-}
-.sales-pagination--info {
-  color: var(--text-dim);
-  font-size: 0.78rem;
-}
-.sales-pagination__btn {
-  min-width: 32px;
-  height: 32px;
-  padding: 0 0.5rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-dim);
-  font-family: var(--font-sans);
-  font-size: 0.82rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-.sales-pagination__btn:hover:not(:disabled) {
-  background: rgba(212, 175, 55, 0.08);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.sales-pagination__btn.is-active {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
-.sales-pagination__btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.sales-pagination__info {
-  margin-left: 0.8rem;
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-/* ============================================================
-   ADMIN — Editor de frases
-   ============================================================ */
-.frases-editor__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid var(--border);
-}
-.frases-editor__count {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-}
-.frases-editor__list {
+#adminModal .admin-modal {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
-}
-
-/* Botão de reordenar */
-.frase-editor__order {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.frase-order-btn {
-  width: 26px;
-  height: 26px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: color 0.15s, border-color 0.15s;
-}
-.frase-order-btn:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.frase-order-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-/* Preview da frase (replica a .frase-card do site público) */
-.frase-editor__preview-wrap {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px dashed var(--border);
-  border-radius: 8px;
-  padding: 1rem;
-}
-.frase-preview {
-  background: var(--bg-elev);
-  border-left: 3px solid var(--accent);
-  padding: 1.2rem 1.4rem;
-  border-radius: 0 10px 10px 0;
-}
-.frase-preview p {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-size: 1.05rem;
-  line-height: 1.5;
-  color: var(--text);
-  margin-bottom: 0.5rem;
-}
-.frase-preview .author {
-  display: block;
-  font-family: var(--font-sans);
-  font-style: normal;
-  font-size: 0.75rem;
-  color: var(--accent);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
-/* ============================================================
-   ADMIN — Editor de planos
-   ============================================================ */
-.plans-editor__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid var(--border);
-}
-.plans-editor__count {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-}
-
-/* ============================================================
-   ADMIN — Editor de playlists v2
-   ============================================================ */
-.playlists-editor__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
-  padding-bottom: 0.8rem;
-  border-bottom: 1px solid var(--border);
-}
-.playlists-editor__count {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: 600;
-}
-.playlists-editor__list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-
-.playlist-editor__order {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.playlist-order-btn {
-  width: 26px;
-  height: 26px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: color 0.15s, border-color 0.15s;
-}
-.playlist-order-btn:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.playlist-order-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-
-.playlist-editor__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 0.5rem;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  color: var(--bg);
-  font-family: var(--font-serif);
-  font-weight: 700;
-  font-size: 0.75rem;
-  border-radius: 6px;
-}
-.playlist-editor__actions {
-  display: flex;
-  gap: 0.4rem;
-  margin-left: auto;
-}
-.playlist-editor__desc {
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  margin: 0.4rem 0;
-}
-.playlist-editor__stats {
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  margin: 0.4rem 0;
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.playlist-preview {
-  display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-  margin-top: 0.5rem;
-}
-.playlist-preview__track {
-  font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
-  background: rgba(212, 175, 55, 0.08);
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: 20px;
-  color: var(--text);
-}
-.playlist-preview__more {
-  font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
-  color: var(--text-dim);
-  font-style: italic;
-}
-
-/* Busca de faixas */
-.playlist-search-results {
-  max-height: 260px;
-  overflow-y: auto;
-  margin-top: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card);
-}
-.playlist-search-result {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: "title add" "album add";
-  gap: 2px 12px;
-  width: 100%;
-  padding: 0.6rem 0.8rem;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-.playlist-search-result:last-child { border-bottom: none; }
-.playlist-search-result:hover:not(:disabled) { background: rgba(212, 175, 55, 0.08); }
-.playlist-search-result:disabled { cursor: default; opacity: 0.6; }
-.playlist-search-result__title {
-  grid-area: title;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-.playlist-search-result__album {
-  grid-area: album;
-  font-size: 0.72rem;
-  color: var(--text-dim);
-}
-.playlist-search-result__add {
-  grid-area: add;
-  align-self: center;
-  color: var(--accent);
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-.playlist-search-result__added {
-  grid-area: add;
-  align-self: center;
-  color: var(--text-dim);
-  font-size: 0.72rem;
-  font-style: italic;
-}
-
-/* Lista de faixas dentro do modal */
-.playlist-tracks-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 0.8rem;
-}
-.playlist-track-item {
-  display: grid;
-  grid-template-columns: 60px 1fr auto;
-  align-items: center;
-  gap: 12px;
-  padding: 0.5rem 0.7rem;
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.playlist-track-item.is-missing {
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.06);
-}
-.playlist-track-item__order {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.playlist-track-item__info { min-width: 0; }
-.playlist-track-item__title {
-  font-size: 0.9rem;
-  font-weight: 500;
-  white-space: nowrap;
+  max-height: 90vh;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-.playlist-track-item__meta {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-top: 2px;
+  padding: 0;
 }
 
-/* ============================================================
-   ADMIN — Editor de redes sociais
-   ============================================================ */
-.social-editor-item input[type="url"] {
-  transition: border-color 0.2s;
-}
-.social-editor-item input[type="url"]:invalid,
-.social-editor-item input[type="url"][style*="--danger"] {
-  border-color: var(--danger);
+#adminModal .admin-modal > #adminModalContent {
+  padding: 2rem;
+  overflow-y: auto;
+  flex: 1;
 }
 
-/* ============================================================
-   ADMIN — Backup do conteúdo (escopo)
-   ============================================================ */
-.backup-scope-header {
-  margin-bottom: 1.2rem;
-  padding-bottom: 1rem;
+/* Scroll interno */
+#adminModal .admin-modal::-webkit-scrollbar,
+#adminModal #adminModalContent::-webkit-scrollbar { width: 8px; }
+#adminModal .admin-modal::-webkit-scrollbar-thumb,
+#adminModal #adminModalContent::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+#adminModal .admin-modal::-webkit-scrollbar-thumb:hover,
+#adminModal #adminModalContent::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-dark);
+}
+
+/* Títulos dentro do modal */
+#adminModal h3 {
+  font-family: var(--font-serif);
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 1rem;
+  padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
 }
 
-.backup-actions-hint {
-  margin: 1.2rem 0;
-  padding: 0.85rem 1.1rem;
-  background: rgba(212, 175, 55, 0.05);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
+/* Botões de ação no rodapé */
+#adminModal [data-close] {
+  cursor: pointer;
 }
 
-/* Grid de 2 colunas: incluído / não incluído */
-.backup-scope {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  margin: 1.5rem 0;
-}
-@media (max-width: 768px) {
-  .backup-scope { grid-template-columns: 1fr; }
-}
-
-.backup-scope__col {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem 1.2rem;
-}
-.backup-scope__col--in {
-  border-color: rgba(74, 222, 128, 0.3);
-}
-.backup-scope__col--out {
-  border-color: rgba(248, 113, 113, 0.25);
-}
-
-.backup-scope__col h4 {
-  margin: 0 0 0.8rem;
-  font-family: var(--font-sans);
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: var(--text);
-}
-.backup-scope__col--in h4 { color: var(--success); }
-.backup-scope__col--out h4 { color: var(--danger); }
-
-.backup-scope__col ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-.backup-scope__col li {
-  font-size: 0.82rem;
-  line-height: 1.4;
-  color: var(--text-dim);
-}
-.backup-scope__col li strong {
-  color: var(--text);
-  font-weight: 600;
-  display: block;
-  margin-bottom: 0.1rem;
-}
-.backup-scope__col li .hint {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--text-dim);
-}
-.backup-scope__how {
-  display: inline-block;
-  margin-top: 0.2rem;
-  font-size: 0.72rem;
-  color: var(--accent);
-  font-style: normal;
-  font-weight: 500;
-}
-
-/* Links externos */
-.backup-external {
-  margin-top: 1.5rem;
-  padding-top: 1.2rem;
-  border-top: 1px solid var(--border);
-}
-.backup-external h4 {
-  margin: 0 0 0.8rem;
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-}
-.backup-external__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.8rem;
-}
-.backup-external__link {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.9rem 1.1rem;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  text-decoration: none;
-  color: var(--text);
-  transition: background 0.15s, border-color 0.15s, transform 0.15s;
-}
-.backup-external__link:hover {
-  background: rgba(212, 175, 55, 0.06);
-  border-color: var(--accent);
-  transform: translateY(-2px);
-}
-.backup-external__link strong {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: var(--text);
-}
-.backup-external__link span {
-  font-size: 0.78rem;
-  color: var(--text-dim);
-  line-height: 1.4;
+/* Responsivo */
+@media (max-width: 600px) {
+  #adminModal .admin-modal {
+    width: 100%;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+  #adminModal .admin-modal > #adminModalContent {
+    padding: 1.25rem;
+  }
 }
