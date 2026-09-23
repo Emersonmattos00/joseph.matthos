@@ -29,6 +29,11 @@
    4. TTL padrão elevado para 1800s (30 min) — cobre músicas longas
    5. Modo `?debug=1` devolve estado completo da faixa (sem URLs)
    6. Respostas de erro estruturadas (code + message)
+   7. encodePath() — path codificado por segmento (espaços/acentos)
+   8. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
+   9. objectExists() — HEAD no Storage antes de gerar signed URL
+  10. source: 'preview' | 'full' | null — frontend sabe o que toca
+  11. mimeType inferido pela extensão do arquivo
    ============================================================ */
 
 'use strict';
@@ -58,6 +63,30 @@ const MAX_SIGNED_URL_TTL_SEC = 3600;
 
 const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
+
+// Cache em memória: path → { exists: bool, checkedAt: ms }
+// Evita HEAD a cada requisição em faixas populares.
+// TTL curto para não atrapalhar uploads recentes.
+const EXISTS_CACHE_TTL_MS = 60_000;
+const _existsCache = new Map();
+
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão (para diagnóstico)
+// ─────────────────────────────────────────────────────────────
+const MIME_BY_EXT = {
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  mp4: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  webm: 'audio/webm',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff'
+};
 
 module.exports = async function handler(req, res) {
   // ── Headers de segurança e cache (CRÍTICO — sempre antes de tudo)
@@ -125,8 +154,22 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  const previewStart = Number(track.preview_start) || 0;
+  const previewDuration = Number(track.preview_duration) || 30;
+  const previewMime = guessMime(track.preview_path);
+  const fullMime = guessMime(track.full_path);
+
   // ── Modo debug: devolve estado sem URLs assinadas
   if (debug) {
+    const [previewExists, fullExists] = await Promise.all([
+      track.preview_path
+        ? objectExists(PREVIEW_BUCKET, track.preview_path)
+        : Promise.resolve(false),
+      track.full_path
+        ? objectExists(PREMIUM_BUCKET, track.full_path)
+        : Promise.resolve(false)
+    ]);
+
     return respond(res, method, {
       ok: true,
       debug: true,
@@ -138,23 +181,33 @@ module.exports = async function handler(req, res) {
         published: !!track.published,
         forSale: !!track.for_sale,
         priceCents: Number(track.price_cents) || 0,
-        hasPreviewPath: !!track.preview_path,
-        hasFullPath: !!track.full_path,
+
         previewPath: track.preview_path || null,
+        previewExists,
+        previewMime,
+        previewStart,
+        previewDuration,
+
         fullPath: track.full_path || null,
-        previewStart: Number(track.preview_start) || 0,
-        previewDuration: Number(track.preview_duration) || 30
+        fullExists,
+        fullMime
       }
     });
   }
 
-  // ── 2) Preview é sempre público
-  const previewUrl = track.preview_path
-    ? buildPublicUrl(PREVIEW_BUCKET, track.preview_path)
-    : null;
-
-  const previewStart = Number(track.preview_start) || 0;
-  const previewDuration = Number(track.preview_duration) || 30;
+  // ── 2) Preview: valida existência antes de expor URL
+  let previewUrl = null;
+  if (track.preview_path) {
+    const ok = await objectExists(PREVIEW_BUCKET, track.preview_path);
+    if (ok) {
+      previewUrl = buildPublicUrl(PREVIEW_BUCKET, track.preview_path);
+    } else {
+      console.warn(
+        '[stream] preview_path não existe no Storage:',
+        PREVIEW_BUCKET + '/' + track.preview_path
+      );
+    }
+  }
 
   // ── 3) Verificar permissão
   let unlocked = false;
@@ -206,33 +259,77 @@ module.exports = async function handler(req, res) {
 
   // ── 4) Sem acesso → só preview
   if (!unlocked) {
+    const source = previewUrl ? 'preview' : null;
+
     return respond(res, method, {
       ok: true,
       unlocked: false,
+      source,
       reason,
       previewUrl,
       previewStart,
       previewDuration,
+      previewMime,
       fullUrl: null,
+      fullMime: null,
       expiresIn: null,
-      rentalExpiresAt: null
+      rentalExpiresAt: null,
+
+      // Diagnóstico explícito
+      warning: previewUrl
+        ? null
+        : (track.preview_path
+            ? 'Arquivo de prévia não encontrado no Storage.'
+            : 'Prévia não cadastrada.')
     });
   }
 
   // ── 5) Com acesso → URL assinada
   if (!track.full_path) {
+    const source = previewUrl ? 'preview' : null;
     return respond(res, method, {
       ok: true,
       unlocked: true,
+      source,
       reason,
       previewUrl,
       previewStart,
       previewDuration,
+      previewMime,
       fullUrl: null,
+      fullMime: null,
       expiresIn: null,
       rentalExpiresAt,
       warning: 'Áudio completo não cadastrado.',
       code: 'FULL_PATH_MISSING'
+    });
+  }
+
+  const fullExists = await objectExists(PREMIUM_BUCKET, track.full_path);
+  if (!fullExists) {
+    console.error(
+      '[stream] full_path não existe no Storage:',
+      PREMIUM_BUCKET + '/' + track.full_path
+    );
+
+    // Cai para preview como fallback (usuário pagou mas arquivo sumiu)
+    const source = previewUrl ? 'preview' : null;
+
+    return respond(res, method, {
+      ok: true,
+      unlocked: true,
+      source,
+      reason,
+      previewUrl,
+      previewStart,
+      previewDuration,
+      previewMime,
+      fullUrl: null,
+      fullMime: null,
+      expiresIn: null,
+      rentalExpiresAt,
+      warning: 'Áudio completo não encontrado no Storage.',
+      code: 'FULL_FILE_MISSING'
     });
   }
 
@@ -250,11 +347,14 @@ module.exports = async function handler(req, res) {
   return respond(res, method, {
     ok: true,
     unlocked: true,
+    source: 'full',
     reason,
     previewUrl,
     previewStart,
     previewDuration,
+    previewMime,
     fullUrl: signedUrl,
+    fullMime,
     expiresIn: ttl,
     rentalExpiresAt
   });
@@ -288,13 +388,53 @@ function getSignedUrlTtl() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers
+// Path encoding — PROBLEMA 2
+// ------------------------------------------------------------
+// Codifica cada segmento do path separadamente, preservando "/".
+// Isso evita quebrar nomes com espaços, acentos, #, ?, etc.
 // ─────────────────────────────────────────────────────────────
+function encodePath(path) {
+  return String(path || '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+}
 
+// ─────────────────────────────────────────────────────────────
+// Public URL builder
+// ─────────────────────────────────────────────────────────────
 function buildPublicUrl(bucket, path) {
   const { url } = getConfig();
-  const clean = String(path).replace(/^\/+/, '');
+  const clean = encodePath(path);
   return `${url}/storage/v1/object/public/${bucket}/${clean}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Signed URL — PROBLEMA 3
+// ------------------------------------------------------------
+// O Supabase pode devolver:
+//   a) "/object/sign/bucket/file.mp3?token=..."       (relativo)
+//   b) "/storage/v1/object/sign/bucket/file.mp3?..."  (já prefixado)
+//   c) "https://xxx.supabase.co/storage/v1/object/..." (absoluto)
+//
+// normalizeSignedUrl() cobre todos os casos sem duplicar prefixo.
+// ─────────────────────────────────────────────────────────────
+function normalizeSignedUrl(signedURL, baseUrl) {
+  const raw = String(signedURL || '').trim();
+  if (!raw) return null;
+
+  // (c) URL absoluta — devolve como está
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  // (b) já vem com /storage/v1/
+  if (raw.startsWith('/storage/v1/')) {
+    return baseUrl + raw;
+  }
+
+  // (a) relativo: /object/sign/...
+  const clean = raw.replace(/^\/+/, '');
+  return `${baseUrl}/storage/v1/${clean}`;
 }
 
 async function createSignedUrl(bucket, path, expiresInSec) {
@@ -302,21 +442,19 @@ async function createSignedUrl(bucket, path, expiresInSec) {
   const adminKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
   if (!adminKey) return null;
 
-  const clean = String(path).replace(/^\/+/, '');
+  const clean = encodePath(path);
+  const endpoint = `${url}/storage/v1/object/sign/${bucket}/${clean}`;
 
   try {
-    const r = await fetch(
-      `${url}/storage/v1/object/sign/${bucket}/${clean}`,
-      {
-        method: 'POST',
-        headers: {
-          apikey: adminKey,
-          Authorization: `Bearer ${adminKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ expiresIn: expiresInSec })
-      }
-    );
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        apikey: adminKey,
+        Authorization: `Bearer ${adminKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ expiresIn: expiresInSec })
+    });
 
     if (!r.ok) {
       const text = await r.text().catch(() => '');
@@ -327,12 +465,65 @@ async function createSignedUrl(bucket, path, expiresInSec) {
     const json = await r.json();
     if (!json.signedURL) return null;
 
-    const rel = String(json.signedURL).replace(/^\/+/, '');
-    return `${url}/storage/v1/${rel}`;
+    return normalizeSignedUrl(json.signedURL, url);
   } catch (err) {
     console.error('[stream] sign error:', err.message);
     return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// objectExists — PROBLEMA 4
+// ------------------------------------------------------------
+// HEAD no objeto do Storage. Usa cache em memória por 60s para
+// não pesar em faixas populares.
+//
+// Retorna true/false. Nunca lança.
+// ─────────────────────────────────────────────────────────────
+async function objectExists(bucket, path) {
+  if (!bucket || !path) return false;
+
+  const key = `${bucket}/${path}`;
+  const now = Date.now();
+  const cached = _existsCache.get(key);
+
+  if (cached && (now - cached.checkedAt) < EXISTS_CACHE_TTL_MS) {
+    return cached.exists;
+  }
+
+  const { url } = getConfig();
+  const adminKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (!adminKey) return false;
+
+  const clean = encodePath(path);
+  const endpoint = `${url}/storage/v1/object/${bucket}/${clean}`;
+
+  try {
+    const r = await fetch(endpoint, {
+      method: 'HEAD',
+      headers: {
+        apikey: adminKey,
+        Authorization: `Bearer ${adminKey}`
+      }
+    });
+
+    const exists = r.ok;
+    _existsCache.set(key, { exists, checkedAt: now });
+    return exists;
+  } catch (err) {
+    console.warn('[stream] objectExists falhou:', bucket, path, err.message);
+    // Não cacheia erro de rede (pode ser transitório)
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão — PROBLEMA 6
+// ─────────────────────────────────────────────────────────────
+function guessMime(path) {
+  if (!path) return null;
+  const ext = String(path).split('.').pop().toLowerCase();
+  return MIME_BY_EXT[ext] || null;
 }
 
 // ─────────────────────────────────────────────────────────────
