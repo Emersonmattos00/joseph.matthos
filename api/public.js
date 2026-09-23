@@ -19,19 +19,15 @@
 
    🛡️ REGRA DE OURO
    ------------------------------------------------------------
-   Este endpoint é CEGO ao áudio. Ele devolve apenas METADADOS
-   da faixa (id, título, duração, preço, preview_start...).
+   Este endpoint é CEGO ao áudio. Devolve apenas METADADOS.
+   A resolução do áudio acontece em /api/stream.
 
-   A resolução do áudio acontece em /api/stream, que verifica
-   a permissão do usuário ANTES de gerar qualquer URL.
-
-   ❌ NUNCA fazer aqui:
-      fullUrl = supabaseStoragePublicUrl('audio-premium', track.full_path)
-      previewUrl = supabaseStoragePublicUrl('audio-preview', track.preview_path)
-
-   ✅ Fazemos aqui:
-      hasPreview = !!track.preview_path   (booleano, não o path)
-      hasFull    = !!track.full_path      (booleano, não o path)
+   🔧 CORREÇÕES APLICADAS
+   ------------------------------------------------------------
+   1. Rental plans SEMPRE presentes, com `available` explícito.
+      Preço indisponível → available: false (não desaparece).
+   2. Plans SEMPRE presentes, com `available` explícito.
+   3. mapTrack devolve `trackIndex` (do banco), não posição.
    ============================================================ */
 
 'use strict';
@@ -62,16 +58,15 @@ const VALID_RESOURCES = new Set([
 ]);
 
 // ─────────────────────────────────────────────────────────────
-// Rental plans — apenas metadata de exibição
-// ⚠️ Os PREÇOS vêm das envs (fonte de verdade).
+// Rental plans — sempre presentes, preço pode faltar
 // ─────────────────────────────────────────────────────────────
 const RENTAL_PLAN_DEFS = [
-  { id: '24h', envKey: 'RENTAL_PRICE_24H', label: '24 horas', days: 1,  popular: false },
-  { id: '48h', envKey: 'RENTAL_PRICE_48H', label: '48 horas', days: 2,  popular: true  },
-  { id: '3d',  envKey: 'RENTAL_PRICE_3D',  label: '3 dias',   days: 3,  popular: false },
-  { id: '5d',  envKey: 'RENTAL_PRICE_5D',  label: '5 dias',   days: 5,  popular: false },
-  { id: '10d', envKey: 'RENTAL_PRICE_10D', label: '10 dias',  days: 10, popular: false },
-  { id: '15d', envKey: 'RENTAL_PRICE_15D', label: '15 dias',  days: 15, popular: false }
+  { id: '24h', envKey: 'RENTAL_PRICE_24H', label: '24 horas', days: 1,  hours: 24,  popular: false },
+  { id: '48h', envKey: 'RENTAL_PRICE_48H', label: '48 horas', days: 2,  hours: 48,  popular: true  },
+  { id: '3d',  envKey: 'RENTAL_PRICE_3D',  label: '3 dias',   days: 3,  hours: 72,  popular: false },
+  { id: '5d',  envKey: 'RENTAL_PRICE_5D',  label: '5 dias',   days: 5,  hours: 120, popular: false },
+  { id: '10d', envKey: 'RENTAL_PRICE_10D', label: '10 dias',  days: 10, hours: 240, popular: false },
+  { id: '15d', envKey: 'RENTAL_PRICE_15D', label: '15 dias',  days: 15, hours: 360, popular: false }
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -103,7 +98,6 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
   }
 
-  // ── Rate limit por IP (defesa contra scraping)
   const ip = clientIp(req);
   const rate = await checkAndIncrement(`public:${ip}`, RATE_MAX_REQUESTS, RATE_WINDOW_MS);
   if (rate.limited) {
@@ -121,7 +115,6 @@ module.exports = async function handler(req, res) {
 
   try {
     if (!resource) {
-      // ── Agregado: content + albums (com tracks) + tracks flat + plans + rentalPlans
       const [content, catalog, plans] = await Promise.all([
         fetchContent(),
         fetchAlbumsWithTracks(),
@@ -217,16 +210,7 @@ async function fetchContent() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Albums + Tracks (agregado)
-// ------------------------------------------------------------
-// Busca álbuns publicados e suas faixas publicadas, retornando
-// a estrutura hierárquica esperada pelo site.js:
-//   [{ id, title, type, year, coverImage, description, tracks: [...] }]
-//
-// ⚠️  NÃO retorna full_path nem preview_path.
-//     URLs de áudio vêm via /api/stream (com verificação de permissão).
-//
-// ✅ Retorna hasPreview / hasFull como BOOLEANOS (seguro).
+// Albums + Tracks
 // ─────────────────────────────────────────────────────────────
 async function fetchAlbumsWithTracks() {
   const [albumsRes, tracksRes] = await Promise.all([
@@ -255,7 +239,6 @@ async function fetchAlbumsWithTracks() {
   const albumRows = Array.isArray(albumsRes.body) ? albumsRes.body : [];
   const trackRows = Array.isArray(tracksRes.body) ? tracksRes.body : [];
 
-  // Agrupa tracks por album_id
   const byAlbum = new Map();
   for (const t of trackRows) {
     if (!byAlbum.has(t.album_id)) byAlbum.set(t.album_id, []);
@@ -276,15 +259,11 @@ async function fetchAlbumsWithTracks() {
     tracks: (byAlbum.get(a.id) || []).map((t) => mapTrack(t))
   }));
 
-  // Lista flat (compatibilidade)
   const flatTracks = trackRows.map((t) => mapTrack(t));
 
   return { ok: true, albums, tracks: flatTracks };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Tracks (flat)
-// ─────────────────────────────────────────────────────────────
 async function fetchTracks() {
   const result = await supabaseAdminRequest(
     `/rest/v1/tracks?published=eq.true` +
@@ -307,23 +286,13 @@ async function fetchTracks() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Mapeia uma linha de `tracks` para o formato do cliente
-// ------------------------------------------------------------
-// ⚠️  NUNCA expõe:
-//     - preview_path (path no bucket)
-//     - full_path (path no bucket)
-//     - URLs públicas ou assinadas
-//
-// ✅ Expõe:
-//     - hasPreview / hasFull (booleanos) — segurança preservada
-//     - previewStart / previewDuration (metadados)
-//     - id (track.id) — obrigatório para playlists
+// mapTrack — devolve trackIndex (do banco) e id
 // ─────────────────────────────────────────────────────────────
 function mapTrack(t) {
   return {
     id: t.id,
     albumId: t.album_id,
-    trackIndex: t.track_index,
+    trackIndex: Number(t.track_index) || 0,   // ← SEMPRE do banco
     title: t.title || '',
     duration: t.duration || '',
     previewStart: Number(t.preview_start) || 0,
@@ -331,62 +300,63 @@ function mapTrack(t) {
     priceCents: Number(t.price_cents) || 0,
     forSale: t.for_sale !== false,
     lyrics: Array.isArray(t.lyrics) ? t.lyrics : [],
-
-    // ── Booleanos de existência (seguros)
-    //    Servem para UI: mostrar 🔒 se não tem full, etc.
     hasPreview: !!t.preview_path,
     hasFull: !!t.full_path,
-
-    // ── MIME inferido (útil para diagnóstico; não expõe paths)
     previewMime: guessMime(t.preview_path),
     fullMime: guessMime(t.full_path)
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-// Plans (assinatura)
+// Plans (assinatura) — sempre presentes, `available` explícito
 // ─────────────────────────────────────────────────────────────
 async function fetchPlans() {
   const monthlyCents = parsePriceCents(process.env.MP_PREMIUM_MONTHLY_PRICE);
   const annualCents = parsePriceCents(process.env.MP_PREMIUM_ANNUAL_PRICE);
 
   const plans = [
-    { id: 'free', priceCents: 0, interval: null, available: true }
+    {
+      id: 'free',
+      priceCents: 0,
+      interval: null,
+      available: true
+    },
+    {
+      id: 'premium',
+      priceCents: monthlyCents || 0,
+      interval: 'month',
+      available: monthlyCents !== null
+    },
+    {
+      id: 'anual',
+      priceCents: annualCents || 0,
+      interval: 'year',
+      available: annualCents !== null
+    }
   ];
-
-  plans.push(monthlyCents !== null
-    ? { id: 'premium', priceCents: monthlyCents, interval: 'month', available: true }
-    : { id: 'premium', priceCents: 0, interval: 'month', available: false });
-
-  plans.push(annualCents !== null
-    ? { id: 'anual', priceCents: annualCents, interval: 'year', available: true }
-    : { id: 'anual', priceCents: 0, interval: 'year', available: false });
 
   return { currency: 'BRL', plans };
 }
 
 // ─────────────────────────────────────────────────────────────
-// Rental plans (aluguel de faixas)
-// ------------------------------------------------------------
-// Envs esperadas:
-//   RENTAL_PRICE_24H, RENTAL_PRICE_48H, RENTAL_PRICE_3D,
-//   RENTAL_PRICE_5D, RENTAL_PRICE_10D, RENTAL_PRICE_15D
+// Rental plans — SEMPRE presentes, `available` explícito
 // ─────────────────────────────────────────────────────────────
 function fetchRentalPlans() {
-  const rentalPlans = RENTAL_PLAN_DEFS
-    .map((def) => {
-      const raw = process.env[def.envKey];
-      const price = Number(raw);
-      if (!Number.isFinite(price) || price <= 0) return null;
-      return {
-        id: def.id,
-        label: def.label,
-        days: def.days,
-        price,
-        popular: def.popular
-      };
-    })
-    .filter(Boolean);
+  const rentalPlans = RENTAL_PLAN_DEFS.map((def) => {
+    const raw = process.env[def.envKey];
+    const price = Number(raw);
+    const hasPrice = Number.isFinite(price) && price > 0;
+
+    return {
+      id: def.id,
+      label: def.label,
+      days: def.days,
+      hours: def.hours,
+      price: hasPrice ? price : 0,
+      popular: def.popular,
+      available: hasPrice   // ← explícito
+    };
+  });
 
   return { rentalPlans };
 }
