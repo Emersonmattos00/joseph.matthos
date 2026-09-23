@@ -8,7 +8,8 @@
      1. Busca a faixa no banco
      2. Verifica permissão:
         a) premium / anual                → libera
-        b) aluguel de faixa ativo         → libera
+        b) aluguel de ÁLBUM ativo         → libera
+        c) aluguel de FAIXA ativo         → libera
      3. SEM acesso → retorna previewUrl (público) + previewStart
      4. COM acesso → retorna fullUrl ASSINADA (expira em TTL configurável)
 
@@ -21,19 +22,18 @@
    - URLs assinadas NUNCA vão para CDN/browser cache
    - TTL configurável via env, com clamp entre 60s e 3600s
 
-   🔧 CORREÇÕES APLICADAS
+   🔧 RECURSOS
    ------------------------------------------------------------
-   1. Inclui `preview_start` no SELECT e na resposta (previewStart)
-   2. Remove `scope=eq.track` (coluna inexistente no schema)
-   3. Remove verificação de aluguel de álbum (não suportado no schema)
-   4. TTL padrão elevado para 1800s (30 min) — cobre músicas longas
-   5. Modo `?debug=1` devolve estado completo da faixa (sem URLs)
-   6. Respostas de erro estruturadas (code + message)
-   7. encodePath() — path codificado por segmento (espaços/acentos)
-   8. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
-   9. objectExists() — HEAD no Storage antes de gerar signed URL
-  10. source: 'preview' | 'full' | null — frontend sabe o que toca
-  11. mimeType inferido pela extensão do arquivo
+   1. preview_start / preview_duration no SELECT e na resposta
+   2. Suporte a aluguel de ÁLBUM (scope='album') e FAIXA (scope='track')
+   3. TTL padrão 1800s (30 min)
+   4. Modo `?debug=1` — estado completo sem URLs
+   5. Erros estruturados (code + message)
+   6. encodePath() — path codificado por segmento
+   7. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
+   8. objectExists() — HEAD no Storage antes de gerar signed URL
+   9. source: 'preview' | 'full' | null
+  10. mimeType inferido pela extensão
    ============================================================ */
 
 'use strict';
@@ -47,16 +47,6 @@ const {
   getConfig
 } = require('./_lib');
 
-// ─────────────────────────────────────────────────────────────
-// TTL da URL assinada
-// ------------------------------------------------------------
-// Default: 30 minutos (1800s) — cobre músicas longas + pausas
-// Mínimo:  1 minuto  (60s)   — evita configuração absurda
-// Máximo:  1 hora    (3600s) — evita link quase permanente
-//
-// Env opcional:
-//   SIGNED_URL_TTL_SEC=1800
-// ─────────────────────────────────────────────────────────────
 const DEFAULT_SIGNED_URL_TTL_SEC = 1800;
 const MIN_SIGNED_URL_TTL_SEC = 60;
 const MAX_SIGNED_URL_TTL_SEC = 3600;
@@ -64,15 +54,9 @@ const MAX_SIGNED_URL_TTL_SEC = 3600;
 const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
 
-// Cache em memória: path → { exists: bool, checkedAt: ms }
-// Evita HEAD a cada requisição em faixas populares.
-// TTL curto para não atrapalhar uploads recentes.
 const EXISTS_CACHE_TTL_MS = 60_000;
 const _existsCache = new Map();
 
-// ─────────────────────────────────────────────────────────────
-// MIME por extensão (para diagnóstico)
-// ─────────────────────────────────────────────────────────────
 const MIME_BY_EXT = {
   mp3: 'audio/mpeg',
   m4a: 'audio/mp4',
@@ -89,14 +73,13 @@ const MIME_BY_EXT = {
 };
 
 module.exports = async function handler(req, res) {
-  // ── Headers de segurança e cache (CRÍTICO — sempre antes de tudo)
   res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
   res.setHeader('Vary', 'Cookie, Authorization');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Allow', 'GET, HEAD');
 
-  const method = (req.method || 'GET').toUpperCase();
+  const method = String(req.method || 'GET').toUpperCase();
 
   if (method !== 'GET' && method !== 'HEAD') {
     return methodNotAllowed(res, 'GET, HEAD');
@@ -114,21 +97,21 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ── 1) Buscar a faixa
-  let track = null;
+  // ── 1) Buscar faixa
+  let track;
   try {
-    const r = await supabaseAdminRequest(
+    const query =
       `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
       `&track_index=eq.${trackIndex}` +
       `&select=id,album_id,track_index,title,` +
       `full_path,preview_path,preview_start,preview_duration,` +
       `published,for_sale,price_cents` +
-      `&limit=1`,
-      { method: 'GET' }
-    );
+      `&limit=1`;
 
-    if (!r.response.ok) {
-      console.error('[stream] Supabase erro:', r.response.status, r.body);
+    const result = await supabaseAdminRequest(query, { method: 'GET' });
+
+    if (!result.response.ok) {
+      console.error('[stream] Supabase erro:', result.response.status, result.body);
       return sendJson(res, 502, {
         ok: false,
         error: 'Serviço indisponível.',
@@ -136,7 +119,7 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    if (!Array.isArray(r.body) || !r.body[0]) {
+    if (!Array.isArray(result.body) || !result.body[0]) {
       return sendJson(res, 404, {
         ok: false,
         error: 'Faixa não encontrada.',
@@ -144,9 +127,9 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    track = r.body[0];
+    track = result.body[0];
   } catch (err) {
-    console.error('[stream] erro ao buscar faixa:', err.message);
+    console.error('[stream] erro ao buscar faixa:', err);
     return sendJson(res, 502, {
       ok: false,
       error: 'Serviço indisponível.',
@@ -154,20 +137,16 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const previewStart = Number(track.preview_start) || 0;
-  const previewDuration = Number(track.preview_duration) || 30;
+  const previewStart = Math.max(0, Number(track.preview_start) || 0);
+  const previewDuration = Math.max(1, Number(track.preview_duration) || 30);
   const previewMime = guessMime(track.preview_path);
   const fullMime = guessMime(track.full_path);
 
-  // ── Modo debug: devolve estado sem URLs assinadas
+  // ── Debug
   if (debug) {
     const [previewExists, fullExists] = await Promise.all([
-      track.preview_path
-        ? objectExists(PREVIEW_BUCKET, track.preview_path)
-        : Promise.resolve(false),
-      track.full_path
-        ? objectExists(PREMIUM_BUCKET, track.full_path)
-        : Promise.resolve(false)
+      track.preview_path ? objectExists(PREVIEW_BUCKET, track.preview_path) : false,
+      track.full_path ? objectExists(PREMIUM_BUCKET, track.full_path) : false
     ]);
 
     return respond(res, method, {
@@ -181,13 +160,11 @@ module.exports = async function handler(req, res) {
         published: !!track.published,
         forSale: !!track.for_sale,
         priceCents: Number(track.price_cents) || 0,
-
         previewPath: track.preview_path || null,
         previewExists,
         previewMime,
         previewStart,
         previewDuration,
-
         fullPath: track.full_path || null,
         fullExists,
         fullMime
@@ -195,21 +172,18 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ── 2) Preview: valida existência antes de expor URL
+  // ── 2) Preview
   let previewUrl = null;
   if (track.preview_path) {
     const ok = await objectExists(PREVIEW_BUCKET, track.preview_path);
     if (ok) {
       previewUrl = buildPublicUrl(PREVIEW_BUCKET, track.preview_path);
     } else {
-      console.warn(
-        '[stream] preview_path não existe no Storage:',
-        PREVIEW_BUCKET + '/' + track.preview_path
-      );
+      console.warn('[stream] preview_path não existe:', track.preview_path);
     }
   }
 
-  // ── 3) Verificar permissão
+  // ── 3) Permissão
   let unlocked = false;
   let reason = 'not_authenticated';
   let rentalExpiresAt = null;
@@ -217,25 +191,24 @@ module.exports = async function handler(req, res) {
   try {
     const user = await getAuthUser(req);
 
-    if (user && user.id) {
+    if (user?.id) {
       reason = 'free_plan';
 
-      // 3.1) Premium?
       const plan = await getPlanForUser(user.id);
       if (plan === 'premium' || plan === 'anual') {
         unlocked = true;
         reason = 'premium';
       } else {
-        // 3.2) Aluguel de FAIXA ativo?
-        // ⚠️  rentals NÃO tem coluna `scope` nem `album_id` no schema.
-        //     Só verificamos por track_id.
-        const nowIso = new Date().toISOString();
+        const now = new Date().toISOString();
 
-        const trackRental = await supabaseAdminRequest(
-          `/rest/v1/rentals?user_id=eq.${encodeURIComponent(user.id)}` +
-          `&track_id=eq.${encodeURIComponent(track.id)}` +
+        // 3.1) Aluguel de ÁLBUM ativo?
+        const albumRental = await supabaseAdminRequest(
+          `/rest/v1/rentals` +
+          `?user_id=eq.${encodeURIComponent(user.id)}` +
+          `&album_id=eq.${encodeURIComponent(albumId)}` +
+          `&scope=eq.album` +
           `&status=eq.active` +
-          `&expires_at=gt.${encodeURIComponent(nowIso)}` +
+          `&expires_at=gt.${encodeURIComponent(now)}` +
           `&select=id,expires_at` +
           `&order=expires_at.desc` +
           `&limit=1`,
@@ -243,13 +216,37 @@ module.exports = async function handler(req, res) {
         );
 
         if (
-          trackRental.response.ok &&
-          Array.isArray(trackRental.body) &&
-          trackRental.body[0]
+          albumRental.response.ok &&
+          Array.isArray(albumRental.body) &&
+          albumRental.body[0]
         ) {
           unlocked = true;
-          reason = 'track_rental_active';
-          rentalExpiresAt = trackRental.body[0].expires_at || null;
+          reason = 'album_rental_active';
+          rentalExpiresAt = albumRental.body[0].expires_at || null;
+        } else {
+          // 3.2) Aluguel de FAIXA ativo?
+          const trackRental = await supabaseAdminRequest(
+            `/rest/v1/rentals` +
+            `?user_id=eq.${encodeURIComponent(user.id)}` +
+            `&track_id=eq.${encodeURIComponent(track.id)}` +
+            `&scope=eq.track` +
+            `&status=eq.active` +
+            `&expires_at=gt.${encodeURIComponent(now)}` +
+            `&select=id,expires_at` +
+            `&order=expires_at.desc` +
+            `&limit=1`,
+            { method: 'GET' }
+          );
+
+          if (
+            trackRental.response.ok &&
+            Array.isArray(trackRental.body) &&
+            trackRental.body[0]
+          ) {
+            unlocked = true;
+            reason = 'track_rental_active';
+            rentalExpiresAt = trackRental.body[0].expires_at || null;
+          }
         }
       }
     }
@@ -259,12 +256,10 @@ module.exports = async function handler(req, res) {
 
   // ── 4) Sem acesso → só preview
   if (!unlocked) {
-    const source = previewUrl ? 'preview' : null;
-
     return respond(res, method, {
       ok: true,
       unlocked: false,
-      source,
+      source: previewUrl ? 'preview' : null,
       reason,
       previewUrl,
       previewStart,
@@ -274,23 +269,20 @@ module.exports = async function handler(req, res) {
       fullMime: null,
       expiresIn: null,
       rentalExpiresAt: null,
-
-      // Diagnóstico explícito
       warning: previewUrl
         ? null
         : (track.preview_path
-            ? 'Arquivo de prévia não encontrado no Storage.'
+            ? 'Arquivo de prévia não encontrado.'
             : 'Prévia não cadastrada.')
     });
   }
 
-  // ── 5) Com acesso → URL assinada
+  // ── 5) Autorizado, mas sem full_path
   if (!track.full_path) {
-    const source = previewUrl ? 'preview' : null;
     return respond(res, method, {
       ok: true,
       unlocked: true,
-      source,
+      source: previewUrl ? 'preview' : null,
       reason,
       previewUrl,
       previewStart,
@@ -305,20 +297,14 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  // ── 6) Autorizado, mas arquivo sumiu
   const fullExists = await objectExists(PREMIUM_BUCKET, track.full_path);
   if (!fullExists) {
-    console.error(
-      '[stream] full_path não existe no Storage:',
-      PREMIUM_BUCKET + '/' + track.full_path
-    );
-
-    // Cai para preview como fallback (usuário pagou mas arquivo sumiu)
-    const source = previewUrl ? 'preview' : null;
-
+    console.error('[stream] full_path não existe:', track.full_path);
     return respond(res, method, {
       ok: true,
       unlocked: true,
-      source,
+      source: previewUrl ? 'preview' : null,
       reason,
       previewUrl,
       previewStart,
@@ -333,14 +319,22 @@ module.exports = async function handler(req, res) {
     });
   }
 
+  // ── 7) Gera URL assinada
   const ttl = getSignedUrlTtl();
-  const signedUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, ttl);
 
-  if (!signedUrl) {
+  let fullUrl;
+  try {
+    fullUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, ttl);
+  } catch (err) {
+    console.error('[stream] erro ao criar URL assinada:', err);
+    fullUrl = null;
+  }
+
+  if (!fullUrl) {
     return sendJson(res, 502, {
       ok: false,
       error: 'Falha ao gerar URL de áudio.',
-      code: 'SIGN_FAILED'
+      code: 'SIGNED_URL_ERROR'
     });
   }
 
@@ -353,7 +347,7 @@ module.exports = async function handler(req, res) {
     previewStart,
     previewDuration,
     previewMime,
-    fullUrl: signedUrl,
+    fullUrl,
     fullMime,
     expiresIn: ttl,
     rentalExpiresAt
@@ -361,78 +355,36 @@ module.exports = async function handler(req, res) {
 };
 
 // ─────────────────────────────────────────────────────────────
-// TTL configurável com clamp
+// Helpers (iguais à versão anterior)
 // ─────────────────────────────────────────────────────────────
 function getSignedUrlTtl() {
   const raw = Number(process.env.SIGNED_URL_TTL_SEC);
-
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return DEFAULT_SIGNED_URL_TTL_SEC;
-  }
-
-  if (raw < MIN_SIGNED_URL_TTL_SEC) {
-    console.warn(
-      `[stream] SIGNED_URL_TTL_SEC=${raw} abaixo do mínimo (${MIN_SIGNED_URL_TTL_SEC}); usando ${MIN_SIGNED_URL_TTL_SEC}`
-    );
-    return MIN_SIGNED_URL_TTL_SEC;
-  }
-
-  if (raw > MAX_SIGNED_URL_TTL_SEC) {
-    console.warn(
-      `[stream] SIGNED_URL_TTL_SEC=${raw} acima do máximo (${MAX_SIGNED_URL_TTL_SEC}); usando ${MAX_SIGNED_URL_TTL_SEC}`
-    );
-    return MAX_SIGNED_URL_TTL_SEC;
-  }
-
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_SIGNED_URL_TTL_SEC;
+  if (raw < MIN_SIGNED_URL_TTL_SEC) return MIN_SIGNED_URL_TTL_SEC;
+  if (raw > MAX_SIGNED_URL_TTL_SEC) return MAX_SIGNED_URL_TTL_SEC;
   return raw;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Path encoding — PROBLEMA 2
-// ------------------------------------------------------------
-// Codifica cada segmento do path separadamente, preservando "/".
-// Isso evita quebrar nomes com espaços, acentos, #, ?, etc.
-// ─────────────────────────────────────────────────────────────
 function encodePath(path) {
   return String(path || '')
     .replace(/^\/+/, '')
     .split('/')
+    .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join('/');
 }
 
-// ─────────────────────────────────────────────────────────────
-// Public URL builder
-// ─────────────────────────────────────────────────────────────
 function buildPublicUrl(bucket, path) {
   const { url } = getConfig();
   const clean = encodePath(path);
-  return `${url}/storage/v1/object/public/${bucket}/${clean}`;
+  return `${url}/storage/v1/object/public/${encodeURIComponent(bucket)}/${clean}`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Signed URL — PROBLEMA 3
-// ------------------------------------------------------------
-// O Supabase pode devolver:
-//   a) "/object/sign/bucket/file.mp3?token=..."       (relativo)
-//   b) "/storage/v1/object/sign/bucket/file.mp3?..."  (já prefixado)
-//   c) "https://xxx.supabase.co/storage/v1/object/..." (absoluto)
-//
-// normalizeSignedUrl() cobre todos os casos sem duplicar prefixo.
-// ─────────────────────────────────────────────────────────────
 function normalizeSignedUrl(signedURL, baseUrl) {
   const raw = String(signedURL || '').trim();
   if (!raw) return null;
-
-  // (c) URL absoluta — devolve como está
   if (/^https?:\/\//i.test(raw)) return raw;
-
-  // (b) já vem com /storage/v1/
-  if (raw.startsWith('/storage/v1/')) {
-    return baseUrl + raw;
-  }
-
-  // (a) relativo: /object/sign/...
+  if (raw.startsWith('/storage/v1/')) return baseUrl + raw;
   const clean = raw.replace(/^\/+/, '');
   return `${baseUrl}/storage/v1/${clean}`;
 }
@@ -440,13 +392,17 @@ function normalizeSignedUrl(signedURL, baseUrl) {
 async function createSignedUrl(bucket, path, expiresInSec) {
   const { url } = getConfig();
   const adminKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!adminKey) return null;
+  if (!adminKey) {
+    console.error('[stream] SUPABASE_SERVICE_ROLE_KEY ausente');
+    return null;
+  }
 
   const clean = encodePath(path);
-  const endpoint = `${url}/storage/v1/object/sign/${bucket}/${clean}`;
+  const endpoint =
+    `${url}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${clean}`;
 
   try {
-    const r = await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         apikey: adminKey,
@@ -456,30 +412,22 @@ async function createSignedUrl(bucket, path, expiresInSec) {
       body: JSON.stringify({ expiresIn: expiresInSec })
     });
 
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      console.error('[stream] sign failed:', r.status, text.slice(0, 200));
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      console.error('[stream] Storage sign:', response.status, body.slice(0, 500));
       return null;
     }
 
-    const json = await r.json();
-    if (!json.signedURL) return null;
+    const data = await response.json();
+    if (!data?.signedURL) return null;
 
-    return normalizeSignedUrl(json.signedURL, url);
+    return normalizeSignedUrl(data.signedURL, url);
   } catch (err) {
-    console.error('[stream] sign error:', err.message);
+    console.error('[stream] erro de rede:', err.message);
     return null;
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// objectExists — PROBLEMA 4
-// ------------------------------------------------------------
-// HEAD no objeto do Storage. Usa cache em memória por 60s para
-// não pesar em faixas populares.
-//
-// Retorna true/false. Nunca lança.
-// ─────────────────────────────────────────────────────────────
 async function objectExists(bucket, path) {
   if (!bucket || !path) return false;
 
@@ -496,7 +444,8 @@ async function objectExists(bucket, path) {
   if (!adminKey) return false;
 
   const clean = encodePath(path);
-  const endpoint = `${url}/storage/v1/object/${bucket}/${clean}`;
+  const endpoint =
+    `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${clean}`;
 
   try {
     const r = await fetch(endpoint, {
@@ -512,23 +461,16 @@ async function objectExists(bucket, path) {
     return exists;
   } catch (err) {
     console.warn('[stream] objectExists falhou:', bucket, path, err.message);
-    // Não cacheia erro de rede (pode ser transitório)
     return false;
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// MIME por extensão — PROBLEMA 6
-// ─────────────────────────────────────────────────────────────
 function guessMime(path) {
   if (!path) return null;
   const ext = String(path).split('.').pop().toLowerCase();
   return MIME_BY_EXT[ext] || null;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Resposta genérica (trata HEAD)
-// ─────────────────────────────────────────────────────────────
 function respond(res, method, payload) {
   if (method === 'HEAD') {
     res.status(200);
