@@ -1,26 +1,18 @@
 /* ============================================================
    SITE.JS — Joseph Matthos
    ------------------------------------------------------------
-   - Conteúdo, faixas e planos vêm de /api/public (1 request)
-   - URLs de áudio vêm de /api/stream (com verificação)
-   - Usuário + aluguéis vêm de /api/auth?action=me
-   - Login/signup/logout via /api/auth?action=*
-   - Aluguel de faixa/álbum via /api/payments?type=rental → MP
-   - Assinatura via /api/payments?type=subscription → MP
-   - Preços de aluguel vêm de /api/public (rentalPlans[])
-   - Nenhum localStorage para dados de negócio
-   - Sem onclick inline; tudo via data-action + delegação
-
-   🔧 CORREÇÕES APLICADAS
+   🔧 CORREÇÕES APLICADAS NESTA VERSÃO
    ------------------------------------------------------------
-   1. previewStart é respeitado (vem de /api/stream)
-   2. waitForAudioReady() com timeout + canplay/canplaythrough
-   3. onError() detalhado por MediaError.code
-   4. Renovação automática de URL assinada (80% do TTL)
-   5. Renovação on-demand se NETWORK falhar em faixa 'full'
-   6. AbortController em playFromDiscography (evita corrida)
-   7. Log estruturado para diagnóstico
-   8. source: 'preview' | 'full' usado para decidir comportamento
+   1. `trackIndex` agora SEMPRE usa `track.trackIndex` (do banco),
+      nunca a posição no array. Corrige "Nenhuma faixa selecionada".
+   2. Deep merge de conteúdo remoto com DEFAULT_CONTENT.
+      Evita perder `planos` quando o Supabase só tem `branding`.
+   3. Planos com `available: false` mostram "Pagamento indisponível".
+   4. Aluguéis com `available: false` mostram "Indisponível".
+   5. Título da faixa aparece no player IMEDIATAMENTE (antes do fetch).
+   6. Mantidas todas as correções anteriores do player:
+      previewStart, waitForAudioReady, onError detalhado,
+      renovação automática de URL, AbortController.
    ============================================================ */
 
 import {
@@ -59,7 +51,6 @@ export const SITE = {
   shopSearch: ''
 };
 
-// Estado do player
 let audio = null;
 let currentTrackIdentity = null;
 let previewState = { active: false, start: 0, end: Infinity };
@@ -68,18 +59,15 @@ let isSeeking = false;
 let lastVolume = 0.8;
 let muted = false;
 
-// Estado da fila e shuffle
 let playerQueue = [];
 let playerQueueIndex = -1;
 let shuffleEnabled = false;
 
-// Estado do stream atual (para renovação)
-let currentStream = null;           // { albumId, trackIndex, unlocked, source, expiresIn, loadedAt }
-let renewTimer = null;              // timer de renovação preventiva
-let currentAbortController = null;  // aborta fetch anterior
-let isRenewing = false;             // evita renovação concorrente
+let currentStream = null;
+let renewTimer = null;
+let currentAbortController = null;
+let isRenewing = false;
 
-// Contexto do modal de aluguel
 let _rentContext = { albumId: null, trackIndex: null, planId: null };
 
 // ─────────────────────────────────────────────────────────────
@@ -115,6 +103,24 @@ async function boot() {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Deep merge helper
+// ─────────────────────────────────────────────────────────────
+function deepMerge(target, source) {
+  if (Array.isArray(source)) return JSON.parse(JSON.stringify(source));
+  if (!source || typeof source !== 'object') return source === undefined ? target : source;
+
+  const out = { ...target };
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      out[key] = deepMerge(target[key] || {}, source[key]);
+    } else {
+      out[key] = source[key];
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────
 // FETCH DE DADOS
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
@@ -127,12 +133,13 @@ async function loadPublicData() {
       SITE.albums = [];
       SITE.tracks = {};
       SITE.plans = {};
-      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
       return;
     }
 
+    // ── Deep merge: preserva defaults (planos, etc) se remoto incompleto
     SITE.content = json.content && typeof json.content === 'object'
-      ? json.content
+      ? deepMerge(clone(DEFAULT_CONTENT), json.content)
       : clone(DEFAULT_CONTENT);
 
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
@@ -152,19 +159,24 @@ async function loadPublicData() {
     SITE.rentalPlans = [];
     if (Array.isArray(json.rentalPlans)) {
       SITE.rentalPlans = json.rentalPlans
-        .filter((p) => p && p.id && Number.isFinite(Number(p.price)))
+        .filter((p) => p && p.id)
         .map((p) => ({
           id: String(p.id),
           label: String(p.label || p.id),
           days: Number(p.days) || 1,
-          price: Number(p.price),
-          popular: !!p.popular
+          hours: Number(p.hours) || 0,
+          price: Number(p.price) || 0,
+          popular: !!p.popular,
+          available: p.available !== false && Number(p.price) > 0
         }));
     }
 
     if (!SITE.rentalPlans.length) {
-      console.warn('[site] /api/public não retornou rentalPlans — usando fallback sem preço');
-      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
+        ...p,
+        price: 0,
+        available: false
+      }));
     }
   } catch (err) {
     console.warn('[public] falha, usando DEFAULT_CONTENT:', err?.message);
@@ -172,7 +184,11 @@ async function loadPublicData() {
     SITE.albums = [];
     SITE.tracks = {};
     SITE.plans = {};
-    SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0 }));
+    SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
+      ...p,
+      price: 0,
+      available: false
+    }));
   }
 }
 
@@ -213,11 +229,6 @@ function trackInfo(albumId, trackIndex) {
   return SITE.tracks[`${albumId}:${trackIndex}`] || null;
 }
 
-function trackPriceCents(albumId, trackIndex) {
-  const info = trackInfo(albumId, trackIndex);
-  return info && Number.isFinite(info.priceCents) ? info.priceCents : 0;
-}
-
 function isRented(albumId, trackIndex) {
   const key = `${albumId}:${trackIndex}`;
   const now = Date.now();
@@ -236,6 +247,17 @@ function isLocked(albumId, trackIndex) {
 
 function findAlbum(albumId) {
   return SITE.albums.find((a) => a.id === albumId) || null;
+}
+
+/**
+ * Busca a faixa por albumId + trackIndex REAL (do banco).
+ * Não usa posição do array.
+ */
+function findTrackByIndex(albumId, realTrackIndex) {
+  const album = findAlbum(albumId);
+  if (!album) return null;
+  const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+  return tracks.find((t) => Number(t.trackIndex) === Number(realTrackIndex)) || null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -376,7 +398,7 @@ function applyContentToSite() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLANOS (assinatura)
+// PLANOS (assinatura) — mostra "Pagamento indisponível"
 // ─────────────────────────────────────────────────────────────
 function renderPlans() {
   const grid = document.getElementById('plansGrid');
@@ -388,10 +410,14 @@ function renderPlans() {
       const priceInfo = SITE.plans[p.id] || {};
       const cents = priceInfo.priceCents || 0;
       const interval = priceInfo.interval;
+      const available = priceInfo.available !== false && (p.id === 'free' || cents > 0);
 
       const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
       const suffixText =
         interval === 'month' ? '/mês' : interval === 'year' ? '/ano' : '';
+
+      const ctaText = available ? p.cta : 'Pagamento indisponível';
+      const disabled = p.disabled || !available;
 
       return `
         <div class="plan-card ${p.featured ? 'featured' : ''}">
@@ -405,8 +431,8 @@ function renderPlans() {
               .join('')}
           </ul>
           <button class="btn ${p.featured ? 'btn-primary' : 'btn-outline'} btn-block"
-                  ${p.disabled ? 'disabled style="opacity:0.6;cursor:default;"' : `data-plan="${esc(p.id)}"`}>
-            ${esc(p.cta)}
+                  ${disabled ? 'disabled style="opacity:0.6;cursor:default;"' : `data-plan="${esc(p.id)}"`}>
+            ${esc(ctaText)}
           </button>
         </div>`;
     })
@@ -420,7 +446,7 @@ function renderPlans() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA
+// DISCOGRAFIA — usa trackIndex do banco
 // ─────────────────────────────────────────────────────────────
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
@@ -444,16 +470,14 @@ function renderDiscography() {
   const html = filtered
     .map((album) => {
       const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-      const tracks = albumTracks
-        .map((track, trackIndex) => ({ track, trackIndex }))
-        .filter(
-          ({ track }) =>
-            !q ||
-            (track.title || '').toLowerCase().includes(q) ||
-            (album.title || '').toLowerCase().includes(q)
-        );
+      const visibleTracks = albumTracks.filter(
+        (track) =>
+          !q ||
+          (track.title || '').toLowerCase().includes(q) ||
+          (album.title || '').toLowerCase().includes(q)
+      );
 
-      if (!tracks.length && q) return '';
+      if (!visibleTracks.length && q) return '';
 
       const isExpanded = q ? true : SITE.expandedAlbumId === album.id;
 
@@ -477,7 +501,7 @@ function renderDiscography() {
               <div class="album-meta">
                 <span class="gold">${esc((album.type || 'album').toUpperCase())}</span>
                 · ${album.year || '—'}
-                · ${tracks.length} faixa${tracks.length === 1 ? '' : 's'}
+                · ${visibleTracks.length} faixa${visibleTracks.length === 1 ? '' : 's'}
               </div>
               ${
                 album.description
@@ -493,11 +517,9 @@ function renderDiscography() {
           <div class="album-tracks">
             <div class="discography-scroll" data-album="${esc(album.id)}">
               ${
-                tracks.length
-                  ? tracks
-                      .map(({ track, trackIndex }) =>
-                        renderTrackCard(album, track, trackIndex)
-                      )
+                visibleTracks.length
+                  ? visibleTracks
+                      .map((track) => renderTrackCard(album, track))
                       .join('')
                   : '<p class="album-empty">Nenhuma faixa cadastrada neste álbum.</p>'
               }
@@ -517,23 +539,27 @@ function renderDiscography() {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openRentModal(btn.dataset.album, Number(btn.dataset.track));
+      openRentModal(btn.dataset.album, Number(btn.dataset.trackIndex));
     });
   });
 
   updatePlayingHighlight();
 }
 
-function renderTrackCard(album, track, trackIndex) {
-  const info = trackInfo(album.id, trackIndex);
-  const priceCents = trackPriceCents(album.id, trackIndex);
+/**
+ * Renderiza card usando track.trackIndex (do banco).
+ */
+function renderTrackCard(album, track) {
+  const realIndex = Number(track.trackIndex) || 0;
+  const info = trackInfo(album.id, realIndex);
+  const priceCents = info && Number.isFinite(info.priceCents) ? info.priceCents : 0;
   const hasPriceInfo = !!info && priceCents > 0;
   const forSale = info ? info.forSale !== false && hasPriceInfo : false;
   const premium = isPremium();
-  const rented = isRented(album.id, trackIndex);
-  const locked = isLocked(album.id, trackIndex);
+  const rented = isRented(album.id, realIndex);
+  const locked = isLocked(album.id, realIndex);
 
-  const identity = `${album.id}:${trackIndex}`;
+  const identity = `${album.id}:${realIndex}`;
   const isPlaying =
     currentTrackIdentity && currentTrackIdentity.identity === identity;
 
@@ -558,16 +584,16 @@ function renderTrackCard(album, track, trackIndex) {
               type="button"
               data-action="open-rent"
               data-album="${esc(album.id)}"
-              data-track="${trackIndex}"
+              data-track-index="${realIndex}"
               title="Alugar">🎫</button>`;
 
   return `
     <div class="discography-track-card ${isPlaying ? 'playing' : ''}"
          data-album="${esc(album.id)}"
-         data-track-index="${trackIndex}"
+         data-track-index="${realIndex}"
          data-identity="${esc(identity)}"
          data-action="open-player">
-      <span class="track-index">${isPlaying ? '▶' : trackIndex + 1}</span>
+      <span class="track-index">${isPlaying ? '▶' : realIndex + 1}</span>
       <span class="track-cover" ${coverStyle}>${coverText}</span>
       <span class="track-info">
         <span class="track-title">${esc(track.title)}</span>
@@ -620,18 +646,14 @@ function resolvePlaylistTracks(playlist) {
   const index = new Map();
   for (const album of SITE.albums || []) {
     const tracks = Array.isArray(album.tracks) ? album.tracks : [];
-    tracks.forEach((track, trackIndex) => {
+    tracks.forEach((track) => {
       if (track && track.id !== undefined && track.id !== null) {
-        index.set(Number(track.id), { album, track, trackIndex });
+        index.set(Number(track.id), {
+          album,
+          track,
+          trackIndex: Number(track.trackIndex) || 0
+        });
       }
-    });
-  }
-
-  const legacyIndex = new Map();
-  for (const album of SITE.albums || []) {
-    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
-    tracks.forEach((track, trackIndex) => {
-      legacyIndex.set(`${album.id}:${trackIndex}`, { album, track, trackIndex });
     });
   }
 
@@ -642,27 +664,24 @@ function resolvePlaylistTracks(playlist) {
       if (entry) out.push(entry);
       continue;
     }
-
     if (typeof ref === 'string') {
       const trimmed = ref.trim();
       const asNum = Number(trimmed);
       if (Number.isFinite(asNum) && String(asNum) === trimmed) {
         const entry = index.get(asNum);
-        if (entry) { out.push(entry); continue; }
+        if (entry) out.push(entry);
       }
-      const legacy = legacyIndex.get(trimmed);
-      if (legacy) out.push(legacy);
     }
   }
   return out;
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ALUGUEL
+// MODAL DE ALUGUEL — planos com "Indisponível"
 // ─────────────────────────────────────────────────────────────
 function openRentModal(albumId, trackIndex) {
   const album = findAlbum(albumId);
-  const track = album && Array.isArray(album.tracks) ? album.tracks[trackIndex] : null;
+  const track = findTrackByIndex(albumId, trackIndex);
   if (!album || !track) {
     toast('Faixa indisponível para aluguel.', '⚠');
     return;
@@ -678,10 +697,13 @@ function openRentModal(albumId, trackIndex) {
   }
 
   const plans = SITE.rentalPlans;
+  const firstAvailable = plans.find((p) => p.available && p.popular)
+    || plans.find((p) => p.available);
+
   _rentContext = {
     albumId,
     trackIndex,
-    planId: plans.find((p) => p.popular)?.id || plans[0]?.id || null
+    planId: firstAvailable?.id || null
   };
 
   const cover = document.getElementById('rentTrackCover');
@@ -705,12 +727,12 @@ function openRentModal(albumId, trackIndex) {
 
   const optionsEl = document.getElementById('rentOptions');
   if (optionsEl) {
-    const hasPrices = plans.some((p) => p.price > 0);
+    const hasAnyAvailable = plans.some((p) => p.available);
 
-    if (!hasPrices) {
+    if (!hasAnyAvailable) {
       optionsEl.innerHTML = `
         <p class="hint" style="color:var(--warning,#f0a100);text-align:center;padding:1rem;">
-          Preços indisponíveis no momento. Tente novamente em instantes.
+          Aluguel temporariamente indisponível. Tente novamente em instantes.
         </p>`;
       const errEl2 = document.getElementById('rentError');
       if (errEl2) errEl2.textContent = '';
@@ -718,19 +740,31 @@ function openRentModal(albumId, trackIndex) {
       return;
     }
 
-    optionsEl.innerHTML = plans.map((p) => `
-      <label class="rent-option ${p.id === _rentContext.planId ? 'selected' : ''}" data-plan="${esc(p.id)}">
-        <input type="radio" name="rent-plan" value="${esc(p.id)}" ${p.id === _rentContext.planId ? 'checked' : ''}>
-        <span>
-          <span class="rent-option-label">${esc(p.label)}</span>
-          <span class="rent-option-sub">Acesso por ${p.days} dia${p.days > 1 ? 's' : ''}</span>
-        </span>
-        <span class="rent-option-price">${esc(formatPrice(p.price))}</span>
-        ${p.popular ? '<span class="popular-tag">Mais popular</span>' : ''}
-      </label>
-    `).join('');
+    optionsEl.innerHTML = plans.map((p) => {
+      const disabled = !p.available;
+      const selected = p.id === _rentContext.planId;
+      const priceText = p.available
+        ? esc(formatPrice(p.price))
+        : '<span style="color:var(--text-dim);font-size:0.85rem;">Indisponível</span>';
 
-    optionsEl.querySelectorAll('input[name="rent-plan"]').forEach((radio) => {
+      return `
+        <label class="rent-option ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}"
+               data-plan="${esc(p.id)}"
+               ${disabled ? 'style="opacity:0.55;cursor:not-allowed;"' : ''}>
+          <input type="radio" name="rent-plan" value="${esc(p.id)}"
+                 ${selected ? 'checked' : ''}
+                 ${disabled ? 'disabled' : ''}>
+          <span>
+            <span class="rent-option-label">${esc(p.label)}</span>
+            <span class="rent-option-sub">Acesso por ${p.days} dia${p.days > 1 ? 's' : ''}</span>
+          </span>
+          <span class="rent-option-price">${priceText}</span>
+          ${p.popular && p.available ? '<span class="popular-tag">Mais popular</span>' : ''}
+        </label>
+      `;
+    }).join('');
+
+    optionsEl.querySelectorAll('input[name="rent-plan"]:not(:disabled)').forEach((radio) => {
       radio.addEventListener('change', () => {
         _rentContext.planId = radio.value;
         optionsEl.querySelectorAll('.rent-option').forEach((opt) => {
@@ -761,8 +795,8 @@ async function confirmRent() {
   }
 
   const selected = SITE.rentalPlans.find((p) => p.id === _rentContext.planId);
-  if (!selected || selected.price <= 0) {
-    if (errEl) errEl.textContent = 'Preço indisponível. Reabra o modal.';
+  if (!selected || !selected.available) {
+    if (errEl) errEl.textContent = 'Período indisponível. Escolha outro.';
     return;
   }
 
@@ -801,6 +835,12 @@ async function subscribe(planId) {
   }
   if (SITE.user.plan === planId) {
     toast('Você já tem este plano.', 'ℹ');
+    return;
+  }
+
+  const planInfo = SITE.plans[planId];
+  if (planInfo && planInfo.available === false) {
+    toast('Pagamento indisponível para este plano.', '⚠');
     return;
   }
 
@@ -851,7 +891,7 @@ function bindGlobalEvents() {
       case 'open-rent': {
         e.preventDefault();
         e.stopPropagation();
-        openRentModal(actionEl.dataset.album, Number(actionEl.dataset.track));
+        openRentModal(actionEl.dataset.album, Number(actionEl.dataset.trackIndex));
         break;
       }
       case 'open-plans': {
@@ -1350,10 +1390,6 @@ function getAudioErrorMessage(audioElement) {
   }
 }
 
-/**
- * Espera o áudio estar pronto para tocar.
- * Resolve em canplay/canplaythrough, rejeita em error/timeout.
- */
 function waitForAudioReady(audioElement, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     if (!audioElement) {
@@ -1412,10 +1448,6 @@ function clearRenewTimer() {
   }
 }
 
-/**
- * Agenda renovação preventiva em 80% do TTL.
- * Só se aplica a faixas premium (source === 'full').
- */
 function scheduleRenewal() {
   clearRenewTimer();
 
@@ -1431,10 +1463,6 @@ function scheduleRenewal() {
   }, renewAfterMs);
 }
 
-/**
- * Renova a URL assinada sem interromper a reprodução.
- * Preserva currentTime e estado play/pause.
- */
 async function renewSignedUrl() {
   if (isRenewing) return;
   if (!currentStream || currentStream.source !== 'full') return;
@@ -1465,7 +1493,6 @@ async function renewSignedUrl() {
     audio.volume = savedVolume;
     audio.load();
 
-    // Restaura posição após metadata
     const restore = () => {
       try {
         if (Number.isFinite(audio.duration) && savedTime < audio.duration) {
@@ -1484,7 +1511,6 @@ async function renewSignedUrl() {
     console.log('[player] URL renovada');
   } catch (err) {
     console.warn('[player] renovação falhou:', err?.message);
-    // Não derruba o usuário — próxima interação tenta de novo
   } finally {
     isRenewing = false;
   }
@@ -1498,7 +1524,9 @@ function buildQueueForAlbum(albumId, startIndex) {
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
 
-  let indices = albumTracks.map((_, i) => i);
+  const realIndexes = albumTracks.map((t) => Number(t.trackIndex) || 0);
+
+  let indices = realIndexes.slice();
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
     const clickedPos = indices.indexOf(startIndex);
@@ -1556,7 +1584,7 @@ function renderQueue() {
     .map((item, idx) => {
       const album = findAlbum(item.albumId);
       if (!album) return '';
-      const track = (album.tracks || [])[item.trackIndex];
+      const track = findTrackByIndex(item.albumId, item.trackIndex);
       if (!track) return '';
 
       const isCurrent = idx === playerQueueIndex;
@@ -1587,20 +1615,25 @@ function renderQueue() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLAYER — playFromDiscography (CORRIGIDO)
+// PLAYER — playFromDiscography (busca por trackIndex REAL)
 // ─────────────────────────────────────────────────────────────
 async function playFromDiscography(albumId, trackIndex, opts = {}) {
   const album = findAlbum(albumId);
   if (!album) return;
-  const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-  const track = albumTracks[trackIndex];
-  if (!track) return;
 
-  if (!opts.fromQueue) {
-    buildQueueForAlbum(albumId, trackIndex);
+  const track = findTrackByIndex(albumId, trackIndex);
+  if (!track) {
+    console.warn('[player] faixa não encontrada:', albumId, trackIndex);
+    return;
   }
 
-  // Aborta requisição anterior (evita corrida)
+  const realIndex = Number(track.trackIndex) || 0;
+
+  if (!opts.fromQueue) {
+    buildQueueForAlbum(albumId, realIndex);
+  }
+
+  // Aborta fetch anterior
   if (currentAbortController) {
     currentAbortController.abort();
   }
@@ -1609,10 +1642,27 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   clearRenewTimer();
   isRenewing = false;
 
+  // ── Atualiza UI IMEDIATAMENTE (antes do fetch)
+  currentTrackIdentity = {
+    albumId,
+    trackIndex: realIndex,
+    trackTitle: track.title,
+    identity: `${albumId}:${realIndex}`
+  };
+
+  const titleEl = document.getElementById('nowTitle');
+  if (titleEl) titleEl.textContent = track.title;
+  const artistEl = document.getElementById('nowArtist');
+  if (artistEl) {
+    artistEl.textContent = `Joseph Matthos · ${album.title}`;
+  }
+  syncExpandedPlayer(track, album, false);
+  updatePlayingHighlight();
+
   let streamData;
   try {
     const r = await fetch(
-      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(trackIndex)}`,
+      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(realIndex)}`,
       {
         credentials: 'same-origin',
         cache: 'no-store',
@@ -1653,14 +1703,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     return;
   }
 
-  currentTrackIdentity = {
-    albumId,
-    trackIndex,
-    trackTitle: track.title,
-    identity: `${albumId}:${trackIndex}`
-  };
-
-  // ── Configura estado de preview (respeitando previewStart)
   if (source === 'full') {
     previewState = { active: false, start: 0, end: Infinity };
   } else {
@@ -1671,10 +1713,9 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
 
   previewNoticeTrackKey = '';
 
-  // ── Guarda estado do stream (para renovação)
   currentStream = {
     albumId,
-    trackIndex,
+    trackIndex: realIndex,
     unlocked,
     source,
     url: src,
@@ -1682,14 +1723,12 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     loadedAt: Date.now()
   };
 
-  // ── Troca de faixa com segurança
   audio.pause();
   audio.removeAttribute('src');
   audio.preload = 'auto';
   audio.load();
   audio.src = src;
 
-  // ── Posição inicial da prévia (após metadata)
   if (source === 'preview' && previewState.start > 0) {
     const setPreviewStart = () => {
       try {
@@ -1705,12 +1744,9 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
 
   audio.load();
 
-  // ── UI
-  const titleEl = document.getElementById('nowTitle');
-  if (titleEl) titleEl.textContent = track.title;
-  const artistEl = document.getElementById('nowArtist');
-  if (artistEl) {
-    artistEl.textContent =
+  const artistEl2 = document.getElementById('nowArtist');
+  if (artistEl2) {
+    artistEl2.textContent =
       `Joseph Matthos · ${album.title}` +
       (source === 'preview' ? ' (prévia)' : '');
   }
@@ -1732,16 +1768,14 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
 
   renderLyrics(track);
   syncExpandedPlayer(track, album, unlocked);
-  renderExpandedPlayerActions(albumId, trackIndex);
+  renderExpandedPlayerActions(albumId, realIndex);
   renderQueue();
   updatePlayingHighlight();
 
-  // ── Aguarda áudio pronto e toca
   try {
     await waitForAudioReady(audio);
     await audio.play();
 
-    // Agenda renovação se for URL assinada
     if (source === 'full') scheduleRenewal();
   } catch (err) {
     console.error('[player] falha na reprodução:', err);
@@ -1752,7 +1786,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     } else if (code === MediaError.MEDIA_ERR_NETWORK) {
       toast('Não foi possível acessar o arquivo de áudio.', '⚠');
     } else {
-      // Provavelmente autoplay bloqueado — não é erro do usuário
       console.debug('[player] reprodução não iniciada:', err?.message);
     }
   }
@@ -1980,15 +2013,10 @@ function onPause() {
   if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
 }
 
-/**
- * onError — detalhado por MediaError.code
- * Também tenta renovar URL assinada se aplicável.
- */
 async function onError(e) {
   if (!audio || !audio.error) return;
 
   const code = audio.error.code;
-
   if (code === MediaError.MEDIA_ERR_ABORTED) return;
 
   const message = getAudioErrorMessage(audio);
@@ -2001,7 +2029,6 @@ async function onError(e) {
     stream: currentStream
   });
 
-  // Tentativa de renovação automática em faixa premium
   if (
     currentStream &&
     currentStream.source === 'full' &&
@@ -2011,7 +2038,7 @@ async function onError(e) {
     console.warn('[player] tentando renovar URL assinada...');
     try {
       await renewSignedUrl();
-      return; // renovação cuidou do resto
+      return;
     } catch (err) {
       console.warn('[player] renovação falhou:', err?.message);
     }
@@ -2084,8 +2111,7 @@ function renderExpandedPlayerActions(albumId, trackIndex) {
   if (!wrap) return;
 
   const album = findAlbum(albumId);
-  const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
-  const track = albumTracks[trackIndex];
+  const track = findTrackByIndex(albumId, trackIndex);
   if (!track) { wrap.innerHTML = ''; return; }
 
   if (isPremium()) {
