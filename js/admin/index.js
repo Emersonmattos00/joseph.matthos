@@ -7,16 +7,16 @@
    - Binds resilientes (try/catch por editor)
    - Nav tabs com bind único (MutationObserver só no <nav>)
    - Uploads de imagem (bg, vinil, sobre) via Base64
-   - Uploads de áudio agora vivem em editors/albums.js
-     (com PATCH automático em tracks.preview_path / full_path)
+   - Uploads de áudio vivem em editors/albums.js
+     (presigned URL + PATCH automático em tracks.*_path)
 
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
    1. Removidos binds órfãos de previewUpload / fullUpload
-      (o editor de álbuns cuida disso com PATCH automático)
-   2. Comentários atualizados para refletir o fluxo real
-   3. `bindUpload` de imagem mantido — imagens continuam Base64
-   4. Resiliente a falhas (safeRender, safeCall)
+   2. Adicionado handler para a tab 'discografia'
+   3. Comentários atualizados para refletir o fluxo real
+   4. bindUpload de imagem mantido (imagens continuam Base64)
+   5. Resiliente a falhas (safeRender, safeCall)
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
