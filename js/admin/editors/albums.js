@@ -1,21 +1,9 @@
 /* ============================================================
-   js/admin/editors/albums.js — Editor de álbuns e faixas
+   js/admin/editors/albums.js — v4 (listeners diretos)
    ------------------------------------------------------------
-   - CRUD completo via /api/admin?action=albums|album|tracks|track
-   - Upload integrado de preview e áudio full
-   - Delegação de eventos no document (imune a re-render)
-   - Letra aceita texto puro OU JSON (converte automaticamente)
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Event delegation no document
-   2. ⚡ ORDEM DOS HANDLERS: específicos primeiro, toggle último
-      (corrige botões ✎ e 🗑 dos álbuns que eram engolidos pelo
-      data-album-toggle do .album-header)
-   3. data-action explícito em CADA botão
-   4. Guard contra binds duplicados
-   5. parseLyricsInput() — aceita texto puro ou JSON
-   6. Guards nos addEventListener (não crasha se modal vazio)
+   Mudança de abordagem: em vez de delegação no document com
+   `closest()`, cada botão recebe seu próprio listener no
+   momento em que é renderizado. Sem ambiguidade.
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -33,11 +21,10 @@ const State = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// parseLyricsInput — aceita JSON ou texto puro
+// parseLyricsInput
 // ─────────────────────────────────────────────────────────────
 function parseLyricsInput(raw) {
   if (!raw || typeof raw !== 'string') return [];
-
   const trimmed = raw.trim();
   if (!trimmed) return [];
 
@@ -59,152 +46,9 @@ function parseLyricsInput(raw) {
     }
   }
 
-  const lines = trimmed
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-
+  const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
   if (!lines.length) return [];
-
-  const SECONDS_PER_LINE = 4;
-
-  return lines.map((text, i) => ({
-    time: i * SECONDS_PER_LINE,
-    text
-  }));
-}
-
-// ─────────────────────────────────────────────────────────────
-// Delegação global — UMA VEZ SÓ
-// ─────────────────────────────────────────────────────────────
-let _delegationBound = false;
-
-function bindDelegation() {
-  if (_delegationBound) return;
-  _delegationBound = true;
-
-  document.addEventListener('click', async (e) => {
-    // Só processa cliques DENTRO do editor de álbuns
-    const editor = e.target.closest('#albumsEditor');
-    if (!editor) return;
-
-    // ⚡ ORDEM IMPORTA: botões específicos PRIMEIRO, toggle POR ÚLTIMO.
-    // Motivo: o `.album-header` tem `data-album-toggle` e envolve TODOS
-    // os botões. Se o toggle fosse checado primeiro, ele "engoliria"
-    // os cliques de ✎ (editar) e 🗑 (excluir).
-
-    // ── 1. Editar álbum (específico)
-    const editAlbum = e.target.closest('[data-album-edit]');
-    if (editAlbum) {
-      e.preventDefault();
-      e.stopPropagation();
-      const albumId = editAlbum.dataset.albumEdit;
-      const album = State.albums.find((a) => a.id === albumId);
-      if (album) openAlbumModal(album);
-      return;
-    }
-
-    // ── 2. Excluir álbum (específico)
-    const delAlbum = e.target.closest('[data-album-delete]');
-    if (delAlbum) {
-      e.preventDefault();
-      e.stopPropagation();
-      const albumId = delAlbum.dataset.albumDelete;
-      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
-      try {
-        await apiFetch('album', {
-          method: 'DELETE',
-          query: { id: albumId, force: 'true' }
-        });
-        State.expandedAlbumIds.delete(albumId);
-        State.tracks.delete(albumId);
-        toast('Álbum excluído.', '🗑');
-        await loadAlbums();
-      } catch (err) {
-        console.error('[albums] delete album:', err);
-        toast(err?.message || 'Falha ao excluir álbum.', '⚠');
-      }
-      return;
-    }
-
-    // ── 3. Editar faixa (específico)
-    const editTrack = e.target.closest('[data-track-edit]');
-    if (editTrack) {
-      e.preventDefault();
-      e.stopPropagation();
-      const trackId = Number(editTrack.dataset.trackEdit);
-      const albumId = editTrack.dataset.trackAlbum;
-      if (!albumId) return;
-      const list = State.tracks.get(albumId) || [];
-      const track = list.find((t) => Number(t.id) === trackId);
-      if (track) openTrackModal(albumId, track);
-      else toast('Faixa não encontrada.', '⚠');
-      return;
-    }
-
-    // ── 4. Excluir faixa (específico)
-    const delTrack = e.target.closest('[data-track-delete]');
-    if (delTrack) {
-      e.preventDefault();
-      e.stopPropagation();
-      const trackId = Number(delTrack.dataset.trackDelete);
-      const albumId = delTrack.dataset.trackAlbum;
-      if (!albumId) return;
-      if (!confirm('Excluir esta faixa?')) return;
-      try {
-        await apiFetch('track', { method: 'DELETE', query: { id: trackId } });
-        toast('Faixa excluída.', '🗑');
-        await loadTracksForAlbum(albumId);
-        repaint();
-      } catch (err) {
-        console.error('[albums] delete track:', err);
-        toast(err?.message || 'Falha ao excluir faixa.', '⚠');
-      }
-      return;
-    }
-
-    // ── 5. Nova faixa (específico)
-    const newTrack = e.target.closest('[data-track-new]');
-    if (newTrack) {
-      e.preventDefault();
-      e.stopPropagation();
-      openTrackModal(newTrack.dataset.trackNew, null);
-      return;
-    }
-
-    // ── 6. Atualizar (específico)
-    const refresh = e.target.closest('[data-albums-refresh]');
-    if (refresh) {
-      e.preventDefault();
-      await loadAlbums();
-      return;
-    }
-
-    // ── 7. Novo álbum (específico)
-    const newAlbum = e.target.closest('[data-albums-new]');
-    if (newAlbum) {
-      e.preventDefault();
-      openAlbumModal(null);
-      return;
-    }
-
-    // ── 8. Toggle álbum (POR ÚLTIMO — genérico)
-    const toggle = e.target.closest('[data-album-toggle]');
-    if (toggle) {
-      e.preventDefault();
-      const albumId = toggle.dataset.albumToggle;
-      if (State.expandedAlbumIds.has(albumId)) {
-        State.expandedAlbumIds.delete(albumId);
-      } else {
-        State.expandedAlbumIds.add(albumId);
-        if (!State.tracks.has(albumId)) {
-          await loadTracksForAlbum(albumId);
-        }
-      }
-      repaint();
-      return;
-    }
-  });
+  return lines.map((text, i) => ({ time: i * 4, text }));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -212,12 +56,7 @@ function bindDelegation() {
 // ─────────────────────────────────────────────────────────────
 export function renderAlbumsEditor(_content) {
   const container = document.getElementById('albumsEditor');
-  if (!container) {
-    console.warn('[albums] #albumsEditor não encontrado');
-    return;
-  }
-
-  bindDelegation();
+  if (!container) return;
 
   if (container.dataset.mounted === '1') {
     const body = container.querySelector('[data-albums-body]');
@@ -230,9 +69,6 @@ export function renderAlbumsEditor(_content) {
   loadAlbums();
 }
 
-// ─────────────────────────────────────────────────────────────
-// Shell
-// ─────────────────────────────────────────────────────────────
 function paintShell(container) {
   container.innerHTML = `
     <div class="albums-editor__header">
@@ -255,6 +91,10 @@ function paintShell(container) {
       <div class="admin-loading">Carregando álbuns…</div>
     </div>
   `;
+
+  // Listeners do header (uma vez só)
+  container.querySelector('[data-albums-refresh]')?.addEventListener('click', () => loadAlbums());
+  container.querySelector('[data-albums-new]')?.addEventListener('click', () => openAlbumModal(null));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -290,7 +130,7 @@ async function loadTracksForAlbum(albumId) {
     const res = await apiFetch('tracks', { method: 'GET', query: { albumId } });
     State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
   } catch (err) {
-    console.warn(`[albums] falha ao carregar faixas de ${albumId}:`, err);
+    console.warn(`[albums] falha faixas ${albumId}:`, err);
     State.tracks.set(albumId, []);
   }
 }
@@ -317,6 +157,7 @@ function paintBody(body) {
           Tentar novamente
         </button>
       </div>`;
+    body.querySelector('[data-albums-refresh]')?.addEventListener('click', () => loadAlbums());
     return;
   }
 
@@ -330,12 +171,136 @@ function paintBody(body) {
           + Criar primeiro álbum
         </button>
       </div>`;
+    body.querySelector('[data-albums-new]')?.addEventListener('click', () => openAlbumModal(null));
     return;
   }
 
   body.innerHTML = State.albums.map((a) => renderAlbumBlock(a)).join('');
+
+  // ⚡ Bind DIRETO em cada botão (sem delegação, sem closest, sem conflito)
+  bindAlbumButtons(body);
+  bindTrackButtons(body);
 }
 
+// ─────────────────────────────────────────────────────────────
+// Bind direto dos botões de álbum
+// ─────────────────────────────────────────────────────────────
+function bindAlbumButtons(scope) {
+  // Toggle
+  scope.querySelectorAll('[data-album-toggle]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = btn.dataset.albumToggle;
+      console.log('[albums] toggle', albumId);
+
+      if (State.expandedAlbumIds.has(albumId)) {
+        State.expandedAlbumIds.delete(albumId);
+      } else {
+        State.expandedAlbumIds.add(albumId);
+        if (!State.tracks.has(albumId)) {
+          await loadTracksForAlbum(albumId);
+        }
+      }
+      repaint();
+    });
+  });
+
+  // Editar
+  scope.querySelectorAll('[data-album-edit]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = btn.dataset.albumEdit;
+      console.log('[albums] editar', albumId);
+
+      const album = State.albums.find((a) => a.id === albumId);
+      if (album) openAlbumModal(album);
+      else toast('Álbum não encontrado.', '⚠');
+    });
+  });
+
+  // Excluir
+  scope.querySelectorAll('[data-album-delete]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const albumId = btn.dataset.albumDelete;
+      console.log('[albums] excluir', albumId);
+
+      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
+
+      try {
+        await apiFetch('album', {
+          method: 'DELETE',
+          query: { id: albumId, force: 'true' }
+        });
+        State.expandedAlbumIds.delete(albumId);
+        State.tracks.delete(albumId);
+        toast('Álbum excluído.', '🗑');
+        await loadAlbums();
+      } catch (err) {
+        console.error('[albums] delete:', err);
+        toast(err?.message || 'Falha ao excluir álbum.', '⚠');
+      }
+    });
+  });
+
+  // Nova faixa
+  scope.querySelectorAll('[data-track-new]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTrackModal(btn.dataset.trackNew, null);
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bind direto dos botões de faixa
+// ─────────────────────────────────────────────────────────────
+function bindTrackButtons(scope) {
+  scope.querySelectorAll('[data-track-edit]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const trackId = Number(btn.dataset.trackEdit);
+      const albumId = btn.dataset.trackAlbum;
+      console.log('[albums] editar faixa', trackId, albumId);
+
+      const list = State.tracks.get(albumId) || [];
+      const track = list.find((t) => Number(t.id) === trackId);
+      if (track) openTrackModal(albumId, track);
+      else toast('Faixa não encontrada.', '⚠');
+    });
+  });
+
+  scope.querySelectorAll('[data-track-delete]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const trackId = Number(btn.dataset.trackDelete);
+      const albumId = btn.dataset.trackAlbum;
+      console.log('[albums] excluir faixa', trackId, albumId);
+
+      if (!confirm('Excluir esta faixa?')) return;
+
+      try {
+        await apiFetch('track', { method: 'DELETE', query: { id: trackId } });
+        toast('Faixa excluída.', '🗑');
+        await loadTracksForAlbum(albumId);
+        repaint();
+      } catch (err) {
+        console.error('[albums] delete track:', err);
+        toast(err?.message || 'Falha ao excluir faixa.', '⚠');
+      }
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Render — álbum
+// ─────────────────────────────────────────────────────────────
 function renderAlbumBlock(album) {
   const isExpanded = State.expandedAlbumIds.has(album.id);
   const tracks = State.tracks.get(album.id) || [];
@@ -344,7 +309,7 @@ function renderAlbumBlock(album) {
 
   return `
     <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(album.id)}">
-      <div class="album-header" data-album-toggle="${escAttr(album.id)}" style="cursor:pointer;">
+      <div class="album-header">
         <div class="album-cover" ${
           album.cover_image
             ? `style="background-image:url('${escAttr(album.cover_image)}')"`
@@ -558,10 +523,7 @@ function openAlbumModal(album) {
   `);
 
   const saveBtn = document.getElementById('albumSave');
-  if (!saveBtn) {
-    console.error('[albums] #albumSave não encontrado após openAdminModal');
-    return;
-  }
+  if (!saveBtn) return;
 
   saveBtn.addEventListener('click', async () => {
     const errEl = document.getElementById('albumError');
@@ -737,18 +699,13 @@ function openTrackModal(albumId, track) {
   });
 
   const saveBtn = document.getElementById('trackSave');
-  if (!saveBtn) {
-    console.error('[albums] #trackSave não encontrado após openAdminModal');
-    return;
-  }
+  if (!saveBtn) return;
 
   saveBtn.addEventListener('click', async () => {
     const errEl = document.getElementById('trackError');
     if (errEl) errEl.textContent = '';
 
-    const lyrics = parseLyricsInput(
-      document.getElementById('trackLyrics').value
-    );
+    const lyrics = parseLyricsInput(document.getElementById('trackLyrics').value);
 
     if (lyrics === null) {
       if (errEl) errEl.textContent = 'Letra inválida. Use texto puro ou JSON válido.';
@@ -797,7 +754,7 @@ function openTrackModal(albumId, track) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload de áudio associado a uma faixa
+// Upload
 // ─────────────────────────────────────────────────────────────
 function bindTrackUpload({
   buttonSel, inputId, statusSel, kind, uploadFn, field, albumId, track
@@ -843,10 +800,7 @@ function bindTrackUpload({
 
       if (statusEl) statusEl.innerHTML = `<span class="audio-chip">✓ ${esc(result.path)}</span>`;
 
-      toast(
-        kind === 'audio-full' ? 'Áudio completo associado.' : 'Prévia associada.',
-        '✓'
-      );
+      toast(kind === 'audio-full' ? 'Áudio completo associado.' : 'Prévia associada.', '✓');
 
       loadTracksForAlbum(albumId).then(() => repaint());
     } catch (err) {
