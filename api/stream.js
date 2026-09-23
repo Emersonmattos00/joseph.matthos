@@ -8,8 +8,7 @@
      1. Busca a faixa no banco
      2. Verifica permissão:
         a) premium / anual                → libera
-        b) aluguel de ÁLBUM ativo         → libera
-        c) aluguel de FAIXA ativo         → libera
+        b) aluguel de faixa ativo         → libera
      3. SEM acesso → retorna previewUrl (público) + previewStart
      4. COM acesso → retorna fullUrl ASSINADA (expira em TTL configurável)
 
@@ -22,18 +21,20 @@
    - URLs assinadas NUNCA vão para CDN/browser cache
    - TTL configurável via env, com clamp entre 60s e 3600s
 
-   🔧 RECURSOS
+   🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
-   1. preview_start / preview_duration no SELECT e na resposta
-   2. Suporte a aluguel de ÁLBUM (scope='album') e FAIXA (scope='track')
-   3. TTL padrão 1800s (30 min)
-   4. Modo `?debug=1` — estado completo sem URLs
-   5. Erros estruturados (code + message)
-   6. encodePath() — path codificado por segmento
-   7. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
-   8. objectExists() — HEAD no Storage antes de gerar signed URL
-   9. source: 'preview' | 'full' | null
-  10. mimeType inferido pela extensão
+   1. Inclui `preview_start` no SELECT e na resposta (previewStart)
+   2. Remove `scope=eq.track` (coluna inexistente no schema)
+   3. Remove verificação de aluguel de álbum (não suportado no schema)
+   4. TTL padrão elevado para 1800s (30 min) — cobre músicas longas
+   5. Modo `?debug=1` devolve estado completo da faixa (sem URLs)
+   6. Respostas de erro estruturadas (code + message)
+   7. encodePath() — path codificado por segmento (espaços/acentos)
+   8. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
+   9. objectExists() — HEAD no Storage antes de gerar signed URL
+  10. source: 'preview' | 'full' | null — frontend sabe o que toca
+  11. mimeType inferido pela extensão do arquivo
+  12. Fallback: se full sumiu, cai para preview com warning
    ============================================================ */
 
 'use strict';
@@ -47,16 +48,23 @@ const {
   getConfig
 } = require('./_lib');
 
-const DEFAULT_SIGNED_URL_TTL_SEC = 1800;
-const MIN_SIGNED_URL_TTL_SEC = 60;
-const MAX_SIGNED_URL_TTL_SEC = 3600;
+// ─────────────────────────────────────────────────────────────
+// TTL da URL assinada
+// ─────────────────────────────────────────────────────────────
+const DEFAULT_SIGNED_URL_TTL_SEC = 1800;   // 30 min
+const MIN_SIGNED_URL_TTL_SEC = 60;         // 1 min
+const MAX_SIGNED_URL_TTL_SEC = 3600;       // 1 hora
 
 const PREMIUM_BUCKET = 'audio-premium';
 const PREVIEW_BUCKET = 'audio-preview';
 
+// Cache em memória: path → { exists, checkedAt }
 const EXISTS_CACHE_TTL_MS = 60_000;
 const _existsCache = new Map();
 
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão (diagnóstico)
+// ─────────────────────────────────────────────────────────────
 const MIME_BY_EXT = {
   mp3: 'audio/mpeg',
   m4a: 'audio/mp4',
@@ -73,6 +81,7 @@ const MIME_BY_EXT = {
 };
 
 module.exports = async function handler(req, res) {
+  // ── Headers (sempre antes de tudo)
   res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
   res.setHeader('Vary', 'Cookie, Authorization');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -142,7 +151,7 @@ module.exports = async function handler(req, res) {
   const previewMime = guessMime(track.preview_path);
   const fullMime = guessMime(track.full_path);
 
-  // ── Debug
+  // ── Debug: estado completo sem URLs
   if (debug) {
     const [previewExists, fullExists] = await Promise.all([
       track.preview_path ? objectExists(PREVIEW_BUCKET, track.preview_path) : false,
@@ -172,7 +181,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ── 2) Preview
+  // ── 2) Preview: só expõe URL se o arquivo existir
   let previewUrl = null;
   if (track.preview_path) {
     const ok = await objectExists(PREVIEW_BUCKET, track.preview_path);
@@ -199,14 +208,14 @@ module.exports = async function handler(req, res) {
         unlocked = true;
         reason = 'premium';
       } else {
+        // ⚠️  rentals NÃO tem `scope` nem `album_id`.
+        //     Só verificamos por track_id.
         const now = new Date().toISOString();
 
-        // 3.1) Aluguel de ÁLBUM ativo?
-        const albumRental = await supabaseAdminRequest(
+        const trackRental = await supabaseAdminRequest(
           `/rest/v1/rentals` +
           `?user_id=eq.${encodeURIComponent(user.id)}` +
-          `&album_id=eq.${encodeURIComponent(albumId)}` +
-          `&scope=eq.album` +
+          `&track_id=eq.${encodeURIComponent(track.id)}` +
           `&status=eq.active` +
           `&expires_at=gt.${encodeURIComponent(now)}` +
           `&select=id,expires_at` +
@@ -216,37 +225,13 @@ module.exports = async function handler(req, res) {
         );
 
         if (
-          albumRental.response.ok &&
-          Array.isArray(albumRental.body) &&
-          albumRental.body[0]
+          trackRental.response.ok &&
+          Array.isArray(trackRental.body) &&
+          trackRental.body[0]
         ) {
           unlocked = true;
-          reason = 'album_rental_active';
-          rentalExpiresAt = albumRental.body[0].expires_at || null;
-        } else {
-          // 3.2) Aluguel de FAIXA ativo?
-          const trackRental = await supabaseAdminRequest(
-            `/rest/v1/rentals` +
-            `?user_id=eq.${encodeURIComponent(user.id)}` +
-            `&track_id=eq.${encodeURIComponent(track.id)}` +
-            `&scope=eq.track` +
-            `&status=eq.active` +
-            `&expires_at=gt.${encodeURIComponent(now)}` +
-            `&select=id,expires_at` +
-            `&order=expires_at.desc` +
-            `&limit=1`,
-            { method: 'GET' }
-          );
-
-          if (
-            trackRental.response.ok &&
-            Array.isArray(trackRental.body) &&
-            trackRental.body[0]
-          ) {
-            unlocked = true;
-            reason = 'track_rental_active';
-            rentalExpiresAt = trackRental.body[0].expires_at || null;
-          }
+          reason = 'track_rental_active';
+          rentalExpiresAt = trackRental.body[0].expires_at || null;
         }
       }
     }
@@ -297,7 +282,7 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  // ── 6) Autorizado, mas arquivo sumiu
+  // ── 6) Autorizado, mas arquivo sumiu do Storage
   const fullExists = await objectExists(PREMIUM_BUCKET, track.full_path);
   if (!fullExists) {
     console.error('[stream] full_path não existe:', track.full_path);
@@ -355,16 +340,35 @@ module.exports = async function handler(req, res) {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Helpers (iguais à versão anterior)
+// TTL com clamp
 // ─────────────────────────────────────────────────────────────
 function getSignedUrlTtl() {
   const raw = Number(process.env.SIGNED_URL_TTL_SEC);
-  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_SIGNED_URL_TTL_SEC;
-  if (raw < MIN_SIGNED_URL_TTL_SEC) return MIN_SIGNED_URL_TTL_SEC;
-  if (raw > MAX_SIGNED_URL_TTL_SEC) return MAX_SIGNED_URL_TTL_SEC;
+
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_SIGNED_URL_TTL_SEC;
+  }
+
+  if (raw < MIN_SIGNED_URL_TTL_SEC) {
+    console.warn(
+      `[stream] SIGNED_URL_TTL_SEC=${raw} abaixo do mínimo; usando ${MIN_SIGNED_URL_TTL_SEC}`
+    );
+    return MIN_SIGNED_URL_TTL_SEC;
+  }
+
+  if (raw > MAX_SIGNED_URL_TTL_SEC) {
+    console.warn(
+      `[stream] SIGNED_URL_TTL_SEC=${raw} acima do máximo; usando ${MAX_SIGNED_URL_TTL_SEC}`
+    );
+    return MAX_SIGNED_URL_TTL_SEC;
+  }
+
   return raw;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Path encoding — segmento por segmento
+// ─────────────────────────────────────────────────────────────
 function encodePath(path) {
   return String(path || '')
     .replace(/^\/+/, '')
@@ -374,17 +378,29 @@ function encodePath(path) {
     .join('/');
 }
 
+// ─────────────────────────────────────────────────────────────
+// URL pública
+// ─────────────────────────────────────────────────────────────
 function buildPublicUrl(bucket, path) {
   const { url } = getConfig();
   const clean = encodePath(path);
   return `${url}/storage/v1/object/public/${encodeURIComponent(bucket)}/${clean}`;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Signed URL — aceita 3 formatos
+// ─────────────────────────────────────────────────────────────
 function normalizeSignedUrl(signedURL, baseUrl) {
   const raw = String(signedURL || '').trim();
   if (!raw) return null;
+
+  // URL absoluta
   if (/^https?:\/\//i.test(raw)) return raw;
+
+  // Já vem com /storage/v1/
   if (raw.startsWith('/storage/v1/')) return baseUrl + raw;
+
+  // Relativo: /object/sign/...
   const clean = raw.replace(/^\/+/, '');
   return `${baseUrl}/storage/v1/${clean}`;
 }
@@ -419,7 +435,10 @@ async function createSignedUrl(bucket, path, expiresInSec) {
     }
 
     const data = await response.json();
-    if (!data?.signedURL) return null;
+    if (!data?.signedURL) {
+      console.error('[stream] Supabase não retornou signedURL');
+      return null;
+    }
 
     return normalizeSignedUrl(data.signedURL, url);
   } catch (err) {
@@ -428,6 +447,9 @@ async function createSignedUrl(bucket, path, expiresInSec) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// objectExists — HEAD no Storage, com cache de 60s
+// ─────────────────────────────────────────────────────────────
 async function objectExists(bucket, path) {
   if (!bucket || !path) return false;
 
@@ -465,12 +487,18 @@ async function objectExists(bucket, path) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão
+// ─────────────────────────────────────────────────────────────
 function guessMime(path) {
   if (!path) return null;
   const ext = String(path).split('.').pop().toLowerCase();
   return MIME_BY_EXT[ext] || null;
 }
 
+// ─────────────────────────────────────────────────────────────
+// Resposta (trata HEAD)
+// ─────────────────────────────────────────────────────────────
 function respond(res, method, payload) {
   if (method === 'HEAD') {
     res.status(200);
