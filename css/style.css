@@ -1012,18 +1012,24 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow: hidden;
 }
 
-/* Marca d'água tema.webp dentro do player */
+/* Marca d'água — capa do álbum atual (via CSS variable) */
 .music-player::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: url('../assets/img/tema.webp');
+  background-image: var(--player-bg, none);
   background-size: cover;
   background-position: center;
-  opacity: 0.06;
+  opacity: 0.08;
   pointer-events: none;
   z-index: 0;
   border-radius: 20px;
+  transition: opacity 0.5s ease, background-image 0.5s ease;
+}
+
+/* Se não houver capa, esconde a marca d'água */
+.music-player:not([data-has-bg="1"])::before {
+  opacity: 0;
 }
 .music-player > * {
   position: relative;
