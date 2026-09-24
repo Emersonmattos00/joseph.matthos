@@ -137,7 +137,9 @@ josephmatthos/
 ├── sw.js                       # Service Worker (cache + offline)
 ├── vercel.json                 # Configuração de deploy (headers, cache, CSP)
 ├── package.json                # Engines + @upstash/redis
+├── package-lock.json           # Lockfile (obrigatório — gerar com `npm install`)
 ├── README.md                   # Este arquivo
+├── .gitignore                  # Exclusões do git
 │
 ├── supabase/
 │   └── schema.sql              # Schema completo do banco (idempotente)
@@ -200,7 +202,8 @@ josephmatthos/
 > **⚠️ Arquivos que NÃO existem mais** (foram abandonados em versões anteriores):
 > - `js/adsense.js` — o AdSense agora é carregado **inline** no `<head>` do `index.html`
 > - `js/sw-register.js` — o registro do SW deve ser feito **inline** no `index.html` (a fazer)
-> - `package-lock.json` — gerar com `npm install` antes do primeiro deploy
+>
+> **⚠️ `package-lock.json` é OBRIGATÓRIO.** Se ainda não estiver no repositório, rode `npm install` localmente e commite o arquivo gerado (ver seção [Dependências npm](#dependências-npm)).
 
 ---
 
@@ -667,19 +670,49 @@ O `package.json` declara também a versão mínima do Node.js:
 
 > **Histórico**: uma versão anterior usava `bcryptjs`, que foi removido ao migrar o hash de senha do admin para `crypto.scrypt` nativo.
 
-### Instalar
+### Lockfile (⚠️ OBRIGATÓRIO)
+
+O projeto **deve** ter um `package-lock.json` commitado. Sem ele:
+
+- O build da Vercel não é determinístico (versões de dependências transitivas podem variar)
+- `npm ci` falha com `npm ci can only install packages when your package.json and package-lock.json are in sync`
+- Uma atualização silenciosa de dependência pode quebrar produção
+
+### Como gerar o lockfile
+
+Na raiz do projeto:
 
 ```bash
+rm -rf node_modules package-lock.json
 npm install
 ```
 
-Isso gera o `package-lock.json` (que **deve** ser commitado).
+Isso cria:
+- `node_modules/` (ignorado pelo git)
+- `package-lock.json` (deve ser commitado)
+
+Commit ambos os arquivos juntos:
+
+```bash
+git add package.json package-lock.json
+git commit -m "chore: gera lockfile para build determinístico"
+git push
+```
+
+### Fluxo correto depois disso
+
+| Ambiente | Comando |
+|---|---|
+| Local (dev) | `npm install` |
+| CI/CD (Vercel) | `npm ci` |
+| Após editar `package.json` | `npm install` (regenera lockfile) e commitar ambos |
 
 ### Por que isso importa
 
 - **Build rápido** na Vercel (~2s)
 - **Superfície de ataque mínima** (só 1 dep)
 - **Sem risco de supply chain attack** significativo
+- **Build determinístico** com versões exatas cravadas
 
 ---
 
@@ -735,7 +768,8 @@ Em produção, o script é injetado dinamicamente. Em `localhost`, é ignorado.
 ### Primeiro deploy
 
 1. **Fork** ou clone este repositório
-2. **Rode `npm install`** localmente para gerar `package-lock.json`
+2. **Confirme que `package-lock.json` está no repositório.**
+   Se não estiver, rode `npm install` localmente e commite o arquivo gerado.
 3. **Conecte** ao Vercel (import project)
 4. **Configure** as variáveis de ambiente (incluindo Upstash)
 5. **Faça deploy**
@@ -951,6 +985,13 @@ Envie e-mail para o mantenedor. **Não abra issues públicas** para vulnerabilid
 
 > ⚠️ Arquivos em `/js/admin/**` **não precisam** de bump (são network-first), mas o resto do site precisa.
 
+### Atualizar dependências
+
+1. Edite `package.json` (se necessário)
+2. Rode `npm install` para regenerar `package-lock.json`
+3. Commit **ambos** os arquivos juntos
+4. Faça push
+
 ### Limpeza de dados antigos
 
 Rode periodicamente no SQL Editor (ou via pg_cron):
@@ -1064,7 +1105,7 @@ Rode `select * from pg_policies where schemaname = 'public';` para auditar.
 
 ### Build da Vercel falha com "npm ci can only install..."
 
-**Causa**: `package.json` e `package-lock.json` estão dessincronizados (ou `package-lock.json` ausente).
+**Causa**: `package-lock.json` ausente ou dessincronizado com `package.json`.
 
 **Solução**:
 
@@ -1075,6 +1116,8 @@ git add package.json package-lock.json
 git commit -m "chore: sincroniza lockfile"
 git push
 ```
+
+Depois disso, o `npm ci` da Vercel vai funcionar corretamente. **Nunca** edite `package.json` sem rodar `npm install` em seguida e commitar o `package-lock.json` atualizado.
 
 ### Upload de áudio falha com "Falha ao preparar upload"
 
