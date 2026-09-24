@@ -1,9 +1,9 @@
 /* ============================================================
-   js/admin/editors/albums.js — v4 (listeners diretos)
+   js/admin/editors/albums.js — v5 (drag & drop)
    ------------------------------------------------------------
-   Mudança de abordagem: em vez de delegação no document com
-   `closest()`, cada botão recebe seu próprio listener no
-   momento em que é renderizado. Sem ambiguidade.
+   - Listeners diretos em cada botão (sem delegação)
+   - Drag & drop para reordenar faixas dentro de um álbum
+   - Backend: PATCH /api/admin?action=track-order
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -19,6 +19,9 @@ const State = {
   loading: false,
   error: null
 };
+
+// ⚡ Estado do drag & drop
+let _dragState = null;
 
 // ─────────────────────────────────────────────────────────────
 // parseLyricsInput
@@ -92,7 +95,6 @@ function paintShell(container) {
     </div>
   `;
 
-  // Listeners do header (uma vez só)
   container.querySelector('[data-albums-refresh]')?.addEventListener('click', () => loadAlbums());
   container.querySelector('[data-albums-new]')?.addEventListener('click', () => openAlbumModal(null));
 }
@@ -177,7 +179,6 @@ function paintBody(body) {
 
   body.innerHTML = State.albums.map((a) => renderAlbumBlock(a)).join('');
 
-  // ⚡ Bind DIRETO em cada botão (sem delegação, sem closest, sem conflito)
   bindAlbumButtons(body);
   bindTrackButtons(body);
 }
@@ -186,13 +187,11 @@ function paintBody(body) {
 // Bind direto dos botões de álbum
 // ─────────────────────────────────────────────────────────────
 function bindAlbumButtons(scope) {
-  // Toggle
   scope.querySelectorAll('[data-album-toggle]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const albumId = btn.dataset.albumToggle;
-      console.log('[albums] toggle', albumId);
 
       if (State.expandedAlbumIds.has(albumId)) {
         State.expandedAlbumIds.delete(albumId);
@@ -206,27 +205,22 @@ function bindAlbumButtons(scope) {
     });
   });
 
-  // Editar
   scope.querySelectorAll('[data-album-edit]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       const albumId = btn.dataset.albumEdit;
-      console.log('[albums] editar', albumId);
-
       const album = State.albums.find((a) => a.id === albumId);
       if (album) openAlbumModal(album);
       else toast('Álbum não encontrado.', '⚠');
     });
   });
 
-  // Excluir
   scope.querySelectorAll('[data-album-delete]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const albumId = btn.dataset.albumDelete;
-      console.log('[albums] excluir', albumId);
 
       if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
 
@@ -246,7 +240,6 @@ function bindAlbumButtons(scope) {
     });
   });
 
-  // Nova faixa
   scope.querySelectorAll('[data-track-new]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -266,7 +259,6 @@ function bindTrackButtons(scope) {
       e.stopPropagation();
       const trackId = Number(btn.dataset.trackEdit);
       const albumId = btn.dataset.trackAlbum;
-      console.log('[albums] editar faixa', trackId, albumId);
 
       const list = State.tracks.get(albumId) || [];
       const track = list.find((t) => Number(t.id) === trackId);
@@ -281,7 +273,6 @@ function bindTrackButtons(scope) {
       e.stopPropagation();
       const trackId = Number(btn.dataset.trackDelete);
       const albumId = btn.dataset.trackAlbum;
-      console.log('[albums] excluir faixa', trackId, albumId);
 
       if (!confirm('Excluir esta faixa?')) return;
 
@@ -295,6 +286,136 @@ function bindTrackButtons(scope) {
         toast(err?.message || 'Falha ao excluir faixa.', '⚠');
       }
     });
+  });
+
+  // ⚡ Drag & drop
+  bindTrackDragDrop(scope);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Drag & Drop
+// ─────────────────────────────────────────────────────────────
+function bindTrackDragDrop(scope) {
+  const bodies = scope.querySelectorAll('[data-tracks-body]');
+
+  bodies.forEach((tbody) => {
+    if (tbody.dataset.dragBound === '1') return;
+    tbody.dataset.dragBound = '1';
+
+    const albumId = tbody.dataset.tracksBody;
+
+    tbody.addEventListener('dragstart', (e) => {
+      const row = e.target.closest('tr[data-track-id]');
+      if (!row) return;
+
+      _dragState = { row, albumId };
+
+      row.classList.add('dragging');
+
+      try {
+        e.dataTransfer.setData('text/plain', row.dataset.trackId);
+        e.dataTransfer.effectAllowed = 'move';
+      } catch {}
+    });
+
+    tbody.addEventListener('dragover', (e) => {
+      if (!_dragState) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+
+      const targetRow = e.target.closest('tr[data-track-id]');
+      if (!targetRow || targetRow === _dragState.row) return;
+
+      tbody.querySelectorAll('tr.drag-over-top, tr.drag-over-bottom')
+        .forEach((r) => r.classList.remove('drag-over-top', 'drag-over-bottom'));
+
+      const rect = targetRow.getBoundingClientRect();
+      const isAbove = e.clientY < rect.top + rect.height / 2;
+      targetRow.classList.add(isAbove ? 'drag-over-top' : 'drag-over-bottom');
+    });
+
+    tbody.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (!_dragState) return;
+
+      const targetRow = e.target.closest('tr[data-track-id]');
+      if (!targetRow || targetRow === _dragState.row) {
+        cleanupDrag(scope);
+        return;
+      }
+
+      const rect = targetRow.getBoundingClientRect();
+      const isAbove = e.clientY < rect.top + rect.height / 2;
+
+      const rows = Array.from(tbody.querySelectorAll('tr[data-track-id]'));
+      const draggedIdx = rows.indexOf(_dragState.row);
+      const targetIdx = rows.indexOf(targetRow);
+
+      rows.splice(draggedIdx, 1);
+      let insertAt = rows.indexOf(targetRow);
+      if (!isAbove) insertAt += 1;
+      rows.splice(insertAt, 0, _dragState.row);
+
+      const order = rows.map((row, i) => ({
+        id: Number(row.dataset.trackId),
+        track_index: i
+      }));
+
+      const originalHtml = tbody.innerHTML;
+      cleanupDrag(scope);
+
+      await persistTrackOrder(albumId, order, tbody, originalHtml, scope);
+    });
+
+    tbody.addEventListener('dragend', () => cleanupDrag(scope));
+  });
+}
+
+function cleanupDrag(scope) {
+  if (_dragState?.row) _dragState.row.classList.remove('dragging');
+  scope.querySelectorAll('tr.drag-over-top, tr.drag-over-bottom')
+    .forEach((r) => r.classList.remove('drag-over-top', 'drag-over-bottom'));
+  _dragState = null;
+}
+
+async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
+  try {
+    reorderTableRows(tbody, order);
+
+    const res = await apiFetch('track-order', {
+      method: 'PATCH',
+      body: { order }
+    });
+
+    if (!res?.ok) throw new Error(res?.error || 'Falha ao reordenar.');
+
+    toast('Ordem atualizada.', '✓');
+
+    await loadTracksForAlbum(albumId);
+    repaint();
+  } catch (err) {
+    console.error('[drag] erro ao persistir ordem:', err);
+    toast(err?.message || 'Falha ao reordenar faixas.', '⚠');
+    tbody.innerHTML = originalHtml;
+    bindTrackDragDrop(scope);
+  }
+}
+
+function reorderTableRows(tbody, order) {
+  const rowsById = new Map();
+  tbody.querySelectorAll('tr[data-track-id]').forEach((row) => {
+    rowsById.set(Number(row.dataset.trackId), row);
+  });
+
+  order.forEach((item, newIndex) => {
+    const row = rowsById.get(item.id);
+    if (!row) return;
+
+    const idxCell = row.children[1];
+    if (idxCell) idxCell.textContent = String(newIndex + 1);
+
+    row.dataset.trackIndex = String(newIndex);
+    tbody.appendChild(row);
   });
 }
 
@@ -373,6 +494,7 @@ function renderTracksList(albumId, tracks) {
     <table class="admin-table" style="margin-top:0.5rem;">
       <thead>
         <tr>
+          <th style="width:32px;"></th>
           <th style="width:40px;">#</th>
           <th>Título</th>
           <th style="width:100px;">Duração</th>
@@ -382,7 +504,7 @@ function renderTracksList(albumId, tracks) {
           <th style="width:180px;">Ações</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody data-tracks-body="${escAttr(albumId)}">
         ${tracks.map((track, idx) => renderTrackRow(albumId, track, idx)).join('')}
       </tbody>
     </table>
@@ -410,7 +532,13 @@ function renderTrackRow(albumId, track, idx) {
   const price = Number(track.price_cents) || 0;
 
   return `
-    <tr data-track-id="${escAttr(String(track.id))}">
+    <tr data-track-id="${escAttr(String(track.id))}"
+        data-track-index="${Number(track.track_index) || 0}"
+        draggable="true"
+        class="track-row">
+      <td class="track-drag-cell">
+        <span class="track-drag-handle" title="Arraste para reordenar" aria-label="Arraste para reordenar">⋮⋮</span>
+      </td>
       <td>${idx + 1}</td>
       <td>${esc(track.title || '—')}</td>
       <td>${esc(track.duration || '—')}</td>
