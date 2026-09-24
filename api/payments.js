@@ -405,16 +405,33 @@ async function handleSubscription(req, res) {
 
   let mp;
   try {
-    mp = await createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user });
-  } catch (error) {
-    await markAttemptFailed(attemptId, error.code || 'mp_error');
-    await audit('payment_subscription', { userId: user.id, ip, userAgent, success: false, reason: error.code || 'mp_error' });
+  mp = await createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user });
+} catch (error) {
+  console.error('[payments/subscription] erro MP detalhado:', {
+    code: error.code,
+    message: error.message,
+    mpStatus: error.mpStatus,
+    mpBody: error.mpBody
+  });
 
-    if (error.code === 'TIMEOUT') {
-      return sendJson(res, 504, { ok: false, error: 'Tempo esgotado. Tente novamente.' });
+  await markAttemptFailed(attemptId, error.code || 'mp_error');
+  await audit('payment_subscription', {
+    userId: user.id,
+    ip,
+    userAgent,
+    success: false,
+    reason: error.code || 'mp_error',
+    metadata: {
+      mpStatus: error.mpStatus || null,
+      mpMessage: error.message || null
     }
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+  });
+
+  if (error.code === 'TIMEOUT') {
+    return sendJson(res, 504, { ok: false, error: 'Tempo esgotado. Tente novamente.' });
   }
+  return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+}
 
   try {
     await supabaseAdminRequest(
@@ -513,10 +530,23 @@ async function createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user
   });
 
   if (!response.ok || !response.body || !response.body.id) {
-    const reason = response.body?.message || response.body?.error || `http_${response.status}`;
-    const err = new Error('MP error: ' + reason);
-    err.code = 'MP_ERROR';
-    throw err;
+  const reason =
+    response.body?.message ||
+    response.body?.error ||
+    `http_${response.status}`;
+
+  // ⚡ Log detalhado para diagnóstico
+  console.error('[payments/subscription] MP respondeu:', {
+    status: response.status,
+    body: response.body,
+    reason
+  });
+
+  const err = new Error('MP error: ' + reason);
+  err.code = 'MP_ERROR';
+  err.mpStatus = response.status;
+  err.mpBody = response.body;
+  throw err;
   }
 
   const checkoutUrl =
