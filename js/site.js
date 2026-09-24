@@ -2400,6 +2400,7 @@ function syncExpandedPlayer(track, album, unlocked) {
   if (title) title.textContent = track.title;
   if (albumEl) albumEl.textContent = `Joseph Matthos · ${album.title}`;
 
+  // ── Capa do álbum (elemento visual)
   if (cover) {
     const safeCover = safeMediaUrl(album.coverImage);
     cover.style.backgroundImage = '';
@@ -2415,6 +2416,21 @@ function syncExpandedPlayer(track, album, unlocked) {
       cover.textContent = album.coverInitials || album.cover || '♪';
     }
   }
+
+  // ── Marca d'água do player = capa do álbum
+  const playerEl = document.querySelector('#expandedPlayerModal .music-player');
+  if (playerEl) {
+    const safeCover = safeMediaUrl(album.coverImage);
+
+    if (safeCover) {
+      playerEl.style.setProperty('--player-bg', `url('${safeCover}')`);
+      playerEl.setAttribute('data-has-bg', '1');
+    } else {
+      playerEl.style.removeProperty('--player-bg');
+      playerEl.removeAttribute('data-has-bg');
+    }
+  }
+
   if (badge) badge.classList.toggle('visible', !unlocked);
 }
 
