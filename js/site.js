@@ -3,16 +3,16 @@
    ------------------------------------------------------------
    🔧 CORREÇÕES APLICADAS NESTA VERSÃO
    ------------------------------------------------------------
-   1. `trackIndex` agora SEMPRE usa `track.trackIndex` (do banco),
-      nunca a posição no array. Corrige "Nenhuma faixa selecionada".
-   2. Deep merge de conteúdo remoto com DEFAULT_CONTENT.
-      Evita perder `planos` quando o Supabase só tem `branding`.
-   3. Planos com `available: false` mostram "Pagamento indisponível".
-   4. Aluguéis com `available: false` mostram "Indisponível".
-   5. Título da faixa aparece no player IMEDIATAMENTE (antes do fetch).
-   6. Mantidas todas as correções anteriores do player:
-      previewStart, waitForAudioReady, onError detalhado,
-      renovação automática de URL, AbortController.
+   1. `trackIndex` SEMPRE usa `track.trackIndex` (do banco)
+   2. Deep merge de conteúdo remoto com DEFAULT_CONTENT
+   3. Planos com `available: false` mostram "Pagamento indisponível"
+   4. Aluguéis com `available: false` mostram "Indisponível"
+   5. Título da faixa aparece IMEDIATAMENTE (antes do fetch)
+   6. Player com previewStart, waitForAudioReady, onError detalhado,
+      renovação automática de URL, AbortController
+   7. NOVO: Botão de assinatura vai para o MP (como aluguel)
+   8. NOVO: Assinantes veem "Gerenciar assinatura"
+   9. NOVO: Modal de gerenciamento (status + cancelamento)
    ============================================================ */
 
 import {
@@ -137,7 +137,6 @@ async function loadPublicData() {
       return;
     }
 
-    // ── Deep merge: preserva defaults (planos, etc) se remoto incompleto
     SITE.content = json.content && typeof json.content === 'object'
       ? deepMerge(clone(DEFAULT_CONTENT), json.content)
       : clone(DEFAULT_CONTENT);
@@ -249,10 +248,6 @@ function findAlbum(albumId) {
   return SITE.albums.find((a) => a.id === albumId) || null;
 }
 
-/**
- * Busca a faixa por albumId + trackIndex REAL (do banco).
- * Não usa posição do array.
- */
 function findTrackByIndex(albumId, realTrackIndex) {
   const album = findAlbum(albumId);
   if (!album) return null;
@@ -398,13 +393,16 @@ function applyContentToSite() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLANOS (assinatura) — mostra "Pagamento indisponível"
+// PLANOS (assinatura)
 // ─────────────────────────────────────────────────────────────
 function renderPlans() {
   const grid = document.getElementById('plansGrid');
   if (!grid) return;
 
   const plans = SITE.content?.planos?.plans || [];
+  const currentPlan = SITE.user?.plan || 'free';
+  const userIsPremium = currentPlan === 'premium' || currentPlan === 'anual';
+
   grid.innerHTML = plans
     .map((p) => {
       const priceInfo = SITE.plans[p.id] || {};
@@ -416,11 +414,34 @@ function renderPlans() {
       const suffixText =
         interval === 'month' ? '/mês' : interval === 'year' ? '/ano' : '';
 
-      const ctaText = available ? p.cta : 'Pagamento indisponível';
-      const disabled = p.disabled || !available;
+      const isCurrent = SITE.user && currentPlan === p.id;
+      const isPaidPlan = p.id === 'premium' || p.id === 'anual';
+      const isManageView = userIsPremium && isPaidPlan;
+
+      let ctaText = p.cta;
+      let disabled = p.disabled;
+      let dataAttrs = `data-plan="${esc(p.id)}"`;
+
+      if (isCurrent) {
+        ctaText = 'Plano atual';
+        disabled = true;
+        dataAttrs = '';
+      } else if (isManageView) {
+        if (currentPlan === p.id) {
+          ctaText = 'Gerenciar assinatura';
+          dataAttrs = 'data-manage="true"';
+        } else {
+          ctaText = 'Mudar para este plano';
+          dataAttrs = `data-plan="${esc(p.id)}"`;
+        }
+      } else if (!available) {
+        ctaText = 'Pagamento indisponível';
+        disabled = true;
+        dataAttrs = '';
+      }
 
       return `
-        <div class="plan-card ${p.featured ? 'featured' : ''}">
+        <div class="plan-card ${p.featured ? 'featured' : ''} ${isCurrent ? 'is-current' : ''}">
           ${p.badge ? `<div class="plan-badge">${esc(p.badge)}</div>` : ''}
           <div class="plan-name">${esc(p.name)}</div>
           <div class="plan-price">${esc(priceText)}<small>${esc(suffixText)}</small></div>
@@ -431,22 +452,33 @@ function renderPlans() {
               .join('')}
           </ul>
           <button class="btn ${p.featured ? 'btn-primary' : 'btn-outline'} btn-block"
-                  ${disabled ? 'disabled style="opacity:0.6;cursor:default;"' : `data-plan="${esc(p.id)}"`}>
+                  ${disabled ? 'disabled style="opacity:0.6;cursor:default;"' : dataAttrs}>
             ${esc(ctaText)}
           </button>
         </div>`;
     })
     .join('');
 
+  // Bind: assinar
   grid.querySelectorAll('[data-plan]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => subscribe(btn.dataset.plan));
   });
+
+  // Bind: gerenciar
+  grid.querySelectorAll('[data-manage]').forEach((btn) => {
+    if (btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      closeModal('plansModal');
+      openManageModal();
+    });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA — usa trackIndex do banco
+// DISCOGRAFIA
 // ─────────────────────────────────────────────────────────────
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
@@ -546,9 +578,6 @@ function renderDiscography() {
   updatePlayingHighlight();
 }
 
-/**
- * Renderiza card usando track.trackIndex (do banco).
- */
 function renderTrackCard(album, track) {
   const realIndex = Number(track.trackIndex) || 0;
   const info = trackInfo(album.id, realIndex);
@@ -677,7 +706,7 @@ function resolvePlaylistTracks(playlist) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ALUGUEL — planos com "Indisponível"
+// MODAL DE ALUGUEL
 // ─────────────────────────────────────────────────────────────
 function openRentModal(albumId, trackIndex) {
   const album = findAlbum(albumId);
@@ -833,8 +862,22 @@ async function subscribe(planId) {
     openModal('signupModal');
     return;
   }
+
+  // Se já tem este plano → abre gerenciar
   if (SITE.user.plan === planId) {
-    toast('Você já tem este plano.', 'ℹ');
+    closeModal('plansModal');
+    openManageModal();
+    return;
+  }
+
+  // Se já é premium e quer outro plano pago → gerenciar (não permite duplicar)
+  const currentIsPremium = ['premium', 'anual'].includes(SITE.user.plan);
+  const wantsPaid = ['premium', 'anual'].includes(planId);
+
+  if (currentIsPremium && wantsPaid) {
+    toast('Você já tem uma assinatura ativa. Cancele antes de trocar.', 'ℹ');
+    closeModal('plansModal');
+    openManageModal();
     return;
   }
 
@@ -853,14 +896,222 @@ async function subscribe(planId) {
       body: JSON.stringify({ plan: planId })
     });
     const json = await r.json();
+
     if (!r.ok || !json.ok || !json.checkoutUrl) {
+      if (r.status === 409) {
+        toast('Você já tem uma assinatura ativa.', 'ℹ');
+        closeModal('plansModal');
+        openManageModal();
+        return;
+      }
       toast(json.error || 'Pagamento indisponível.', '⚠');
       return;
     }
+
     window.location.assign(json.checkoutUrl);
   } catch (err) {
     console.error('[subscribe]', err);
     toast('Gateway de pagamento indisponível.', '⚠');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// GERENCIAR ASSINATURA
+// ─────────────────────────────────────────────────────────────
+async function openManageModal() {
+  if (!SITE.user) {
+    openModal('loginModal');
+    return;
+  }
+
+  // Remove qualquer instância antiga
+  document.getElementById('manageSubscriptionModal')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'manageSubscriptionModal';
+  overlay.className = 'modal-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.innerHTML = `
+    <div class="modal">
+      <button class="modal-close" data-close-manage aria-label="Fechar modal">×</button>
+      <h2>Gerenciar <span style="color:var(--accent);">assinatura</span></h2>
+      <p class="sub">Veja e gerencie sua assinatura Premium.</p>
+
+      <div id="manageContent">
+        <div class="admin-loading">Carregando…</div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+
+  const closeManage = () => {
+    overlay.remove();
+    document.body.style.overflow = '';
+  };
+
+  overlay.querySelector('[data-close-manage]').addEventListener('click', closeManage);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeManage();
+  });
+
+  const content = overlay.querySelector('#manageContent');
+
+  try {
+    const r = await fetch('/api/payments?type=manage', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    const json = await r.json();
+
+    if (!r.ok || !json.ok) {
+      content.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">
+        ${esc(json.error || 'Erro ao carregar.')}</p>`;
+      return;
+    }
+
+    if (!json.subscription) {
+      content.innerHTML = `
+        <p class="hint" style="color:var(--text-dim);text-align:center;padding:1rem 0;">
+          Você não tem assinatura ativa.
+        </p>
+        <button class="btn btn-primary btn-block" id="manageSubscribeBtn">
+          Assinar Premium
+        </button>
+      `;
+      overlay.querySelector('#manageSubscribeBtn')?.addEventListener('click', () => {
+        closeManage();
+        openModal('plansModal');
+      });
+      return;
+    }
+
+    const sub = json.subscription;
+    const planLabel = sub.plan === 'anual' ? 'Premium Anual' : 'Premium Mensal';
+    const statusLabel = {
+      authorized: 'Ativa',
+      trialing: 'Período de teste',
+      canceled: 'Cancelada',
+      paused: 'Pausada',
+      pending: 'Pendente'
+    }[sub.status] || sub.status;
+
+    const fmt = (iso) => {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleDateString('pt-BR', {
+          day: '2-digit', month: 'long', year: 'numeric'
+        });
+      } catch { return '—'; }
+    };
+
+    const isActive = ['authorized', 'trialing'].includes(sub.status);
+
+    content.innerHTML = `
+      <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
+        <div style="font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;
+                    color:var(--text-dim);font-weight:600;margin-bottom:0.4rem;">
+          Plano
+        </div>
+        <div style="font-family:var(--font-serif);font-size:1.4rem;
+                    font-weight:700;color:var(--accent);">
+          ${esc(planLabel)}
+        </div>
+        <div style="font-size:0.85rem;color:var(--text-dim);margin-top:0.3rem;">
+          Status: <strong style="color:${isActive ? 'var(--success)' : 'var(--danger)'};">
+            ${esc(statusLabel)}
+          </strong>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+        <div style="background:var(--card);border:1px solid var(--border);
+                    border-radius:12px;padding:0.9rem;">
+          <div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-dim);
+                      font-weight:600;margin-bottom:0.3rem;">Início</div>
+          <div style="font-size:0.9rem;color:var(--text);">
+            ${esc(fmt(sub.startedAt || sub.createdAt))}
+          </div>
+        </div>
+        <div style="background:var(--card);border:1px solid var(--border);
+                    border-radius:12px;padding:0.9rem;">
+          <div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-dim);
+                      font-weight:600;margin-bottom:0.3rem;">
+            ${sub.status === 'canceled' ? 'Cancelada em' : 'Próxima cobrança'}
+          </div>
+          <div style="font-size:0.9rem;color:var(--text);">
+            ${esc(fmt(sub.canceledAt || sub.currentPeriodEnd))}
+          </div>
+        </div>
+      </div>
+
+      ${isActive ? `
+        <button class="btn btn-outline btn-block" id="cancelSubBtn"
+                style="border-color:var(--danger);color:var(--danger);">
+          Cancelar assinatura
+        </button>
+        <p class="hint" style="color:var(--text-dim);font-size:0.75rem;
+                  text-align:center;margin-top:0.8rem;">
+          Você mantém acesso até ${esc(fmt(sub.currentPeriodEnd))}.
+        </p>
+      ` : `
+        <button class="btn btn-primary btn-block" id="renewSubBtn">
+          Reativar assinatura
+        </button>
+      `}
+    `;
+
+    // Cancelar
+    overlay.querySelector('#cancelSubBtn')?.addEventListener('click', async () => {
+      if (!confirm('Tem certeza que deseja cancelar sua assinatura?\n\nVocê mantém acesso até o fim do período já pago.')) {
+        return;
+      }
+
+      const btn = overlay.querySelector('#cancelSubBtn');
+      btn.disabled = true;
+      btn.textContent = 'Cancelando…';
+
+      try {
+        const cr = await fetch('/api/payments?type=manage', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'cancel' })
+        });
+        const cjson = await cr.json();
+
+        if (!cr.ok || !cjson.ok) {
+          toast(cjson.error || 'Falha ao cancelar.', '⚠');
+          btn.disabled = false;
+          btn.textContent = 'Cancelar assinatura';
+          return;
+        }
+
+        toast(cjson.message || 'Assinatura cancelada.', '✓');
+        closeManage();
+
+        await loadUser();
+        updateAuthUI();
+        renderPlans();
+      } catch (err) {
+        console.error('[manage] cancel:', err);
+        toast('Erro ao cancelar.', '⚠');
+        btn.disabled = false;
+        btn.textContent = 'Cancelar assinatura';
+      }
+    });
+
+    // Reativar
+    overlay.querySelector('#renewSubBtn')?.addEventListener('click', () => {
+      closeManage();
+      openModal('plansModal');
+    });
+
+  } catch (err) {
+    console.error('[manage] erro:', err);
+    content.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">
+      Erro ao carregar dados.</p>`;
   }
 }
 
@@ -1259,14 +1510,28 @@ function openAccountModal() {
   const actions = document.getElementById('accountActions');
   if (actions) {
     const isFree = u.plan === 'free';
-    actions.innerHTML = `
-      <button class="btn ${isFree ? 'btn-primary' : 'btn-outline'} btn-block" id="accountUpgradeBtn">
-        ${isFree ? 'Fazer upgrade para Premium' : 'Gerenciar assinatura'}
-      </button>`;
-    document.getElementById('accountUpgradeBtn')?.addEventListener('click', () => {
-      closeModal('accountModal');
-      openModal('plansModal');
-    });
+
+    if (isFree) {
+      actions.innerHTML = `
+        <button class="btn btn-primary btn-block" id="accountUpgradeBtn">
+          Fazer upgrade para Premium
+        </button>
+      `;
+      document.getElementById('accountUpgradeBtn')?.addEventListener('click', () => {
+        closeModal('accountModal');
+        openModal('plansModal');
+      });
+    } else {
+      actions.innerHTML = `
+        <button class="btn btn-primary btn-block" id="accountManageBtn">
+          Gerenciar assinatura
+        </button>
+      `;
+      document.getElementById('accountManageBtn')?.addEventListener('click', () => {
+        closeModal('accountModal');
+        openManageModal();
+      });
+    }
   }
 
   openModal('accountModal');
@@ -1369,9 +1634,6 @@ function bindFullscreenBtn() {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// DIAGNÓSTICO DE ERRO DE ÁUDIO
-// ─────────────────────────────────────────────────────────────
 function getAudioErrorMessage(audioElement) {
   const error = audioElement?.error;
   if (!error) return 'Erro desconhecido ao carregar o áudio.';
@@ -1438,9 +1700,6 @@ function waitForAudioReady(audioElement, timeoutMs = 20000) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// RENOVAÇÃO DE URL ASSINADA
-// ─────────────────────────────────────────────────────────────
 function clearRenewTimer() {
   if (renewTimer) {
     clearTimeout(renewTimer);
@@ -1516,9 +1775,6 @@ async function renewSignedUrl() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// FILA E SHUFFLE
-// ─────────────────────────────────────────────────────────────
 function buildQueueForAlbum(albumId, startIndex) {
   const album = findAlbum(albumId);
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
@@ -1614,9 +1870,6 @@ function renderQueue() {
     .join('');
 }
 
-// ─────────────────────────────────────────────────────────────
-// PLAYER — playFromDiscography (busca por trackIndex REAL)
-// ─────────────────────────────────────────────────────────────
 async function playFromDiscography(albumId, trackIndex, opts = {}) {
   const album = findAlbum(albumId);
   if (!album) return;
@@ -1633,7 +1886,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     buildQueueForAlbum(albumId, realIndex);
   }
 
-  // Aborta fetch anterior
   if (currentAbortController) {
     currentAbortController.abort();
   }
@@ -1642,7 +1894,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   clearRenewTimer();
   isRenewing = false;
 
-  // ── Atualiza UI IMEDIATAMENTE (antes do fetch)
   currentTrackIdentity = {
     albumId,
     trackIndex: realIndex,
@@ -2203,9 +2454,6 @@ function openPlaylistPlayer(playlistIndex) {
   openExpandedPlayer(first.album.id, first.trackIndex);
 }
 
-// ─────────────────────────────────────────────────────────────
-// MODAIS GENÉRICOS
-// ─────────────────────────────────────────────────────────────
 function openModal(id) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -2240,5 +2488,6 @@ window.__site = {
     await loadUser();
     applyContentToSite();
     renderDiscography();
-  }
+  },
+  openManageModal
 };
