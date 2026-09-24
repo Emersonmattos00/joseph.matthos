@@ -714,10 +714,11 @@ function openTrackModal(albumId, track) {
     preview_path: null, full_path: null, lyrics: []
   };
 
-  const lyricsText = (() => {
-    if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '';
-    return t.lyrics.map((l) => l.text || '').join('\n');
-  })();
+  // Mostra a letra como JSON (para permitir edição de timestamps)
+const lyricsText = (() => {
+  if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '[]';
+  return JSON.stringify(t.lyrics, null, 2);
+})();
 
   openAdminModal(`
     <h3>${isNew ? 'Nova faixa' : 'Editar faixa'}</h3>
@@ -787,12 +788,14 @@ function openTrackModal(albumId, track) {
     </div>
 
     <div class="form-group">
-      <label for="trackLyrics">Letra (texto puro ou JSON)</label>
-      <textarea id="trackLyrics" rows="6" style="font-family:inherit;font-size:0.9rem;">${esc(lyricsText)}</textarea>
-      <div class="form-hint">
-        Uma linha por verso. Os tempos são distribuídos automaticamente (4s por linha).
-      </div>
-    </div>
+  <label for="trackLyrics">Letra (JSON sincronizado)</label>
+  <textarea id="trackLyrics" rows="10" style="font-family:monospace;font-size:0.85rem;line-height:1.5;tab-size:2;">${esc(lyricsText)}</textarea>
+  <div class="form-hint">
+    Formato: <code>[{ "time": 0, "text": "Primeira linha" }, ...]</code><br>
+    <strong>time</strong> em segundos (ex: <code>0</code>, <code>4.5</code>, <code>12</code>).<br>
+    <button type="button" class="btn btn-ghost btn-sm" id="trackLyricsHelpBtn" style="margin-top:0.5rem;padding:0.2rem 0.6rem;font-size:0.75rem;">📖 Ver exemplo completo</button>
+  </div>
+</div>
 
     <div class="form-error" id="trackError"></div>
 
@@ -878,6 +881,51 @@ function openTrackModal(albumId, track) {
       console.error('[albums] save track:', err);
       if (errEl) errEl.textContent = err?.message || 'Falha ao salvar faixa.';
     }
+  });
+}
+
+// ── Botão de ajuda do formato JSON
+const helpBtn = document.getElementById('trackLyricsHelpBtn');
+if (helpBtn) {
+  helpBtn.addEventListener('click', () => {
+    openAdminModal(`
+      <h3>Formato da letra sincronizada</h3>
+
+      <p style="color:var(--text-dim);margin-bottom:1rem;">
+        Cole um array JSON onde cada linha tem um <code>time</code> (em segundos) e um <code>text</code>.
+      </p>
+
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem;">
+        <pre style="font-family:monospace;font-size:0.8rem;line-height:1.6;color:var(--text);overflow-x:auto;margin:0;">[
+  { "time": 0,    "text": "Primeira linha" },
+  { "time": 4.5,  "text": "Segunda linha" },
+  { "time": 9,    "text": "Terceira linha" },
+  { "time": 13.2, "text": "Quarta linha" }
+]</pre>
+      </div>
+
+      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
+        Como calcular o <code>time</code>
+      </h4>
+      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
+        <li>Ouve a música e anota o segundo exato em que cada verso começa</li>
+        <li>Pode usar decimais: <code>4.5</code> = 4 segundos e meio</li>
+        <li>A letra acende no player quando o áudio chega nesse tempo</li>
+      </ul>
+
+      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
+        Dicas
+      </h4>
+      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
+        <li>Se colar texto puro, o sistema distribui 4s por linha automaticamente</li>
+        <li>Linhas vazias são ignoradas</li>
+        <li>Não pode ter vírgula depois do último item</li>
+      </ul>
+
+      <div style="display:flex;justify-content:flex-end;margin-top:1.5rem;">
+        <button class="btn btn-primary btn-sm" data-close type="button">Entendi</button>
+      </div>
+    `);
   });
 }
 
