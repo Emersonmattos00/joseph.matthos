@@ -66,7 +66,7 @@ module.exports = async function handler(req, res) {
       const payload = {
         reason: 'Teste de diagnóstico',
         external_reference: 'diag_' + Date.now(),
-        payer_email: 'test_user_diagnostic@testuser.com',
+        payer_email: 'emerson.mattos01@gmail.com',
         back_url: backUrl,
         status: 'pending',
         auto_recurring: {
