@@ -56,8 +56,8 @@ Rapper poético, filosófico e inspirador. Discografia completa, prévias gratui
 │                       SUPABASE                              │
 │                                                             │
 │  Auth        → usuários                                     │
-│  Postgres    → profiles, albums, tracks, subscriptions,    │
-│                rentals, payments_*, site_content, audit    │
+│  Postgres    → profiles, albums, tracks, subscriptions,     │
+│                rentals, payments_*, site_content, audit     │
 │  Storage     → site-assets (público) + audio-preview        │
 │                (público) + audio-premium (privado)          │
 └─────────────────────────────────────────────────────────────┘
@@ -82,9 +82,9 @@ Cliente pede /api/stream?albumId=X&trackIndex=Y
 Backend verifica sessão + plano + aluguel
        ↓
    Sem acesso → retorna URL pública de audio-preview
-   Com acesso → gera signed URL (10 min) para audio-premium
+   Com acesso → gera signed URL (30 min) para audio-premium
        ↓
-Cliente toca a URL retornada (que expira em 10 min)
+Cliente toca a URL retornada (que expira no TTL configurado)
 ```
 
 **Por que o bucket `audio-premium` é privado:** se a URL do arquivo completo fosse pública, qualquer pessoa com DevTools poderia copiá-la e baixar sem pagar. Como o bucket é privado, a única forma de tocar a faixa completa é passando pelo `/api/stream`, que verifica permissão a cada requisição e gera URL assinada de curta duração.
@@ -104,6 +104,8 @@ O Service Worker (`sw.js`) atua como uma **camada de cache no cliente**, com est
 
 > **Nota sobre admin:** arquivos em `/js/admin/**` usam network-first puro. Isso evita que correções no painel fiquem presas no cache durante manutenção.
 
+> **⚠️ O Service Worker ainda NÃO está registrado no `index.html`.** O arquivo `sw.js` existe e está funcional, mas o `<script>` que chama `navigator.serviceWorker.register('/sw.js')` precisa ser adicionado manualmente no `index.html` antes do fechamento do `</body>`. Enquanto isso, o SW permanece inativo.
+
 ---
 
 ## 🧱 Stack
@@ -118,7 +120,7 @@ O Service Worker (`sw.js`) atua como uma **camada de cache no cliente**, com est
 - **PWA / Offline**: Service Worker nativo + Cache API
 - **Fontes**: Google Fonts (Inter + Playfair Display)
 - **Ícones**: Font Awesome 6.5.1 (via cdnjs)
-- **Ads**: Google AdSense (apenas em produção)
+- **Ads**: Google AdSense (apenas em produção, carregado inline no `<head>`)
 - **Deploy**: Vercel
 
 ---
@@ -133,12 +135,12 @@ josephmatthos/
 ├── termos-uso.html             # Termos de Uso
 ├── politica-privacidade.html   # Política de Privacidade (LGPD)
 ├── sw.js                       # Service Worker (cache + offline)
-├── vercel.json                 # Configuração de deploy (opcional)
+├── vercel.json                 # Configuração de deploy (headers, cache, CSP)
 ├── package.json                # Engines + @upstash/redis
-├── package-lock.json           # Lockfile (npm 9+)
+├── README.md                   # Este arquivo
+│
 ├── supabase/
 │   └── schema.sql              # Schema completo do banco (idempotente)
-├── README.md                   # Este arquivo
 │
 ├── css/
 │   └── style.css               # Todos os estilos (site + admin + player)
@@ -147,8 +149,6 @@ josephmatthos/
 │   ├── config.js               # Conteúdo padrão (fallback)
 │   ├── utils.js                # Helpers (esc, format, toast, etc)
 │   ├── site.js                 # Site público (entry point)
-│   ├── adsense.js              # Carrega AdSense só em produção
-│   ├── sw-register.js          # Registra o Service Worker
 │   │
 │   └── admin/                  # Painel administrativo
 │       ├── index.js            # Entry point do painel
@@ -160,17 +160,18 @@ josephmatthos/
 │       ├── dashboard.js        # Cards de estatísticas
 │       ├── users.js            # Gestão de usuários
 │       ├── sales.js            # Vendas e assinaturas
-│       ├── backup.js           # Info de backup
+│       ├── backup.js           # Painel informativo de backup
+│       ├── playlists-api.js    # Helpers de playlist
 │       │
 │       ├── ui/                 # Componentes de UI
 │       │   ├── dom.js          # getByPath, setByPath, esc
-│       │   ├── format.js       # formatPrice, formatDate, formatCents
+│       │   ├── format.js       # formatCents, formatDate, formatDateTime
 │       │   ├── modal.js        # Modal genérico
 │       │   └── toast.js        # Notificações
 │       │
 │       └── editors/            # Editores específicos
 │           ├── frases.js       # Frases da filosofia
-│           ├── albums.js       # Álbuns (informativo; CRUD virá em fase 2)
+│           ├── albums.js       # Álbuns e faixas (CRUD + drag & drop + upload)
 │           ├── playlists.js    # Playlists
 │           ├── plans.js        # Planos de assinatura
 │           └── socials.js      # Redes sociais
@@ -181,7 +182,8 @@ josephmatthos/
 │   ├── stream.js               # Resolve URL de áudio (com verificação)
 │   ├── auth.js                 # Autenticação de usuários
 │   ├── admin.js                # Painel administrativo
-│   └── payments.js             # Mercado Pago
+│   ├── payments.js             # Mercado Pago
+│   └── debug-mp.js             # Diagnóstico do MP (⚠️ APAGAR em produção)
 │
 ├── assets/
 │   └── img/                    # Imagens estáticas
@@ -194,6 +196,11 @@ josephmatthos/
 └── scripts/
     └── hash-admin-password.js  # Gera hash scrypt da senha admin
 ```
+
+> **⚠️ Arquivos que NÃO existem mais** (foram abandonados em versões anteriores):
+> - `js/adsense.js` — o AdSense agora é carregado **inline** no `<head>` do `index.html`
+> - `js/sw-register.js` — o registro do SW deve ser feito **inline** no `index.html` (a fazer)
+> - `package-lock.json` — gerar com `npm install` antes do primeiro deploy
 
 ---
 
@@ -208,6 +215,7 @@ josephmatthos/
 | `GET` | `/api/public?resource=albums` | Apenas os álbuns (com faixas agregadas) |
 | `GET` | `/api/public?resource=tracks` | Apenas o catálogo de faixas (flat) |
 | `GET` | `/api/public?resource=plans` | Apenas os planos de assinatura |
+| `GET` | `/api/public?resource=rental-plans` | Apenas os planos de aluguel |
 
 **Cache HTTP**: 60s browser / 300s CDN (`stale-while-revalidate`).
 
@@ -216,13 +224,14 @@ josephmatthos/
 | Método | Endpoint | Descrição |
 |---|---|---|
 | `GET` | `/api/stream?albumId=X&trackIndex=Y` | Resolve URL de áudio (preview ou full) |
+| `GET` | `/api/stream?albumId=X&trackIndex=Y&debug=1` | Estado completo da faixa (sem URLs) |
 
 **Comportamento:**
 - **Sem login** → retorna `{ unlocked: false, previewUrl }`
 - **Free sem aluguel** → idem
-- **Premium ou aluguel ativo** → retorna `{ unlocked: true, fullUrl, expiresIn: 600 }`
+- **Premium ou aluguel ativo** → retorna `{ unlocked: true, fullUrl, expiresIn }`
 
-`fullUrl` é uma **signed URL** que expira em 10 minutos.
+`fullUrl` é uma **signed URL** que expira em TTL configurável (padrão: 30 min, entre 1 min e 1 h).
 
 ### Autenticação de usuários
 
@@ -233,6 +242,7 @@ josephmatthos/
 | `POST` | `/api/auth?action=logout` | Encerra sessão |
 | `POST` | `/api/auth?action=refresh` | Renova tokens |
 | `GET`  | `/api/auth?action=me` | Dados do usuário + aluguéis ativos |
+| `HEAD` | `/api/auth?action=me` | Só headers |
 
 ### Painel administrativo
 
@@ -245,13 +255,26 @@ Todas as ações (exceto `login`) exigem sessão válida via cookie `__Host-jm_a
 | `POST` | `/api/admin?action=logout` | Encerra sessão |
 | `GET`  | `/api/admin?action=content` | Lê o conteúdo do site |
 | `PUT`  | `/api/admin?action=content` | Salva o conteúdo (com controle de versão) |
-| `POST` | `/api/admin?action=upload` | Upload roteado por bucket |
+| `POST` | `/api/admin?action=upload` | Upload Base64 (imagens) |
+| `POST` | `/api/admin?action=upload-sign` | Gera signed URL de PUT (áudios) |
+| `POST` | `/api/admin?action=upload-confirm` | Confirma upload e grava path no banco |
 | `GET`  | `/api/admin?action=users` | Lista usuários + planos |
 | `PATCH`| `/api/admin?action=users` | Altera plano do usuário |
 | `GET`  | `/api/admin?action=sales` | Assinaturas + aluguéis + eventos |
 | `GET`  | `/api/admin?action=audit` | Eventos de auditoria (`admin_audit` / `auth_audit_log`) |
+| `GET`  | `/api/admin?action=gen-hash` | Gera hash scrypt (⚠️ TEMPORÁRIO — remover após uso) |
+| `GET`  | `/api/admin?action=albums` | Lista álbuns |
+| `POST` | `/api/admin?action=albums` | Cria álbum |
+| `GET`  | `/api/admin?action=album&id=X` | Detalhe do álbum |
+| `PATCH`| `/api/admin?action=album&id=X` | Atualiza álbum |
+| `DELETE`| `/api/admin?action=album&id=X` | Exclui álbum (com `force=true` para excluir faixas) |
+| `GET`  | `/api/admin?action=tracks&albumId=X` | Lista faixas de um álbum |
+| `POST` | `/api/admin?action=tracks` | Cria faixa |
+| `PATCH`| `/api/admin?action=track&id=X` | Atualiza faixa |
+| `DELETE`| `/api/admin?action=track&id=X` | Exclui faixa |
+| `PATCH`| `/api/admin?action=track-order` | Reordena faixas |
 
-**Upload (`POST ?action=upload`)** — roteia para o bucket correto conforme `kind`:
+**Upload** — roteia para o bucket correto conforme `kind`:
 
 | `kind` | Bucket de destino | Retorno |
 |---|---|---|
@@ -259,13 +282,20 @@ Todas as ações (exceto `login`) exigem sessão válida via cookie `__Host-jm_a
 | `audio-preview` | `audio-preview` | `{ url, path, bucket }` |
 | `audio-full` | `audio-premium` | `{ url: null, path, bucket }` |
 
+**Fluxo de upload de áudio (presigned):**
+1. `POST ?action=upload-sign` → backend gera URL assinada de PUT
+2. Browser faz `PUT` **direto** no Supabase Storage (sem passar pela Vercel)
+3. `POST ?action=upload-confirm` → backend valida que o arquivo existe e (opcionalmente) grava `preview_path`/`full_path` em `tracks`
+
 ### Pagamentos
 
 | Método | Endpoint | Descrição |
 |---|---|---|
 | `POST` | `/api/payments?type=subscription` | Cria assinatura no Mercado Pago |
-| `POST` | `/api/payments?type=rental` | Cria aluguel de 48h |
+| `POST` | `/api/payments?type=rental` | Cria aluguel (24h a 15d) |
 | `POST` | `/api/payments?type=webhook` | Recebe notificações do MP |
+| `GET`  | `/api/payments?type=manage` | Status da assinatura do usuário |
+| `POST` | `/api/payments?type=manage` | Cancela assinatura (`{ action: "cancel" }`) |
 
 ---
 
@@ -290,7 +320,7 @@ Marcar como **Production**, **Preview** e **Development** quando aplicável.
 | `ADMIN_USER` | Login do admin (ex: `admin`) |
 | `ADMIN_PASSWORD_HASH` | Hash scrypt da senha (formato `scrypt$salt$hash`) |
 | `ADMIN_SESSION_SECRET` | Segredo HMAC (64 hex chars — mínimo 32) |
-| `ALLOWED_ORIGINS` | Origins confiáveis para CSRF (ex: `https://seudominio.com`) |
+| `ALLOWED_ORIGINS` | Origins confiáveis para CSRF (CSV, ex: `https://seudominio.com`) |
 
 ### Mercado Pago (para pagamentos)
 
@@ -304,6 +334,17 @@ Marcar como **Production**, **Preview** e **Development** quando aplicável.
 | `MP_ENV` | `production` ou `sandbox` |
 | `MP_PREMIUM_MONTHLY_PRICE` | Preço mensal em reais (ex: `19.90`) |
 | `MP_PREMIUM_ANNUAL_PRICE` | Preço anual em reais (ex: `179.00`) |
+
+### Aluguéis (opcionais — fallback usa `tracks.price_cents`)
+
+| Variável | Descrição |
+|---|---|
+| `RENTAL_PRICE_24H` | Preço em reais (ex: `2.90`) |
+| `RENTAL_PRICE_48H` | Preço em reais |
+| `RENTAL_PRICE_3D`  | Preço em reais |
+| `RENTAL_PRICE_5D`  | Preço em reais |
+| `RENTAL_PRICE_10D` | Preço em reais |
+| `RENTAL_PRICE_15D` | Preço em reais |
 
 ### Upstash Redis (recomendado)
 
@@ -319,6 +360,7 @@ Marcar como **Production**, **Preview** e **Development** quando aplicável.
 | Variável | Descrição |
 |---|---|
 | `SIGNUP_REDIRECT_URL` | URL de confirmação de e-mail |
+| `SIGNED_URL_TTL_SEC` | TTL da signed URL de áudio (padrão 1800s) |
 | `NODE_ENV` | `production` (garante `__Host-` + `Secure` em cookies) |
 
 ---
@@ -333,7 +375,7 @@ Marcar como **Production**, **Preview** e **Development** quando aplicável.
 | `albums` | Álbuns, EPs e singles |
 | `tracks` | Faixas com preço em centavos e paths de áudio |
 | `subscriptions` | Assinaturas ativas (fonte de verdade do plano) |
-| `rentals` | Aluguéis de 48h por faixa |
+| `rentals` | Aluguéis por faixa (24h a 15d) |
 | `payments_attempts` | Idempotência de checkout |
 | `payments_events` | Idempotência de webhook |
 | `site_content` | Conteúdo do site (JSON) |
@@ -419,19 +461,21 @@ audio-premium/
 
 ### Criação dos buckets
 
-```sql
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values
-  ('site-assets',   'site-assets',   true,  10485760,
-   array['image/jpeg','image/png','image/webp','image/gif']),
-  ('audio-preview', 'audio-preview', true,  10485760,
-   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg']),
-  ('audio-premium', 'audio-premium', false, 52428800,
-   array['audio/mpeg','audio/mp4','audio/wav','audio/ogg'])
-on conflict (id) do nothing;
-```
+**⚠️ Os buckets NÃO podem ser criados via SQL** — a role do SQL Editor não tem permissão de owner sobre `storage.buckets`. Crie manualmente pelo Dashboard:
+
+**Storage → New bucket**
+
+| Nome | Público? | Limite | MIME types |
+|---|---|---|---|
+| `site-assets` | ✅ Sim | 10 MB | `image/jpeg`, `image/png`, `image/webp`, `image/gif` |
+| `audio-preview` | ✅ Sim | 10 MB | `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/ogg` |
+| `audio-premium` | ❌ **Não** | 50 MB | `audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/ogg` |
+
+> **⚠️ ATENÇÃO:** `audio-premium` deve ser **PRIVADO**. Se marcar como público, o sistema de signed URLs perde a proteção — qualquer pessoa com a URL direta consegue baixar o áudio completo.
 
 ### Policies RLS do Storage
+
+Depois de criar os buckets, rode no SQL Editor:
 
 ```sql
 -- site-assets: leitura pública (imagens)
@@ -448,11 +492,18 @@ create policy "audio_preview_public_read"
 
 -- audio-premium: NENHUMA policy de SELECT
 --   O bucket é privado. Só o service_role pode gerar signed URLs via /api/stream.
+
+-- service_role: acesso total a todos os buckets
+drop policy if exists "storage_service_role_all" on storage.objects;
+create policy "storage_service_role_all"
+  on storage.objects for all
+  to service_role
+  using (true) with check (true);
 ```
 
 ### Como o backend usa
 
-- Uploads feitos via `/api/admin?action=upload` (server-side, com `service_role`)
+- Uploads feitos via `/api/admin?action=upload-sign` + `/api/admin?action=upload-confirm` (presigned, com `service_role`)
 - O upload roteia para o bucket correto conforme o `kind`:
   - `image` → `site-assets`
   - `audio-preview` → `audio-preview`
@@ -474,25 +525,26 @@ Ambos os passos são necessários — remover só metadados deixa o arquivo "ór
 
 A senha do admin **nunca é armazenada em texto puro**. Usamos **scrypt** (N=16384, r=8, p=1) com salt de 16 bytes.
 
-### Opção A — via Node.js local
+### Opção A — via script (recomendado)
 
-Instale Node.js (https://nodejs.org/) e rode:
+```bash
+node scripts/hash-admin-password.js
+```
+
+Modos alternativos:
+
+```bash
+node scripts/hash-admin-password.js "senha"
+echo "senha" | node scripts/hash-admin-password.js --stdin
+```
+
+### Opção B — via Node.js inline
 
 ```bash
 node -e "const c=require('crypto');const p='SUA_SENHA_AQUI';const s=c.randomBytes(16);c.scrypt(p,s,64,{N:16384,r:8,p:1},(e,k)=>{if(e)throw e;console.log('scrypt$'+s.toString('hex')+'$'+k.toString('hex'));});"
 ```
 
 Troque `SUA_SENHA_AQUI` pela senha real. Copie o resultado (começa com `scrypt$`).
-
-### Opção B — via script
-
-```bash
-node scripts/hash-admin-password.js
-```
-
-### Opção C — via API route temporária (sem Node)
-
-Se você não tem Node.js instalado, crie `api/gerar-hash.js` temporariamente, faça deploy, gere o hash via navegador e **delete o arquivo depois**. Detalhes na seção "Troubleshooting".
 
 ### Configurar no Vercel
 
@@ -511,9 +563,21 @@ Cole o hash em `ADMIN_PASSWORD_HASH` no Vercel → Settings → Environment Vari
 
 O projeto inclui um **Service Worker** (`sw.js`) que fornece suporte offline parcial e cache de assets.
 
-### Registro
+### Registro (⚠️ A FAZER)
 
-O SW é registrado via `<script src="js/sw-register.js" defer>` no final do `index.html`.
+O SW **ainda não está registrado** no `index.html`. Para ativar, adicione antes do fechamento do `</body>`:
+
+```html
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function (err) {
+        console.warn('[SW] falha ao registrar:', err);
+      });
+    });
+  }
+</script>
+```
 
 > Em `localhost` e `https://`, o registro funciona. Em `file://`, o navegador bloqueia — sempre teste via servidor HTTP.
 
@@ -534,8 +598,8 @@ O SW pré-cacheia no `install`:
 
 - Páginas: `/`, `/index.html`, `/offline.html`, `/termos-uso.html`, `/politica-privacidade.html`
 - CSS: `/css/style.css`
-- JS público: `utils.js`, `config.js`, `site.js`, `adsense.js`, `sw-register.js`
-- Imagens padrão: `tema.webp`, `vinil.webp`, `josephmatthos.webp`, `placeholder.webp`
+- JS público: `/js/utils.js`, `/js/config.js`, `/js/site.js`
+- Imagens padrão: `/assets/img/tema.webp`, `/assets/img/vinil.webp`, `/assets/img/josephmatthos.webp`
 
 > ⚠️ **Importante**: `js/admin/**` **não** entra no precache. Esses arquivos usam network-first.
 
@@ -544,7 +608,7 @@ O SW pré-cacheia no `install`:
 Quando você alterar assets, **bumpe a versão** no topo do `sw.js`:
 
 ```js
-const CACHE_VERSION = 'jm-v15';  // ← incremente aqui
+const CACHE_VERSION = 'jm-v18';  // ← incremente aqui
 ```
 
 Ao subir, o SW:
@@ -596,7 +660,7 @@ O `package.json` declara também a versão mínima do Node.js:
     "node": ">=18"
   },
   "dependencies": {
-    "@upstash/redis": "^1.34.0"
+    "@upstash/redis": "1.34.0"
   }
 }
 ```
@@ -608,6 +672,8 @@ O `package.json` declara também a versão mínima do Node.js:
 ```bash
 npm install
 ```
+
+Isso gera o `package-lock.json` (que **deve** ser commitado).
 
 ### Por que isso importa
 
@@ -639,17 +705,28 @@ Ambas têm `<link rel="canonical">` e são indexáveis (`robots: index, follow`)
 
 Tem `<meta name="robots" content="noindex, follow">` — não deve aparecer em buscas.
 
-### AdSense
+### AdSense (carregado inline)
 
-O script do AdSense é carregado **condicionalmente** via `js/adsense.js`:
+O script do AdSense é carregado **inline** no `<head>` do `index.html`, condicionalmente:
 
-```js
-var host = location.hostname;
-var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
-if (isLocal) return;  // não carrega em dev
+```html
+<script>
+  (function () {
+    var host = location.hostname;
+    var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+    if (isLocal) return; // não carrega em dev
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7190208592008203';
+    s.crossOrigin = 'anonymous';
+    document.head.appendChild(s);
+  })();
+</script>
 ```
 
 Em produção, o script é injetado dinamicamente. Em `localhost`, é ignorado.
+
+> **Nota:** arquivos `js/adsense.js` e `js/sw-register.js` **não existem mais** — toda a lógica está inline no `index.html`.
 
 ---
 
@@ -658,12 +735,13 @@ Em produção, o script é injetado dinamicamente. Em `localhost`, é ignorado.
 ### Primeiro deploy
 
 1. **Fork** ou clone este repositório
-2. **Conecte** ao Vercel (import project)
-3. **Configure** as variáveis de ambiente (incluindo Upstash)
-4. **Faça deploy**
-5. **Rode o schema** no Supabase SQL Editor (`supabase/schema.sql`)
-6. **Crie os 3 buckets** (`site-assets`, `audio-preview`, `audio-premium`) + policies
-7. **Teste** `https://seu-projeto.vercel.app` e o painel com `?admin` ou `Ctrl+Shift+A`
+2. **Rode `npm install`** localmente para gerar `package-lock.json`
+3. **Conecte** ao Vercel (import project)
+4. **Configure** as variáveis de ambiente (incluindo Upstash)
+5. **Faça deploy**
+6. **Rode o schema** no Supabase SQL Editor (`supabase/schema.sql`)
+7. **Crie os 3 buckets** (`site-assets`, `audio-preview`, `audio-premium`) + policies
+8. **Teste** `https://seu-projeto.vercel.app` e o painel com `?admin` ou `Ctrl+Shift+A`
 
 ### Deploys subsequentes
 
@@ -704,13 +782,15 @@ O Vercel detecta o push e faz deploy automático (~30s).
 | **Hero** | Seção principal (título, subtítulo, botões, vinil) |
 | **Sobre** | Seção "Sobre Joseph" (texto, imagem, quote) |
 | **Filosofia** | Frases e citações |
-| **Discografia** | Álbuns, EPs, singles (CRUD completo virá em fase 2) |
+| **Discografia** | Álbuns, EPs, singles (CRUD completo + drag & drop + upload de áudio) |
 | **Vendas** | Assinaturas, aluguéis e eventos de pagamento |
-| **Planos** | Planos de assinatura (textos e features) |
+| **Planos** | Planos de assinatura (textos e features — **preços não são editáveis aqui**) |
 | **Contato** | Redes sociais e informações |
 | **Usuários** | Lista de usuários + alteração manual de plano |
 | **Aparência** | Cores e tipografia |
-| **Backup** | Exportar/importar JSON do conteúdo |
+| **Backup** | Painel informativo + export/import JSON do conteúdo |
+
+> **Nota sobre backup:** o painel da aba "Backup" (`admin/backup.js`) exibe o **escopo** do que é backupeado (só `site_content`) e links para backup manual do resto. Os botões **Exportar JSON** e **Importar JSON** ficam no `admin/index.js` e fazem merge profundo com `DEFAULT_CONTENT` antes de salvar.
 
 ### Fluxo de autenticação
 
@@ -725,14 +805,14 @@ GET /api/admin?action=session
    │            ↓
    │         POST /api/admin?action=login
    │            ↓
-   │         (sucesso) → openAdminSite() de novo
+   │         (sucesso) → enterAdminDashboard() → bootContent()
    │
-   └── OK → showAdminDashboard()
-              ↓
-           window.__admin.bootContent()
+   └── OK → enterAdminDashboard() → bootContent()
               ↓
            loadContent() + applyContent() + renderDashboard()
 ```
+
+> **Otimização:** após `POST /login` bem-sucedido, o `auth.js` **não refaz** `/session` — a resposta do `/login` já confirma a autenticação. Isso evita uma requisição duplicada.
 
 ### Sessão
 
@@ -791,12 +871,13 @@ E abra `http://localhost:8000`. **Funciona para o site público, mas o painel ad
 
 ### Testar offline
 
-1. Rode `vercel dev` ou um servidor HTTP
-2. Abra o site uma vez (para o SW instalar)
-3. DevTools → **Application → Service Workers** → confirme `jm-vN` ativo
-4. DevTools → **Network** → marque **Offline**
-5. Recarregue → deve aparecer `offline.html`
-6. Navegue para `/politica-privacidade.html` → deve carregar (está no precache)
+1. Registre o SW no `index.html` (ver seção PWA)
+2. Rode `vercel dev` ou um servidor HTTP
+3. Abra o site uma vez (para o SW instalar)
+4. DevTools → **Application → Service Workers** → confirme `jm-vN` ativo
+5. DevTools → **Network** → marque **Offline**
+6. Recarregue → deve aparecer `offline.html`
+7. Navegue para `/politica-privacidade.html` → deve carregar (está no precache)
 
 ---
 
@@ -815,12 +896,14 @@ E abra `http://localhost:8000`. **Funciona para o site público, mas o painel ad
 - ✅ **RLS** habilitada em todas as tabelas
 - ✅ **`service_role` só no servidor** — nunca exposta ao cliente
 - ✅ **Whitelist** de tipos MIME em uploads
+- ✅ **Validação de URL em 3 camadas** no editor de redes sociais (bloqueio de protocolos perigosos, whitelist http(s), detecção de disfarces unicode/percent-encoding, bloqueio de IPs privados)
 - ✅ **Sanitização** de input (remove HTML de campos de nome)
-- ✅ **Content Security Policy** configurada
+- ✅ **Content Security Policy** configurada (`vercel.json`)
 - ✅ **Idempotência** em pagamentos (evita cobranças duplicadas)
 - ✅ **Service Worker não cacheia API** — dados sensíveis sempre vão à rede
 - ✅ **Service Worker não cacheia `/js/admin/**`** — painel sempre fresco
 - ✅ **Service Worker não intercepta Range** — áudio vai direto à rede
+- ✅ **Preços sempre do servidor** — frontend nunca define quanto cobrar
 
 ### Secrets que NUNCA podem ir para o cliente
 
@@ -862,7 +945,7 @@ Envie e-mail para o mantenedor. **Não abra issues públicas** para vulnerabilid
 ### Atualizar assets (CSS/JS/imagens)
 
 1. Edite os arquivos
-2. **Bumpe `CACHE_VERSION` no `sw.js`** (ex: `jm-v14` → `jm-v15`)
+2. **Bumpe `CACHE_VERSION` no `sw.js`** (ex: `jm-v17` → `jm-v18`)
 3. Commit + push
 4. O SW novo será instalado na próxima visita de cada cliente
 
@@ -909,7 +992,7 @@ delete from public.payments_events where created_at < now() - interval '365 days
 
 **Causa (histórica)**: a versão antiga do `auth.js` mostrava o dashboard antes de carregar o conteúdo.
 
-**Solução**: confirme que `api/admin/auth.js` chama `window.__admin.bootContent()` depois de `showAdminDashboard()`. A versão atual já faz isso.
+**Solução**: confirme que `js/admin/auth.js` chama `window.__admin.bootContent()` depois de `showAdminDashboard()`. A versão atual já faz isso.
 
 ### Service Worker não atualiza
 
@@ -918,21 +1001,27 @@ delete from public.payments_events where created_at < now() - interval '365 days
 **Causa**: esqueceu de bumpar `CACHE_VERSION` no `sw.js`.
 
 **Solução**:
-1. Bumpe `CACHE_VERSION` (`jm-v14` → `jm-v15`)
+1. Bumpe `CACHE_VERSION` (`jm-v17` → `jm-v18`)
 2. Commit + push
 3. No navegador: DevTools → Application → Service Workers → **Unregister**
 4. Ctrl+Shift+R
+
+### Service Worker nunca é instalado
+
+**Causa**: o `index.html` não tem o `<script>` de registro do SW.
+
+**Solução**: adicione o registro inline (ver seção PWA / Offline).
 
 ### Site não carrega offline
 
 **Sintoma**: em modo offline, aparece erro de rede em vez de `offline.html`.
 
 **Causas possíveis**:
-- SW não instalado (primeira visita)
+- SW não registrado ou não instalado (primeira visita)
 - `offline.html` não está em `CACHE_STATIC`
 - URL acessada não está no cache e não é navegação
 
-**Solução**: abra o site **uma vez online** para o SW instalar tudo. Depois teste offline.
+**Solução**: registre o SW, abra o site **uma vez online** para o SW instalar tudo. Depois teste offline.
 
 ### Admin retorna 502
 
@@ -975,7 +1064,7 @@ Rode `select * from pg_policies where schemaname = 'public';` para auditar.
 
 ### Build da Vercel falha com "npm ci can only install..."
 
-**Causa**: `package.json` e `package-lock.json` estão dessincronizados.
+**Causa**: `package.json` e `package-lock.json` estão dessincronizados (ou `package-lock.json` ausente).
 
 **Solução**:
 
@@ -986,6 +1075,16 @@ git add package.json package-lock.json
 git commit -m "chore: sincroniza lockfile"
 git push
 ```
+
+### Upload de áudio falha com "Falha ao preparar upload"
+
+**Causas possíveis**:
+- `kind` inválido (deve ser `image`, `audio-preview` ou `audio-full`)
+- `contentType` não está na whitelist (`audio/mpeg`, `audio/mp4`, `audio/wav`, `audio/ogg`)
+- `size` maior que o limite (200 MB para áudio, 5 MB para imagem)
+- `SUPABASE_SERVICE_ROLE_KEY` ausente
+
+**Solução**: verifique a aba Network do DevTools e o log do Vercel.
 
 ---
 
@@ -1009,4 +1108,4 @@ Para licenciamento, entre em contato.
 
 ---
 
-**Última atualização**: 21 de setembro de 2026
+**Última atualização**: 24 de setembro de 2026
