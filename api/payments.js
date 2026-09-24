@@ -459,7 +459,6 @@ async function handleSubscription(req, res) {
 function loadSubscriptionConfig() {
   const token = String(process.env.MP_ACCESS_TOKEN || '').trim();
   const backUrl = String(process.env.MP_BACK_URL || '').trim();
-  const env = String(process.env.MP_ENV || 'production').trim();
 
   const monthlyPrice = parsePrice(process.env.MP_PREMIUM_MONTHLY_PRICE);
   const annualPrice = parsePrice(process.env.MP_PREMIUM_ANNUAL_PRICE);
@@ -472,6 +471,9 @@ function loadSubscriptionConfig() {
   if (!backUrl.startsWith('https://')) missing.push('MP_BACK_URL(https)');
 
   if (missing.length) return { ok: false, missing };
+
+  // ⚡ Detecta ambiente pelo prefixo do token (ignora MP_ENV)
+  const env = token.startsWith('TEST-') ? 'sandbox' : 'production';
 
   return {
     ok: true,
@@ -788,7 +790,6 @@ async function handleRental(req, res) {
 function loadRentalConfig() {
   const token = String(process.env.MP_ACCESS_TOKEN || '').trim();
   const backUrl = String(process.env.MP_BACK_URL || '').trim();
-  const env = String(process.env.MP_ENV || 'production').trim();
 
   const missing = [];
   if (!token) missing.push('MP_ACCESS_TOKEN');
@@ -796,6 +797,9 @@ function loadRentalConfig() {
   if (!backUrl.startsWith('https://')) missing.push('MP_BACK_URL(https)');
 
   if (missing.length) return { ok: false, missing };
+
+  // ⚡ Detecta ambiente pelo prefixo do token (ignora MP_ENV)
+  const env = token.startsWith('TEST-') ? 'sandbox' : 'production';
 
   return {
     ok: true,
