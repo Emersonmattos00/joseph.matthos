@@ -4,9 +4,12 @@
    POST /api/payments?type=subscription → cria preapproval MP
    POST /api/payments?type=rental       → cria preferência MP
    POST /api/payments?type=webhook      → processa notificação MP
+   GET  /api/payments?type=manage       → status da assinatura
+   POST /api/payments?type=manage       → cancelar assinatura
 
    - Assinatura: preapproval (cobrança recorrente)
    - Rental: preference (pagamento único, duração variável)
+   - Manage: gerenciar assinatura do usuário (GET/POST)
    - Webhook: valida HMAC + idempotência via payments_events
    - Preços SEMPRE do servidor (envs + tracks.price_cents)
    - Webhook duplicado NÃO processado → reprocessa (retry_count)
@@ -17,6 +20,7 @@
    2. Duração calculada a partir do planId (não mais fixa em 48h)
    3. Preço lido da env correspondente (RENTAL_PRICE_*)
    4. Fallback para tracks.price_cents se planId inválido (legado)
+   5. NOVO: type=manage — GET status / POST cancel
    ============================================================ */
 
 'use strict';
@@ -75,7 +79,7 @@ const RENTAL_DURATION_HOURS_LEGACY = 48;
 // Handler
 // ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
-  res.setHeader('Allow', 'POST');
+  res.setHeader('Allow', 'GET, POST');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'no-store');
 
@@ -84,7 +88,18 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
   }
 
-  if ((req.method || '').toUpperCase() !== 'POST') {
+  const method = (req.method || 'GET').toUpperCase();
+
+  // ── Manage aceita GET e POST
+  if (type === 'manage') {
+    if (method !== 'GET' && method !== 'POST') {
+      return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
+    }
+    return handleManage(req, res);
+  }
+
+  // ── Todos os outros exigem POST
+  if (method !== 'POST') {
     return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
   }
 
@@ -95,6 +110,182 @@ module.exports = async function handler(req, res) {
     default: return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
   }
 };
+
+// ─────────────────────────────────────────────────────────────
+// MANAGE — gerenciamento de assinatura
+// ------------------------------------------------------------
+// GET  → status atual + flag canManage
+// POST → cancelar assinatura (body: { action: "cancel" })
+// ─────────────────────────────────────────────────────────────
+async function handleManage(req, res) {
+  const ip = clientIp(req);
+  const userAgent = req.headers['user-agent'] || '';
+
+  let user;
+  try {
+    user = await getAuthUser(req);
+  } catch (error) {
+    console.error('[payments/manage] getAuthUser:', error.code || error.message);
+    return sendJson(res, 502, { ok: false, error: 'Autenticação indisponível.' });
+  }
+
+  if (!user || !user.id) {
+    return sendJson(res, 401, { ok: false, error: 'Faça login para continuar.' });
+  }
+
+  const method = (req.method || 'GET').toUpperCase();
+
+  // ── GET: status da assinatura
+  if (method === 'GET') {
+    try {
+      const r = await supabaseAdminRequest(
+        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(user.id)}` +
+          `&select=id,plan,status,provider,provider_sub_id,current_period_end,started_at,canceled_at,created_at` +
+          `&order=created_at.desc&limit=1`,
+        { method: 'GET' }
+      );
+
+      if (!r.response.ok) {
+        return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+      }
+
+      const sub = Array.isArray(r.body) ? r.body[0] : null;
+
+      if (!sub) {
+        return sendJson(res, 200, {
+          ok: true,
+          subscription: null,
+          canManage: false
+        });
+      }
+
+      const isActive = ACTIVE_STATUSES.has(sub.status);
+      const isManaged = sub.provider === 'mercadopago' && !!sub.provider_sub_id;
+
+      return sendJson(res, 200, {
+        ok: true,
+        subscription: {
+          id: sub.id,
+          plan: sub.plan,
+          status: sub.status,
+          provider: sub.provider,
+          currentPeriodEnd: sub.current_period_end,
+          startedAt: sub.started_at,
+          canceledAt: sub.canceled_at,
+          createdAt: sub.created_at
+        },
+        canManage: isActive && isManaged,
+        isManual: sub.provider === 'manual'
+      });
+    } catch (error) {
+      console.error('[payments/manage] GET:', error.message);
+      return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    }
+  }
+
+  // ── POST: cancelar assinatura
+  if (method === 'POST') {
+    const body = parseBody(req);
+    const action = String(body.action || '').trim().toLowerCase();
+
+    if (action !== 'cancel') {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'Ação inválida. Use { action: "cancel" }.'
+      });
+    }
+
+    try {
+      // Busca assinatura ativa
+      const r = await supabaseAdminRequest(
+        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(user.id)}` +
+          `&status=in.(authorized,trialing)` +
+          `&order=created_at.desc&limit=1` +
+          `&select=id,plan,provider,provider_sub_id,current_period_end`,
+        { method: 'GET' }
+      );
+
+      const sub = Array.isArray(r.body) ? r.body[0] : null;
+      if (!sub) {
+        return sendJson(res, 404, {
+          ok: false,
+          error: 'Nenhuma assinatura ativa encontrada.'
+        });
+      }
+
+      // Se for Mercado Pago, cancela lá também
+      const mpToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
+      let mpCancelled = false;
+
+      if (sub.provider === 'mercadopago' && sub.provider_sub_id && mpToken) {
+        try {
+          const mpRes = await fetchMP(
+            `${MP_API_URL}/preapproval/${encodeURIComponent(sub.provider_sub_id)}`,
+            {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${mpToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ status: 'cancelled' })
+            }
+          );
+
+          if (mpRes.ok) {
+            mpCancelled = true;
+            console.log('[payments/manage] MP cancel OK:', sub.provider_sub_id);
+          } else {
+            console.warn(
+              '[payments/manage] MP cancel falhou:',
+              mpRes.status,
+              JSON.stringify(mpRes.body).slice(0, 200)
+            );
+          }
+        } catch (err) {
+          console.error('[payments/manage] MP cancel error:', err.message);
+        }
+      }
+
+      // Cancela localmente
+      const patchRes = await supabaseAdminRequest(
+        `/rest/v1/subscriptions?id=eq.${encodeURIComponent(sub.id)}`,
+        {
+          method: 'PATCH',
+          headers: { Prefer: 'return=minimal' },
+          body: JSON.stringify({
+            status: 'canceled',
+            canceled_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+        }
+      );
+
+      if (!patchRes.response.ok) {
+        return sendJson(res, 502, { ok: false, error: 'Falha ao cancelar assinatura.' });
+      }
+
+      await audit('payment_subscription', {
+        userId: user.id,
+        ip,
+        userAgent,
+        success: true,
+        reason: 'canceled_by_user',
+        metadata: { plan: sub.plan, mpCancelled }
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        canceled: true,
+        mpCancelled,
+        currentPeriodEnd: sub.current_period_end,
+        message: 'Assinatura cancelada. Você mantém acesso até o fim do período.'
+      });
+    } catch (error) {
+      console.error('[payments/manage] POST:', error.message);
+      return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+    }
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // SUBSCRIPTION
@@ -406,7 +597,6 @@ async function handleRental(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Faixa inválida.' });
   }
 
-  // ── Resolve duração + preço a partir do planId
   const planDef = RENTAL_PLAN_DEFS[planId] || null;
 
   let rentalHours;
@@ -414,7 +604,6 @@ async function handleRental(req, res) {
   let priceSource;
 
   if (planDef) {
-    // planId válido → duração + preço das envs
     rentalHours = planDef.hours;
 
     const envPrice = Number(process.env[planDef.envKey]);
@@ -422,14 +611,12 @@ async function handleRental(req, res) {
       unitPrice = Number(envPrice.toFixed(2));
       priceSource = planDef.envKey;
     } else {
-      // env não configurada → cai para tracks.price_cents
       console.warn(
         `[payments/rental] ${planDef.envKey} não configurada, usando tracks.price_cents`
       );
       priceSource = 'tracks.price_cents';
     }
   } else {
-    // planId inválido/ausente → fallback legado
     rentalHours = RENTAL_DURATION_HOURS_LEGACY;
     priceSource = 'legacy_48h';
     console.warn('[payments/rental] planId ausente/inválido, usando fallback 48h');
@@ -447,7 +634,6 @@ async function handleRental(req, res) {
     return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
   }
 
-  // Se não veio preço da env, usa tracks.price_cents
   if (!unitPrice) {
     const priceCents = Number(track.price_cents);
     if (!Number.isInteger(priceCents) || priceCents <= 0 || priceCents > 1_000_000) {
@@ -905,7 +1091,6 @@ async function applyPayment({ resourceId, token }) {
     return;
   }
 
-  // ── Duração vem do metadata (definido na criação da preferência)
   const metadata = data.metadata || {};
   const rentalHours = Number(metadata.rental_hours) || RENTAL_DURATION_HOURS_LEGACY;
 
@@ -1156,7 +1341,7 @@ function parseRef(raw) {
 function parseType(query) {
   if (!query) return null;
   const raw = String(query.type || '').trim().toLowerCase();
-  if (!['subscription', 'rental', 'webhook'].includes(raw)) return null;
+  if (!['subscription', 'rental', 'webhook', 'manage'].includes(raw)) return null;
   return raw;
 }
 
