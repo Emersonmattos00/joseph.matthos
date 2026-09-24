@@ -3073,3 +3073,33 @@ tr.track-row:hover {
     cursor: default;
   }
 }
+
+/* ============================================================
+   46. MODAL DE GERENCIAMENTO DE ASSINATURA
+   ============================================================ */
+
+#manageSubscriptionModal .modal {
+  width: min(480px, 100%);
+}
+
+#manageSubscriptionModal .admin-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+#manageSubscriptionModal .modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+/* Plano atual no modal de planos */
+.plan-card.is-current {
+  border-color: var(--success);
+  box-shadow: 0 0 20px rgba(74, 222, 128, 0.15);
+}
+
+.plan-card.is-current .plan-badge {
+  background: var(--success);
+}
