@@ -2999,3 +2999,77 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     padding: 1.25rem;
   }
 }
+
+/* ============================================================
+   45. ADMIN — Drag & drop de faixas
+   ============================================================ */
+
+/* Célula com o handle */
+.track-drag-cell {
+  width: 32px;
+  padding: 0 !important;
+  text-align: center;
+}
+
+/* Handle visual */
+.track-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: grab;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  letter-spacing: -2px;
+  line-height: 1;
+  user-select: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.track-drag-handle:hover {
+  background: rgba(212, 175, 55, 0.12);
+  color: var(--accent);
+}
+
+.track-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Linha sendo arrastada */
+tr.track-row.dragging {
+  opacity: 0.4;
+  background: rgba(212, 175, 55, 0.08);
+}
+
+/* Indicador de "solta aqui" */
+tr.track-row.drag-over-top {
+  border-top: 2px solid var(--accent);
+  box-shadow: 0 -1px 0 var(--accent);
+}
+
+tr.track-row.drag-over-bottom {
+  border-bottom: 2px solid var(--accent);
+  box-shadow: 0 1px 0 var(--accent);
+}
+
+/* Cursor nas linhas */
+tr.track-row {
+  transition: background 0.15s;
+}
+
+tr.track-row:hover {
+  background: rgba(212, 175, 55, 0.03);
+}
+
+/* Handle escondido no mobile (drag não funciona bem em touch) */
+@media (max-width: 600px) {
+  .track-drag-cell {
+    display: none;
+  }
+
+  tr.track-row {
+    cursor: default;
+  }
+}
