@@ -2639,7 +2639,7 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
   .player-grid {
     grid-template-columns: 1fr;
     overflow-y: auto;
-    padding-top: 48px;
+    padding-top: 16px;
   }
   .player-col {
     padding: 16px 20px 24px;
@@ -2684,12 +2684,13 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     justify-content: center;
     gap: 8px;
     padding: 12px 20px;
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
     background: rgba(0, 0, 0, 0.4);
-    border-top: 1px solid rgba(212, 175, 55, 0.15);
+    border-bottom: 1px solid rgba(212, 175, 55, 0.15);
     position: sticky;
-    bottom: 0;
+    top: 0;
     z-index: 25;
+    flex-shrink: 0;
   }
   .mobile-tab {
     flex: 1;
@@ -3563,7 +3564,7 @@ tr.track-row:hover {
 }
 
 /* ============================================================
-   GLOBAL — Fonte unificada Segoe UI
+   49. GLOBAL — Fonte unificada Segoe UI
    ------------------------------------------------------------
    Substitui TODAS as fontes do site por Segoe UI + fallbacks.
    - Windows       → Segoe UI
