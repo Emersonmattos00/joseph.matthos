@@ -5,18 +5,16 @@
    em ordem aleatória, sem repetição até esgotar, e reembaralha
    automaticamente ao chegar ao fim (loop infinito).
 
-   🔌 API pública:
+   🔌 API pública (usada por js/site.js):
      initRadio(deps)              → injeta dependências do site
      openRadioModal()             → abre o modal da rádio
      onRadioTrackEnded()          → chamado quando uma faixa acaba
      syncRadioOnTrackChange(a,t)  → sincroniza modal com o player
      isRadioActive()              → true se a rádio está tocando
-     resetRadio()                 → limpa estado (logout)
 
-   🔗 Dependências injetadas via initRadio():
+   🔗 Dependências injetadas:
      isPremium, findAlbum, findTrackByIndex, playFromDiscography,
-     shuffleArray, collectAllTracks, openModal, closeModal, esc,
-     setQueue, getQueue, getQueueIndex
+     shuffleArray, collectAllTracks, openModal, closeModal, esc
    ============================================================ */
 
 'use strict';
@@ -121,7 +119,7 @@ export function openRadioModal() {
   // ── Monta fila aleatória
   const queue = shuffleArray(allTracks.slice());
 
-  deps.setQueue(queue);
+  _deps.setQueue(queue);
   _radioActive = true;
 
   renderPlaying(queue, 0);
