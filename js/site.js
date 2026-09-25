@@ -13,6 +13,7 @@
    7. NOVO: Botão de assinatura vai para o MP (como aluguel)
    8. NOVO: Assinantes veem "Gerenciar assinatura"
    9. NOVO: Modal de gerenciamento (status + cancelamento)
+  10. NOVO: Rádio Joseph Matthos (exclusiva para assinantes)
    ============================================================ */
 
 import {
@@ -33,6 +34,15 @@ import {
   toast,
   clone
 } from './utils.js';
+
+import {
+  initRadio,
+  openRadioModal,
+  onRadioTrackEnded,
+  syncRadioOnTrackChange,
+  isRadioActive,
+  resetRadio
+} from './radio.js';
 
 // ─────────────────────────────────────────────────────────────
 // ESTADO GLOBAL
@@ -78,6 +88,28 @@ async function boot() {
     await Promise.allSettled([loadPublicData(), loadUser()]);
     if (!SITE.content) SITE.content = clone(DEFAULT_CONTENT);
 
+    // ── Inicializa a rádio (injeta dependências)
+    initRadio({
+      isPremium,
+      findAlbum,
+      findTrackByIndex,
+      playFromDiscography,
+      shuffleArray,
+      collectAllTracks,
+      openModal,
+      closeModal,
+      esc,
+      setQueue: (queue) => {
+        playerQueue = queue.map((t) => ({
+          albumId: t.albumId,
+          trackIndex: t.trackIndex
+        }));
+        playerQueueIndex = 0;
+      },
+      getQueue: () => playerQueue.slice(),
+      getQueueIndex: () => playerQueueIndex
+    });
+
     initPlayer();
     applyContentToSite();
     renderDiscography();
@@ -90,6 +122,28 @@ async function boot() {
     console.error('❌ Falha no boot:', err);
     try {
       SITE.content = SITE.content || clone(DEFAULT_CONTENT);
+
+      initRadio({
+        isPremium,
+        findAlbum,
+        findTrackByIndex,
+        playFromDiscography,
+        shuffleArray,
+        collectAllTracks,
+        openModal,
+        closeModal,
+        esc,
+        setQueue: (queue) => {
+          playerQueue = queue.map((t) => ({
+            albumId: t.albumId,
+            trackIndex: t.trackIndex
+          }));
+          playerQueueIndex = 0;
+        },
+        getQueue: () => playerQueue.slice(),
+        getQueueIndex: () => playerQueueIndex
+      });
+
       initPlayer();
       applyContentToSite();
       renderDiscography();
@@ -253,6 +307,24 @@ function findTrackByIndex(albumId, realTrackIndex) {
   if (!album) return null;
   const tracks = Array.isArray(album.tracks) ? album.tracks : [];
   return tracks.find((t) => Number(t.trackIndex) === Number(realTrackIndex)) || null;
+}
+
+function collectAllTracks() {
+  const out = [];
+  for (const album of SITE.albums || []) {
+    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    for (const track of tracks) {
+      const idx = Number(track.trackIndex);
+      if (!Number.isInteger(idx) || idx < 0) continue;
+      out.push({
+        albumId: album.id,
+        trackIndex: idx,
+        title: track.title || '—',
+        albumTitle: album.title || ''
+      });
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -863,14 +935,12 @@ async function subscribe(planId) {
     return;
   }
 
-  // Se já tem este plano → abre gerenciar
   if (SITE.user.plan === planId) {
     closeModal('plansModal');
     openManageModal();
     return;
   }
 
-  // Se já é premium e quer outro plano pago → gerenciar (não permite duplicar)
   const currentIsPremium = ['premium', 'anual'].includes(SITE.user.plan);
   const wantsPaid = ['premium', 'anual'].includes(planId);
 
@@ -924,7 +994,6 @@ async function openManageModal() {
     return;
   }
 
-  // Remove qualquer instância antiga
   document.getElementById('manageSubscriptionModal')?.remove();
 
   const overlay = document.createElement('div');
@@ -1062,7 +1131,6 @@ async function openManageModal() {
       `}
     `;
 
-    // Cancelar
     overlay.querySelector('#cancelSubBtn')?.addEventListener('click', async () => {
       if (!confirm('Tem certeza que deseja cancelar sua assinatura?\n\nVocê mantém acesso até o fim do período já pago.')) {
         return;
@@ -1102,7 +1170,6 @@ async function openManageModal() {
       }
     });
 
-    // Reativar
     overlay.querySelector('#renewSubBtn')?.addEventListener('click', () => {
       closeManage();
       openModal('plansModal');
@@ -1201,6 +1268,12 @@ function bindGlobalEvents() {
     });
   }
 
+  // ── RÁDIO — botão no header
+  document.getElementById('navRadioLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openRadioModal();
+  });
+
   document.getElementById('loginBtn')?.addEventListener('click', () => openModal('loginModal'));
   document.getElementById('signupBtn')?.addEventListener('click', () => openModal('signupModal'));
   document.getElementById('userChip')?.addEventListener('click', openAccountModal);
@@ -1219,6 +1292,7 @@ function bindGlobalEvents() {
     SITE.user = null;
     SITE.rentals = [];
     closeModal('accountModal');
+    resetRadio();
     updateAuthUI();
     renderDiscography();
     toast('Você saiu da conta.', 'ℹ');
@@ -1901,6 +1975,9 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     identity: `${albumId}:${realIndex}`
   };
 
+  // ── Sincroniza modal da rádio se estiver aberto
+  syncRadioOnTrackChange(albumId, realIndex);
+
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
@@ -2071,7 +2148,13 @@ function prevTrack() {
   playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
 }
 
-function onEnded() { nextTrack(); }
+function onEnded() {
+  // ── Rádio: loop infinito
+  if (isRadioActive() && onRadioTrackEnded()) return;
+
+  // ── Player normal
+  nextTrack();
+}
 
 function toggleMute() {
   if (!audio) return;
@@ -2400,7 +2483,6 @@ function syncExpandedPlayer(track, album, unlocked) {
   if (title) title.textContent = track.title;
   if (albumEl) albumEl.textContent = `Joseph Matthos · ${album.title}`;
 
-  // ── Capa do álbum (elemento visual)
   if (cover) {
     const safeCover = safeMediaUrl(album.coverImage);
     cover.style.backgroundImage = '';
@@ -2417,7 +2499,6 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
-  // ── Marca d'água do player = capa do álbum
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     const safeCover = safeMediaUrl(album.coverImage);
