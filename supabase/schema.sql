@@ -22,7 +22,6 @@
 --    16. migração de áudio (full_audio → full_path)
 --    17. STORAGE — policies (buckets via Dashboard)
 --    18. reload PostgREST (final)
---    19. STATS — contador de plays por faixa
 --
 --  Idempotente: pode ser rodado várias vezes sem erro.
 --
@@ -225,7 +224,6 @@ create table if not exists public.tracks (
   for_sale     boolean not null default true,
   lyrics       jsonb default '[]'::jsonb,
   published    boolean not null default false,
-  play_count   int not null default 0,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
   unique (album_id, track_index)
@@ -237,8 +235,6 @@ comment on column public.tracks.full_path is
   'Nome do arquivo no bucket privado audio-premium. URL assinada gerada em /api/stream.';
 comment on column public.tracks.preview_path is
   'Nome do arquivo no bucket público audio-preview. URL direta.';
-comment on column public.tracks.play_count is
-  'Número de reproduções completas (premium ou aluguel ativo). Não conta previews.';
 
 create index if not exists idx_tracks_album
   on public.tracks (album_id, track_index);
@@ -800,50 +796,4 @@ create policy "storage_service_role_all"
 -- ═══════════════════════════════════════════════════════════════════════
 --  18. reload PostgREST (final)
 -- ═══════════════════════════════════════════════════════════════════════
-notify pgrst, 'reload schema';
-
-
--- ═══════════════════════════════════════════════════════════════════════
---  19. STATS — contador de plays por faixa
--- ---------------------------------------------------------------
---  play_count = número de vezes que a faixa foi tocada COMPLETA
---  (usuário premium ou aluguel ativo). NÃO conta previews.
---
---  Incrementado via RPC increment_play_count() pelo /api/stream
---  quando uma URL assinada é gerada (fire-and-forget, sem bloquear).
---
---  Idempotente: pode ser rodado várias vezes sem erro.
--- ═══════════════════════════════════════════════════════════════════════
-
--- 19.1. Coluna play_count (garante existência em bancos antigos)
-alter table public.tracks
-  add column if not exists play_count int not null default 0;
-
-comment on column public.tracks.play_count is
-  'Número de reproduções completas (premium ou aluguel ativo). Não conta previews.';
-
--- 19.2. Índice para "top mais tocadas"
-create index if not exists idx_tracks_play_count
-  on public.tracks (play_count desc)
-  where play_count > 0;
-
--- 19.3. Função RPC — incrementar (atômico)
-create or replace function public.increment_play_count(p_track_id bigint)
-returns void
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  update public.tracks
-  set play_count = play_count + 1
-  where id = p_track_id
-    and published = true;
-end;
-$$;
-
-revoke all on function public.increment_play_count(bigint) from anon, authenticated;
-grant execute on function public.increment_play_count(bigint) to service_role;
-
--- 19.4. Reload PostgREST (para expor a RPC)
 notify pgrst, 'reload schema';
