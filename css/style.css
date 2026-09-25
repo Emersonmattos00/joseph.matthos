@@ -51,6 +51,7 @@
    46. MODAL DE GERENCIAMENTO DE ASSINATURA
    47. RÁDIO — botão no header
    48. RÁDIO — modal
+   49. GLOBAL — Fonte unificada Segoe UI (forçada em tudo)
    ============================================================ */
 
 
@@ -3580,57 +3581,17 @@ tr.track-row:hover {
                  'Helvetica Neue', Arial, sans-serif;
 }
 
-/* Força Segoe UI em tudo que declarou fonte literal */
-html, body,
-button, input, textarea, select,
-.music-player,
-.music-player *,
-.music-player .track-title,
-.music-player .track-artist,
-.music-player .player-queue-label,
-.music-player .player-queue-count,
-.music-player .queue-track-cover,
-.music-player .queue-track-title,
-.music-player .queue-track-duration,
-.music-player .queue-track-index,
-.music-player .queue-track-lock,
-.music-player .lyrics-header h3,
-.music-player .lyrics-scroll,
-.music-player .lyric-line,
-.music-player .lyrics-empty,
-.music-player .mobile-tab,
-.music-player .control-btn,
-.music-player .player-actions .btn,
-.music-player .expanded-access,
-.music-player .preview-badge,
-.music-player .progress-container .time-info,
-#radioModal,
-#radioModal *,
-.logo,
-.section-title,
-.album-title,
-.album-cover,
-.track-cover,
-.queue-track-cover,
-#rentModal .rent-track-cover,
-.admin-sidebar .brand h2,
-.admin-sidebar .brand h3,
-.admin-topbar h1,
-.admin-card h3,
-.stat-card .value,
-.backup-card .value,
-.plan-card,
-.plan-name,
-.plan-price,
-.plan-badge,
-.sales-group-title,
-.plan-change-header,
-.plan-change-hint,
-#adminModal h3,
-.quote,
-.frase-card p,
-.contato-info h3,
-.modal h2 {
+/* Força Segoe UI em TODOS os elementos, incluindo os que
+   declararam fontes literais ('Georgia', 'Courier New', etc.) */
+html, body, *,
+*::before, *::after,
+button, input, textarea, select, optgroup, option {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
-               'Helvetica Neue', Arial, sans-serif;
+               'Helvetica Neue', Arial, sans-serif !important;
+}
+
+/* Mantém o monospace apenas onde faz sentido (log de downloads) */
+.downloads-log,
+.downloads-log-line {
+  font-family: 'Consolas', 'Courier New', monospace !important;
 }
