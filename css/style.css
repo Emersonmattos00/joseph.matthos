@@ -3246,3 +3246,154 @@ tr.track-row:hover {
 }
 
 #radioModal .btn { width: 100%; }
+
+/* ============================================================
+   RÁDIO — capa do álbum + controles no "Tocando agora"
+   ============================================================ */
+
+.radio-now-playing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.25rem 1rem 1.5rem;
+  background: rgba(212, 175, 55, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 16px;
+  margin-bottom: 1.2rem;
+}
+
+/* Capa do álbum */
+.radio-cover {
+  width: 140px;
+  height: 140px;
+  border-radius: 12px;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  flex-shrink: 0;
+  transition: transform 0.3s;
+}
+
+.radio-cover:hover {
+  transform: scale(1.03);
+}
+
+.radio-cover--initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 3rem;
+  font-weight: 900;
+  color: rgba(212, 175, 55, 0.5);
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+}
+
+/* Info */
+.radio-now-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  text-align: center;
+  min-width: 0;
+  width: 100%;
+}
+
+.radio-now-info .radio-status-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.radio-now-info .radio-status-track {
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.radio-now-info .radio-status-album {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+/* Controles */
+.radio-controls {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  width: 100%;
+  margin-top: 0.25rem;
+}
+
+.radio-ctrl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.2rem;
+  background: rgba(212, 175, 55, 0.1);
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 40px;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.2s;
+  min-width: 120px;
+}
+
+.radio-ctrl-btn:hover:not(:disabled) {
+  background: rgba(212, 175, 55, 0.22);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.radio-ctrl-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.radio-ctrl-icon {
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-block;
+}
+
+.radio-ctrl-text {
+  font-size: 0.82rem;
+}
+
+/* Mobile — capa menor */
+@media (max-width: 600px) {
+  .radio-cover {
+    width: 110px;
+    height: 110px;
+  }
+
+  .radio-cover--initials {
+    font-size: 2.4rem;
+  }
+
+  .radio-now-info .radio-status-track {
+    font-size: 1.1rem;
+  }
+
+  .radio-ctrl-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.65rem 0.9rem;
+  }
+}
