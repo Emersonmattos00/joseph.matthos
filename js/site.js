@@ -13,6 +13,7 @@
    7. NOVO: Botão de assinatura vai para o MP (como aluguel)
    8. NOVO: Assinantes veem "Gerenciar assinatura"
    9. NOVO: Modal de gerenciamento (status + cancelamento)
+  10. NOVO: Rádio Joseph Matthos (exclusiva para assinantes)
    ============================================================ */
 
 import {
@@ -33,6 +34,15 @@ import {
   toast,
   clone
 } from './utils.js';
+
+import {
+  initRadio,
+  openRadioModal,
+  onRadioTrackEnded,
+  syncRadioOnTrackChange,
+  isRadioActive,
+  resetRadio
+} from './radio.js';
 
 // ─────────────────────────────────────────────────────────────
 // ESTADO GLOBAL
@@ -85,17 +95,69 @@ async function boot() {
     updateAuthUI();
     bindGlobalEvents();
 
+    // ── Inicializa a rádio (injeta dependências) — por último
+    try {
+      initRadio({
+        isPremium,
+        findAlbum,
+        findTrackByIndex,
+        playFromDiscography,
+        shuffleArray,
+        collectAllTracks,
+        openModal,
+        closeModal,
+        esc,
+        setQueue: (queue) => {
+          playerQueue = queue.map((t) => ({
+            albumId: t.albumId,
+            trackIndex: t.trackIndex
+          }));
+          playerQueueIndex = 0;
+        },
+        getQueue: () => playerQueue.slice(),
+        getQueueIndex: () => playerQueueIndex
+      });
+    } catch (err) {
+      console.error('[radio] initRadio falhou:', err);
+    }
+
     console.log('✅ site.js pronto');
   } catch (err) {
     console.error('❌ Falha no boot:', err);
     try {
       SITE.content = SITE.content || clone(DEFAULT_CONTENT);
+
       initPlayer();
       applyContentToSite();
       renderDiscography();
       renderPlaylists();
       updateAuthUI();
       bindGlobalEvents();
+
+      try {
+        initRadio({
+          isPremium,
+          findAlbum,
+          findTrackByIndex,
+          playFromDiscography,
+          shuffleArray,
+          collectAllTracks,
+          openModal,
+          closeModal,
+          esc,
+          setQueue: (queue) => {
+            playerQueue = queue.map((t) => ({
+              albumId: t.albumId,
+              trackIndex: t.trackIndex
+            }));
+            playerQueueIndex = 0;
+          },
+          getQueue: () => playerQueue.slice(),
+          getQueueIndex: () => playerQueueIndex
+        });
+      } catch (err) {
+        console.error('[radio] initRadio falhou (fallback):', err);
+      }
     } catch (inner) {
       console.error('❌ Fallback também falhou:', inner);
     }
@@ -253,6 +315,24 @@ function findTrackByIndex(albumId, realTrackIndex) {
   if (!album) return null;
   const tracks = Array.isArray(album.tracks) ? album.tracks : [];
   return tracks.find((t) => Number(t.trackIndex) === Number(realTrackIndex)) || null;
+}
+
+function collectAllTracks() {
+  const out = [];
+  for (const album of SITE.albums || []) {
+    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    for (const track of tracks) {
+      const idx = Number(track.trackIndex);
+      if (!Number.isInteger(idx) || idx < 0) continue;
+      out.push({
+        albumId: album.id,
+        trackIndex: idx,
+        title: track.title || '—',
+        albumTitle: album.title || ''
+      });
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1196,6 +1276,12 @@ function bindGlobalEvents() {
     });
   }
 
+  // ── RÁDIO — botão no header
+  document.getElementById('navRadioLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    openRadioModal();
+  });
+
   document.getElementById('loginBtn')?.addEventListener('click', () => openModal('loginModal'));
   document.getElementById('signupBtn')?.addEventListener('click', () => openModal('signupModal'));
   document.getElementById('userChip')?.addEventListener('click', openAccountModal);
@@ -1214,6 +1300,7 @@ function bindGlobalEvents() {
     SITE.user = null;
     SITE.rentals = [];
     closeModal('accountModal');
+    resetRadio();
     updateAuthUI();
     renderDiscography();
     toast('Você saiu da conta.', 'ℹ');
@@ -1896,6 +1983,9 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     identity: `${albumId}:${realIndex}`
   };
 
+  // ── Sincroniza modal da rádio se estiver aberto
+  syncRadioOnTrackChange(albumId, realIndex);
+
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
@@ -2066,7 +2156,13 @@ function prevTrack() {
   playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
 }
 
-function onEnded() { nextTrack(); }
+function onEnded() {
+  // ── Rádio: loop infinito
+  if (isRadioActive() && onRadioTrackEnded()) return;
+
+  // ── Player normal
+  nextTrack();
+}
 
 function toggleMute() {
   if (!audio) return;
