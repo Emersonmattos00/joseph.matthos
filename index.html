@@ -74,7 +74,6 @@
     <div class="container header-inner">
       <a href="#" class="logo" id="siteLogo" aria-label="Página inicial">Joseph <span>Matthos</span></a>
       <nav aria-label="Navegação principal">
-        <a href="#" id="navRadioLink" class="nav-radio" aria-label="Abrir Rádio Joseph Matthos"><span class="nav-radio-icon" aria-hidden="true">📻</span><span class="nav-radio-text">Rádio</span></a>
         <a href="#discografia">Discografia</a>
         <a href="#" id="navPlansLink" data-action="open-plans">Assinar</a>
         <a href="#sobre">Sobre</a>
@@ -242,12 +241,6 @@
         </svg>
       </button>
 
-      <!-- Badge RÁDIO (visível apenas quando a rádio está ativa) -->
-      <div class="radio-badge" id="radioBadge" hidden>
-        <span class="radio-badge-dot" aria-hidden="true"></span>
-        <span>RÁDIO</span>
-      </div>
-
       <!-- Botão fechar -->
       <button class="player-close" id="closeExpandedPlayer" aria-label="Fechar player">
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -281,7 +274,7 @@
               </div>
             </div>
 
-            <!-- CONTROLES: shuffle, prev, play, stop, next, mute -->
+            <!-- CONTROLES: shuffle, prev, play, next, mute (mesma linha) -->
             <div class="controls">
               <button class="control-btn control-btn-shuffle" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
                 <svg viewBox="0 0 24 24" fill="currentColor">
@@ -298,12 +291,6 @@
               <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
                 <svg viewBox="0 0 24 24" id="expandedPlayIcon">
                   <path d="M8 5v14l11-7z"/>
-                </svg>
-              </button>
-
-              <button class="control-btn control-btn-stop" id="expandedStopBtn" title="Parar rádio" aria-label="Parar rádio" hidden>
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M6 6h12v12H6z"/>
                 </svg>
               </button>
 
@@ -334,24 +321,13 @@
 
         </div>
 
-        <!-- COLUNA DIREITA: LETRA / FILA DA RÁDIO -->
+        <!-- COLUNA DIREITA: LETRA -->
         <div class="lyrics-col">
           <div class="lyrics-header">
-            <h3 id="rightPanelTitle">Letra</h3>
+            <h3>Letra</h3>
           </div>
-
-          <!-- Painel: Letra -->
           <div class="lyrics-scroll" id="expandedLyricsContent">
             <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
-          </div>
-
-          <!-- Painel: Fila da rádio (só visível na rádio) -->
-          <div class="radio-queue-panel" id="radioQueuePanel" hidden>
-            <div class="radio-queue-header">
-              <span class="radio-queue-label">Fila da rádio</span>
-              <span class="radio-queue-count" id="radioQueueCount"></span>
-            </div>
-            <div class="radio-queue-list" id="radioQueueList"></div>
           </div>
         </div>
 
