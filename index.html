@@ -74,6 +74,7 @@
     <div class="container header-inner">
       <a href="#" class="logo" id="siteLogo" aria-label="Página inicial">Joseph <span>Matthos</span></a>
       <nav aria-label="Navegação principal">
+        <a href="#" id="navRadioLink" class="nav-radio" aria-label="Abrir Rádio Joseph Matthos"><span class="nav-radio-icon" aria-hidden="true">📻</span><span class="nav-radio-text">Rádio</span></a>
         <a href="#discografia">Discografia</a>
         <a href="#" id="navPlansLink" data-action="open-plans">Assinar</a>
         <a href="#sobre">Sobre</a>
@@ -398,6 +399,25 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════════
+     RÁDIO JOSEPH MATTHOS — exclusivo para assinantes
+     ═══════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="radioModal" role="dialog" aria-modal="true" aria-labelledby="radioTitle">
+  <div class="modal modal-wide">
+    <button class="modal-close" data-close aria-label="Fechar rádio">×</button>
+
+    <div class="radio-header">
+      <div class="radio-icon" aria-hidden="true">📻</div>
+      <h2 id="radioTitle">Rádio <span style="color:var(--accent);">Joseph Matthos</span></h2>
+      <p class="sub" id="radioSub">Toda a discografia, em ordem aleatória, sem parar.</p>
+    </div>
+
+    <div id="radioContent">
+      <!-- Preenchido por js/radio.js -->
+    </div>
+  </div>
+</div>
+  
   <!-- ═══════════════════════════════════════════════════════════
        MODAL DE ALUGUEL — escolha da duração
        ═══════════════════════════════════════════════════════════ -->
