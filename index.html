@@ -226,21 +226,6 @@
   </div>
   <audio id="audio" preload="auto"></audio>
 
-  <!-- Botão flutuante da rádio (aparece quando minimizada) -->
-  <button type="button"
-          id="radioFab"
-          class="radio-fab"
-          hidden
-          aria-label="Maximizar Rádio Joseph Matthos"
-          title="Maximizar Rádio">
-    <span class="radio-fab-icon" aria-hidden="true">📻</span>
-    <span class="radio-fab-info">
-      <span class="radio-fab-label">RÁDIO</span>
-      <span class="radio-fab-track" id="radioFabTrack">Tocando…</span>
-    </span>
-    <span class="radio-fab-pulse" aria-hidden="true"></span>
-  </button>
-
   <!-- ═══════════════════════════════════════════════════════════
        PLAYER EXPANDIDO — Estilo Spotify + fila + marca d'água
        ═══════════════════════════════════════════════════════════ -->
@@ -502,7 +487,6 @@
         <button data-tab="sobre"><span class="ico">👤</span> Sobre</button>
         <button data-tab="filosofia"><span class="ico">💭</span> Filosofia</button>
         <button data-tab="discografia"><span class="ico">💿</span> Discografia</button>
-        <button data-tab="estatisticas"><span class="ico">📈</span> Estatísticas</button>
         <button data-tab="vendas"><span class="ico">💰</span> Vendas</button>
         <button data-tab="planos"><span class="ico">💳</span> Planos</button>
         <button data-tab="contato"><span class="ico">📞</span> Contato</button>
@@ -600,24 +584,6 @@
     <h3>Discografia <span class="hint">álbuns e faixas</span></h3>
     <div id="albumsEditor"></div>
        </div>
-      </div>
-
-      <div class="admin-section" id="tab-estatisticas">
-        <div class="stats-grid" id="statsCards"></div>
-
-        <div class="admin-card">
-          <h3>Músicas <span class="hint">ordem alfabética · clique no cabeçalho para ordenar</span></h3>
-          <div id="statsTable"></div>
-        </div>
-
-        <div class="admin-card">
-          <h3>Top 10</h3>
-          <div id="statsTop" class="stats-top-wrap"></div>
-        </div>
-
-        <div class="admin-card">
-          <div id="statsNever"></div>
-        </div>
       </div>
 
       <div class="admin-section" id="tab-vendas">
