@@ -22,6 +22,9 @@
      createAlbum(payload)
      listAlbums()
 
+     getDownloadUrl(trackId)
+     getDownloadAlbum(albumId)
+
    🔧 CONTRATO COM O BACKEND
    ------------------------------------------------------------
    O `api/admin.js` mapeia os actions assim:
@@ -294,6 +297,49 @@ export function requestUploadSign(payload) {
  */
 export function confirmUpload(payload) {
   return apiFetch('upload-confirm', { method: 'POST', body: payload });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers semânticos — DOWNLOADS (admin)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Retorna URL assinada para baixar uma faixa (áudio completo).
+ * A URL expira em 1 hora e força download via Content-Disposition.
+ *
+ * @param {number|string} trackId
+ * @returns {Promise<{ ok: true, url: string, filename: string, expiresIn: number }>}
+ *
+ * @example
+ *   const { url, filename } = await getDownloadUrl(42);
+ *   // Dispara download no navegador
+ */
+export function getDownloadUrl(trackId) {
+  return apiFetch('download-url', {
+    method: 'GET',
+    query: { id: trackId }
+  });
+}
+
+/**
+ * Retorna URLs assinadas para todas as faixas de um álbum.
+ * Cada URL expira em 1 hora. O frontend itera e baixa uma a uma.
+ *
+ * @param {string} albumId
+ * @returns {Promise<{ ok: true, albumId: string, expiresIn: number, tracks: Array<{ id, title, trackIndex, url, filename, error }> }>}
+ *
+ * @example
+ *   const { tracks } = await getDownloadAlbum('album-bbb');
+ *   for (const t of tracks) {
+ *     if (t.url) triggerDownload(t.url, t.filename);
+ *     await sleep(600);
+ *   }
+ */
+export function getDownloadAlbum(albumId) {
+  return apiFetch('download-album', {
+    method: 'GET',
+    query: { id: albumId }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
