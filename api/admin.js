@@ -30,6 +30,12 @@
    DELETE /api/admin?action=track&id=X   → exclui faixa
    PATCH  /api/admin?action=track-order  → reordena faixas
 
+   ── Downloads (admin) ────────────────────────────────────────
+   GET    /api/admin?action=download-url&id=TRACK_ID
+          → URL assinada para baixar uma faixa (áudio completo)
+   GET    /api/admin?action=download-album&id=ALBUM_ID
+          → URLs assinadas para todas as faixas do álbum
+
    - Sessão via cookie __Host-jm_admin (HttpOnly + HMAC assinado)
    - ADMIN_SESSION_SECRET exige mínimo de 32 caracteres
    - CSRF: Origin check em todos os métodos mutantes
@@ -41,6 +47,7 @@
        audio-full    → audio-premium   (privado, presigned)
    - Playlists: sanitizadas para aceitar apenas track.id (integer)
    - Ao mudar plano para "free", assinaturas no MP são canceladas
+   - Downloads: URLs assinadas de 1h com Content-Disposition: attachment
    ============================================================ */
 
 'use strict';
@@ -104,12 +111,14 @@ const AUDIT_LIMIT = 100;
 const AUDIT_MAX_LIMIT = 500;
 
 // ── Upload — limites e buckets
-// Imagens: Base64 (cabe no body da Vercel)
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;              // 5 MB
 const MAX_AUDIO_SIZE = 200 * 1024 * 1024;            // 200 MB (presigned)
 const MAX_AUDIO_SIZE_LEGACY = 4 * 1024 * 1024;       // 4 MB (Base64 legado)
 const UPLOAD_TIMEOUT_MS = 180_000;                   // 3 min
 const SIGNED_UPLOAD_TTL_SEC = 900;                   // 15 min para concluir o PUT
+
+// ── Download — TTL da URL assinada de download (admin)
+const DOWNLOAD_TTL_SEC = 3600;                       // 1 hora
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg']);
@@ -137,7 +146,10 @@ const VALID_ACTIONS = new Set([
   'album',
   'tracks',
   'track',
-  'track-order'
+  'track-order',
+  // Downloads
+  'download-url',
+  'download-album'
 ]);
 
 const VALID_ALBUM_TYPES = new Set(['album', 'ep', 'single']);
@@ -275,6 +287,15 @@ module.exports = async function handler(req, res) {
     case 'track-order':
       if (method === 'PATCH') return handleReorderTracks(req, res, session);
       return methodNotAllowed(res, 'PATCH');
+
+    // ── Downloads (admin)
+    case 'download-url':
+      if (method !== 'GET') return methodNotAllowed(res, 'GET');
+      return handleDownloadUrl(req, res, session);
+
+    case 'download-album':
+      if (method !== 'GET') return methodNotAllowed(res, 'GET');
+      return handleDownloadAlbum(req, res, session);
 
     default:
       return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
@@ -445,11 +466,7 @@ async function handleGetContent(req, res) {
 
 // ─────────────────────────────────────────────────────────────
 // CONTENT — PUT
-// ------------------------------------------------------------
-// Sanitiza playlists antes de persistir:
-//   - tracks deve ser array de inteiros positivos (track.id)
-//   - strings legadas "albumId:index" são descartadas
-// ============================================================
+// ─────────────────────────────────────────────────────────────
 async function handlePutContent(req, res, session) {
   const body = parseBody(req);
   const data = body.data;
@@ -535,9 +552,6 @@ async function handlePutContent(req, res, session) {
 
 /**
  * Sanitiza o array de playlists.
- * - Aceita apenas `tracks` numéricos positivos
- * - Remove strings legadas
- * - Limita tamanho de campos
  */
 function sanitizePlaylists(playlists) {
   if (!Array.isArray(playlists)) return [];
@@ -583,10 +597,7 @@ function sanitizePlaylists(playlists) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOAD — Base64 (imagens e áudio pequeno legado)
-// ------------------------------------------------------------
-// ⚠️  Base64 infla ~33% e a Vercel corta body em ~4.5 MB.
-//     Para áudio grande, use upload-sign (presigned).
+// UPLOAD — Base64
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
@@ -624,7 +635,6 @@ async function handleUpload(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Base64 inválido.' });
   }
 
-  // ⚠️  Áudio via Base64 tem limite duro de 4 MB (Vercel body = 4.5 MB)
   const maxBytes = isImage ? MAX_IMAGE_SIZE : MAX_AUDIO_SIZE_LEGACY;
 
   if (buffer.length > maxBytes) {
@@ -640,7 +650,6 @@ async function handleUpload(req, res, session) {
     });
   }
 
-  // Nome único do arquivo
   const ext = filename.split('.').pop() || (isImage ? 'jpg' : 'mp3');
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = isImage ? `images/${uniqueName}` : uniqueName;
@@ -665,7 +674,6 @@ async function handleUpload(req, res, session) {
     });
   }
 
-  // URL pública só para buckets públicos
   const isPublicBucket = bucket !== 'audio-premium';
   const publicUrl = isPublicBucket
     ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
@@ -679,22 +687,14 @@ async function handleUpload(req, res, session) {
 
   return sendJson(res, 200, {
     ok: true,
-    url: publicUrl,      // null para áudio full (bucket privado)
-    path,                // usar em tracks.preview_path ou tracks.full_path
+    url: publicUrl,
+    path,
     bucket
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOAD SIGN — gera URL assinada de PUT para o Supabase Storage
-// ------------------------------------------------------------
-// Body esperado:
-//   { kind, filename, contentType, size }
-//
-// Resposta:
-//   { ok: true, uploadUrl, path, bucket, expiresIn }
-//
-// O browser faz PUT direto no Supabase, sem passar pela Vercel.
+// UPLOAD SIGN
 // ─────────────────────────────────────────────────────────────
 async function handleUploadSign(req, res, session) {
   const body = parseBody(req);
@@ -749,12 +749,10 @@ async function handleUploadSign(req, res, session) {
     });
   }
 
-  // Nome único
   const ext = filename.split('.').pop() || (isImage ? 'jpg' : 'mp3');
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = isImage ? `images/${uniqueName}` : uniqueName;
 
-  // Gera URL assinada de PUT
   const signed = await createSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
 
   if (!signed.ok) {
@@ -783,14 +781,7 @@ async function handleUploadSign(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOAD CONFIRM — registra o path no banco após o PUT
-// ------------------------------------------------------------
-// Body esperado:
-//   { kind, path, albumId?, trackIndex? }
-//
-// Sem albumId/trackIndex: só valida que o arquivo existe.
-// Com albumId/trackIndex: atualiza tracks.preview_path ou
-//                         tracks.full_path.
+// UPLOAD CONFIRM
 // ─────────────────────────────────────────────────────────────
 async function handleUploadConfirm(req, res, session) {
   const body = parseBody(req);
@@ -818,7 +809,6 @@ async function handleUploadConfirm(req, res, session) {
     });
   }
 
-  // Verifica se o arquivo realmente existe no Storage
   const exists = await objectExists(bucket, path);
   if (!exists) {
     return sendJson(res, 400, {
@@ -828,7 +818,6 @@ async function handleUploadConfirm(req, res, session) {
     });
   }
 
-  // ── Associação a uma faixa específica (opcional)
   if (albumId && trackIndex !== null) {
     const field = kind === 'audio-full'
       ? 'full_path'
@@ -890,7 +879,6 @@ async function handleUploadConfirm(req, res, session) {
     });
   }
 
-  // ── Sem associação: só confirma
   const isPublic = bucket !== 'audio-premium';
   const publicUrl = isPublic
     ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
@@ -1368,7 +1356,7 @@ function countBy(arr, key) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUDIT — leitura do histórico de eventos
+// AUDIT
 // ─────────────────────────────────────────────────────────────
 async function handleGetAudit(req, res) {
   const source = String(req.query?.source || 'admin').toLowerCase();
@@ -1830,6 +1818,239 @@ async function handleReorderTracks(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// DOWNLOADS (admin)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/admin?action=download-url&id=TRACK_ID
+ *
+ * Gera URL assinada (1h) para baixar o áudio completo de uma faixa.
+ * Usa o service_role no servidor → ignora RLS.
+ * O parâmetro `download` do Supabase força Content-Disposition: attachment.
+ */
+async function handleDownloadUrl(req, res, session) {
+  const trackId = Number(req.query?.id);
+  if (!Number.isFinite(trackId) || trackId <= 0) {
+    return sendJson(res, 400, { ok: false, error: 'ID de faixa inválido.' });
+  }
+
+  try {
+    const r = await supabaseAdminRequest(
+      `/rest/v1/tracks?id=eq.${trackId}&select=id,title,full_path,album_id,track_index&limit=1`,
+      { method: 'GET' }
+    );
+
+    if (!r.response.ok) {
+      return sendJson(res, 502, { ok: false, error: 'Falha ao buscar faixa.' });
+    }
+
+    const track = Array.isArray(r.body) ? r.body[0] : null;
+    if (!track) {
+      return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    }
+
+    if (!track.full_path) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'Esta faixa não tem áudio completo cadastrado.',
+        code: 'NO_FULL_PATH'
+      });
+    }
+
+    const baseName = sanitizeFilename(track.title);
+    const filename = `${baseName}.mp3`;
+
+    const signed = await createSignedDownloadUrl(
+      'audio-premium',
+      track.full_path,
+      DOWNLOAD_TTL_SEC,
+      filename
+    );
+
+    if (!signed.ok) {
+      console.error('[admin/download-url] sign falhou:', signed.error);
+      return sendJson(res, 502, {
+        ok: false,
+        error: 'Falha ao preparar download.',
+        code: 'SIGN_FAILED'
+      });
+    }
+
+    await audit('download.track', {
+      actor: session.user,
+      target: String(trackId),
+      metadata: { title: track.title, album: track.album_id }
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      url: signed.url,
+      filename: signed.filename,
+      expiresIn: DOWNLOAD_TTL_SEC
+    });
+  } catch (err) {
+    console.error('[admin/download-url] erro:', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+  }
+}
+
+/**
+ * GET /api/admin?action=download-album&id=ALBUM_ID
+ *
+ * Gera URLs assinadas (1h) para todas as faixas de um álbum.
+ * O frontend itera e baixa uma a uma.
+ */
+async function handleDownloadAlbum(req, res, session) {
+  const albumId = String(req.query?.id || '').trim();
+  if (!albumId) {
+    return sendJson(res, 400, { ok: false, error: 'ID do álbum ausente.' });
+  }
+
+  try {
+    const r = await supabaseAdminRequest(
+      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
+        `&select=id,title,full_path,track_index` +
+        `&order=track_index.asc`,
+      { method: 'GET' }
+    );
+
+    if (!r.response.ok) {
+      return sendJson(res, 502, { ok: false, error: 'Falha ao buscar faixas.' });
+    }
+
+    const tracks = Array.isArray(r.body) ? r.body : [];
+    if (!tracks.length) {
+      return sendJson(res, 404, { ok: false, error: 'Álbum sem faixas.' });
+    }
+
+    const results = [];
+
+    for (const t of tracks) {
+      if (!t.full_path) {
+        results.push({
+          id: t.id,
+          title: t.title,
+          trackIndex: t.track_index,
+          url: null,
+          filename: null,
+          error: 'SEM_AUDIO'
+        });
+        continue;
+      }
+
+      const idx = String(t.track_index).padStart(2, '0');
+      const baseName = sanitizeFilename(t.title);
+      const filename = `${idx} - ${baseName}.mp3`;
+
+      const signed = await createSignedDownloadUrl(
+        'audio-premium',
+        t.full_path,
+        DOWNLOAD_TTL_SEC,
+        filename
+      );
+
+      results.push({
+        id: t.id,
+        title: t.title,
+        trackIndex: t.track_index,
+        url: signed.ok ? signed.url : null,
+        filename: signed.ok ? signed.filename : null,
+        error: signed.ok ? null : 'SIGN_FAILED'
+      });
+    }
+
+    await audit('download.album', {
+      actor: session.user,
+      target: albumId,
+      metadata: { count: tracks.length }
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      albumId,
+      expiresIn: DOWNLOAD_TTL_SEC,
+      tracks: results
+    });
+  } catch (err) {
+    console.error('[admin/download-album] erro:', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
+  }
+}
+
+/**
+ * Gera URL assinada com `download` param (força Content-Disposition).
+ */
+async function createSignedDownloadUrl(bucket, path, expiresInSec, downloadFilename) {
+  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+
+  if (!url || !key) return { ok: false, error: 'Supabase não configurado.' };
+
+  const clean = String(path)
+    .split('/')
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join('/');
+
+  const endpoint = `${url}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${clean}`;
+
+  try {
+    const body = { expiresIn: expiresInSec };
+    if (downloadFilename) body.download = downloadFilename;
+
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('[admin/sign-download] Supabase:', r.status, text.slice(0, 300));
+      return { ok: false, error: `http_${r.status}` };
+    }
+
+    const data = await r.json();
+    if (!data?.signedURL) return { ok: false, error: 'signed_url_missing' };
+
+    let signedUrl = String(data.signedURL);
+    if (!/^https?:\/\//i.test(signedUrl)) {
+      signedUrl = `${url}/storage/v1${signedUrl.startsWith('/') ? '' : '/'}${signedUrl}`;
+    }
+
+    return {
+      ok: true,
+      url: signedUrl,
+      filename: downloadFilename || clean.split('/').pop()
+    };
+  } catch (err) {
+    console.error('[admin/sign-download] erro:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Sanitiza nome de arquivo para download.
+ * - Remove acentos
+ * - Substitui caracteres não permitidos por _
+ * - Limita a 100 caracteres
+ */
+function sanitizeFilename(s) {
+  return String(s || 'audio')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._ -]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100)
+    || 'audio';
+}
+
+// ─────────────────────────────────────────────────────────────
 // SESSÃO
 // ─────────────────────────────────────────────────────────────
 function verifySession(req) {
@@ -1886,12 +2107,6 @@ function parseTotalFromHeaders(headers) {
 
 // ─────────────────────────────────────────────────────────────
 // GEN-HASH — TEMPORÁRIO
-// ------------------------------------------------------------
-// Gera um hash scrypt de uma senha. Requer sessão de admin.
-//
-// GET /api/admin?action=gen-hash&password=XXXX
-//
-// ⚠️ REMOVER ESTA FUNÇÃO após gerar o hash novo.
 // ─────────────────────────────────────────────────────────────
 async function handleGenHash(req, res, session) {
   const password = String(req.query?.password || '');
