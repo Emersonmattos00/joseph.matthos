@@ -232,6 +232,12 @@
   <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
     <div class="music-player">
 
+      <!-- Toggle mobile: Música / Letra (cabeçalho) -->
+      <div class="mobile-tabs" role="tablist">
+        <button class="mobile-tab active" data-tab="music" role="tab" aria-selected="true">Música</button>
+        <button class="mobile-tab" data-tab="lyrics" role="tab" aria-selected="false">Letra</button>
+      </div>
+
       <!-- Botão tela cheia -->
       <button class="player-fullscreen" id="expandedFullscreenBtn" aria-label="Tela cheia" title="Tela cheia">
         <svg class="icon-enter" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -332,12 +338,6 @@
           </div>
         </div>
 
-      </div>
-
-      <!-- Toggle mobile: Música / Letra -->
-      <div class="mobile-tabs" role="tablist">
-        <button class="mobile-tab active" data-tab="music" role="tab" aria-selected="true">Música</button>
-        <button class="mobile-tab" data-tab="lyrics" role="tab" aria-selected="false">Letra</button>
       </div>
 
     </div>
