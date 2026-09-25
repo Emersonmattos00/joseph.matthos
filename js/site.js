@@ -14,6 +14,7 @@
    8. NOVO: Assinantes veem "Gerenciar assinatura"
    9. NOVO: Modal de gerenciamento (status + cancelamento)
   10. NOVO: Rádio Joseph Matthos (exclusiva para assinantes)
+  11. NOVO: Rádio usa o mesmo player expandido (STOP + fila clicável)
    ============================================================ */
 
 import {
@@ -41,6 +42,7 @@ import {
   onRadioTrackEnded,
   syncRadioOnTrackChange,
   isRadioActive,
+  stopRadio,
   resetRadio
 } from './radio.js';
 
@@ -107,7 +109,12 @@ async function boot() {
         playerQueueIndex = 0;
       },
       getQueue: () => playerQueue.slice(),
-      getQueueIndex: () => playerQueueIndex
+      getQueueIndex: () => playerQueueIndex,
+      setQueueIndex: (idx) => {
+        if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
+          playerQueueIndex = idx;
+        }
+      }
     });
 
     initPlayer();
@@ -141,7 +148,12 @@ async function boot() {
           playerQueueIndex = 0;
         },
         getQueue: () => playerQueue.slice(),
-        getQueueIndex: () => playerQueueIndex
+        getQueueIndex: () => playerQueueIndex,
+        setQueueIndex: (idx) => {
+          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
+            playerQueueIndex = idx;
+          }
+        }
       });
 
       initPlayer();
@@ -494,18 +506,18 @@ function renderPlans() {
       let disabled = p.disabled;
       let dataAttrs = `data-plan="${esc(p.id)}"`;
 
-      if (isCurrent) {
+      if (isCurrent && isManageView) {
+        ctaText = 'Gerenciar assinatura';
+        disabled = false;
+        dataAttrs = 'data-manage="true"';
+      } else if (isCurrent) {
         ctaText = 'Plano atual';
         disabled = true;
         dataAttrs = '';
       } else if (isManageView) {
-        if (currentPlan === p.id) {
-          ctaText = 'Gerenciar assinatura';
-          dataAttrs = 'data-manage="true"';
-        } else {
-          ctaText = 'Mudar para este plano';
-          dataAttrs = `data-plan="${esc(p.id)}"`;
-        }
+        ctaText = 'Mudar para este plano';
+        disabled = false;
+        dataAttrs = `data-plan="${esc(p.id)}"`;
       } else if (!available) {
         ctaText = 'Pagamento indisponível';
         disabled = true;
@@ -2428,8 +2440,11 @@ function closeExpandedPlayer() {
   if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
 
-  playerQueue = [];
-  playerQueueIndex = -1;
+  // ── Se for rádio, não limpa a fila (ela continua tocando)
+  if (!isRadioActive()) {
+    playerQueue = [];
+    playerQueueIndex = -1;
+  }
 
   clearRenewTimer();
 
