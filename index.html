@@ -226,6 +226,21 @@
   </div>
   <audio id="audio" preload="auto"></audio>
 
+  <!-- Botão flutuante da rádio (aparece quando minimizada) -->
+  <button type="button"
+          id="radioFab"
+          class="radio-fab"
+          hidden
+          aria-label="Maximizar Rádio Joseph Matthos"
+          title="Maximizar Rádio">
+    <span class="radio-fab-icon" aria-hidden="true">📻</span>
+    <span class="radio-fab-info">
+      <span class="radio-fab-label">RÁDIO</span>
+      <span class="radio-fab-track" id="radioFabTrack">Tocando…</span>
+    </span>
+    <span class="radio-fab-pulse" aria-hidden="true"></span>
+  </button>
+
   <!-- ═══════════════════════════════════════════════════════════
        PLAYER EXPANDIDO — Estilo Spotify + fila + marca d'água
        ═══════════════════════════════════════════════════════════ -->
@@ -487,10 +502,12 @@
         <button data-tab="sobre"><span class="ico">👤</span> Sobre</button>
         <button data-tab="filosofia"><span class="ico">💭</span> Filosofia</button>
         <button data-tab="discografia"><span class="ico">💿</span> Discografia</button>
+        <button data-tab="estatisticas"><span class="ico">📈</span> Estatísticas</button>
         <button data-tab="vendas"><span class="ico">💰</span> Vendas</button>
         <button data-tab="planos"><span class="ico">💳</span> Planos</button>
         <button data-tab="contato"><span class="ico">📞</span> Contato</button>
         <button data-tab="usuarios"><span class="ico">👥</span> Usuários</button>
+        <button data-tab="downloads"><span class="ico">⬇</span> Downloads</button>
         <button data-tab="aparencia"><span class="ico">🎨</span> Aparência</button>
         <button data-tab="backup"><span class="ico">💾</span> Backup</button>
       </nav>
@@ -585,6 +602,24 @@
        </div>
       </div>
 
+      <div class="admin-section" id="tab-estatisticas">
+        <div class="stats-grid" id="statsCards"></div>
+
+        <div class="admin-card">
+          <h3>Músicas <span class="hint">ordem alfabética · clique no cabeçalho para ordenar</span></h3>
+          <div id="statsTable"></div>
+        </div>
+
+        <div class="admin-card">
+          <h3>Top 10</h3>
+          <div id="statsTop" class="stats-top-wrap"></div>
+        </div>
+
+        <div class="admin-card">
+          <div id="statsNever"></div>
+        </div>
+      </div>
+
       <div class="admin-section" id="tab-vendas">
         <div class="admin-card">
           <h3>Vendas <button class="btn btn-outline btn-sm" id="salesRefresh" style="float:right;">↻ Atualizar</button></h3>
@@ -614,6 +649,13 @@
         <div class="admin-card">
           <h3>Usuários <button class="btn btn-outline btn-sm" id="usersRefresh" style="float:right;">↻ Atualizar</button></h3>
           <div id="usersTable"></div>
+        </div>
+      </div>
+
+      <div class="admin-section" id="tab-downloads">
+        <div class="admin-card">
+          <h3>Downloads <span class="hint">baixar discografia completa</span></h3>
+          <div id="downloadsContainer"></div>
         </div>
       </div>
 
