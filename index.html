@@ -242,6 +242,12 @@
         </svg>
       </button>
 
+      <!-- Badge RÁDIO (visível apenas quando a rádio está ativa) -->
+      <div class="radio-badge" id="radioBadge" hidden>
+        <span class="radio-badge-dot" aria-hidden="true"></span>
+        <span>RÁDIO</span>
+      </div>
+
       <!-- Botão fechar -->
       <button class="player-close" id="closeExpandedPlayer" aria-label="Fechar player">
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -275,7 +281,7 @@
               </div>
             </div>
 
-            <!-- CONTROLES: shuffle, prev, play, next, mute (mesma linha) -->
+            <!-- CONTROLES: shuffle, prev, play, stop, next, mute -->
             <div class="controls">
               <button class="control-btn control-btn-shuffle" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
                 <svg viewBox="0 0 24 24" fill="currentColor">
@@ -292,6 +298,12 @@
               <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
                 <svg viewBox="0 0 24 24" id="expandedPlayIcon">
                   <path d="M8 5v14l11-7z"/>
+                </svg>
+              </button>
+
+              <button class="control-btn control-btn-stop" id="expandedStopBtn" title="Parar rádio" aria-label="Parar rádio" hidden>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 6h12v12H6z"/>
                 </svg>
               </button>
 
@@ -322,13 +334,24 @@
 
         </div>
 
-        <!-- COLUNA DIREITA: LETRA -->
+        <!-- COLUNA DIREITA: LETRA / FILA DA RÁDIO -->
         <div class="lyrics-col">
           <div class="lyrics-header">
-            <h3>Letra</h3>
+            <h3 id="rightPanelTitle">Letra</h3>
           </div>
+
+          <!-- Painel: Letra -->
           <div class="lyrics-scroll" id="expandedLyricsContent">
             <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
+          </div>
+
+          <!-- Painel: Fila da rádio (só visível na rádio) -->
+          <div class="radio-queue-panel" id="radioQueuePanel" hidden>
+            <div class="radio-queue-header">
+              <span class="radio-queue-label">Fila da rádio</span>
+              <span class="radio-queue-count" id="radioQueueCount"></span>
+            </div>
+            <div class="radio-queue-list" id="radioQueueList"></div>
           </div>
         </div>
 
@@ -399,25 +422,6 @@
     </div>
   </div>
 
-  <!-- ═══════════════════════════════════════════════════════════
-     RÁDIO JOSEPH MATTHOS — exclusivo para assinantes
-     ═══════════════════════════════════════════════════════════ -->
-<div class="modal-overlay" id="radioModal" role="dialog" aria-modal="true" aria-labelledby="radioTitle">
-  <div class="modal modal-wide">
-    <button class="modal-close" data-close aria-label="Fechar rádio">×</button>
-
-    <div class="radio-header">
-      <div class="radio-icon" aria-hidden="true">📻</div>
-      <h2 id="radioTitle">Rádio <span style="color:var(--accent);">Joseph Matthos</span></h2>
-      <p class="sub" id="radioSub">Toda a discografia, em ordem aleatória, sem parar.</p>
-    </div>
-
-    <div id="radioContent">
-      <!-- Preenchido por js/radio.js -->
-    </div>
-  </div>
-</div>
-  
   <!-- ═══════════════════════════════════════════════════════════
        MODAL DE ALUGUEL — escolha da duração
        ═══════════════════════════════════════════════════════════ -->
