@@ -14,6 +14,7 @@
    8. NOVO: Assinantes veem "Gerenciar assinatura"
    9. NOVO: Modal de gerenciamento (status + cancelamento)
   10. NOVO: Rádio Joseph Matthos (exclusiva para assinantes)
+  11. NOVO: Rádio com capa do álbum + botões Pausar/Próxima
    ============================================================ */
 
 import {
@@ -107,6 +108,7 @@ async function boot() {
         openModal,
         closeModal,
         esc,
+        safeMediaUrl,
         setQueue: (queue) => {
           playerQueue = queue.map((t) => ({
             albumId: t.albumId,
@@ -115,7 +117,12 @@ async function boot() {
           playerQueueIndex = 0;
         },
         getQueue: () => playerQueue.slice(),
-        getQueueIndex: () => playerQueueIndex
+        getQueueIndex: () => playerQueueIndex,
+        setQueueIndex: (idx) => {
+          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
+            playerQueueIndex = idx;
+          }
+        }
       });
     } catch (err) {
       console.error('[radio] initRadio falhou:', err);
@@ -145,6 +152,7 @@ async function boot() {
           openModal,
           closeModal,
           esc,
+          safeMediaUrl,
           setQueue: (queue) => {
             playerQueue = queue.map((t) => ({
               albumId: t.albumId,
@@ -153,7 +161,12 @@ async function boot() {
             playerQueueIndex = 0;
           },
           getQueue: () => playerQueue.slice(),
-          getQueueIndex: () => playerQueueIndex
+          getQueueIndex: () => playerQueueIndex,
+          setQueueIndex: (idx) => {
+            if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
+              playerQueueIndex = idx;
+            }
+          }
         });
       } catch (err) {
         console.error('[radio] initRadio falhou (fallback):', err);
