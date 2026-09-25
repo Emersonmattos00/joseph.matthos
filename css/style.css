@@ -3536,3 +3536,27 @@ tr.track-row:hover {
     align-items: stretch;
   }
 }
+
+/* ============================================================
+   ADMIN — Botões de download (dentro da discografia)
+   ============================================================ */
+[data-album-download],
+[data-track-download] {
+  color: var(--accent);
+}
+
+[data-album-download]:hover,
+[data-track-download]:hover {
+  background: rgba(212, 175, 55, 0.12);
+  color: #f0d98f;
+}
+
+[data-track-download]:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  color: var(--text-dim);
+}
+
+[data-track-download]:disabled:hover {
+  background: transparent;
+}
