@@ -5,16 +5,25 @@
    em ordem aleatória, sem repetição até esgotar, e reembaralha
    automaticamente ao chegar ao fim (loop infinito).
 
+   🎨 UI: modal próprio (#radioModal).
+   - Capa do álbum da faixa atual
+   - Botão Pausar/Retomar
+   - Botão Próxima
+   - Embaralhar de novo
+   - Minimizar
+
    🔌 API pública (usada por js/site.js):
-     initRadio(deps)              → injeta dependências do site
-     openRadioModal()             → abre o modal da rádio
-     onRadioTrackEnded()          → chamado quando uma faixa acaba
-     syncRadioOnTrackChange(a,t)  → sincroniza modal com o player
-     isRadioActive()              → true se a rádio está tocando
+     initRadio(deps)
+     openRadioModal()
+     onRadioTrackEnded()
+     syncRadioOnTrackChange()
+     isRadioActive()
+     resetRadio()
 
    🔗 Dependências injetadas:
      isPremium, findAlbum, findTrackByIndex, playFromDiscography,
-     shuffleArray, collectAllTracks, openModal, closeModal, esc
+     shuffleArray, collectAllTracks, openModal, closeModal, esc,
+     safeMediaUrl, setQueue, getQueue, getQueueIndex, setQueueIndex
    ============================================================ */
 
 'use strict';
@@ -119,7 +128,7 @@ export function openRadioModal() {
   // ── Monta fila aleatória
   const queue = shuffleArray(allTracks.slice());
 
-  _deps.setQueue(queue);
+  deps.setQueue(queue);
   _radioActive = true;
 
   renderPlaying(queue, 0);
@@ -143,7 +152,7 @@ function closeRadio() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Renderiza o estado "tocando"
+// Renderiza o estado "tocando" (com capa + controles)
 // ─────────────────────────────────────────────────────────────
 function renderPlaying(queue, index) {
   const deps = requireDeps();
@@ -153,9 +162,11 @@ function renderPlaying(queue, index) {
     findAlbum,
     findTrackByIndex,
     esc,
+    safeMediaUrl,
     shuffleArray,
     collectAllTracks,
     setQueue,
+    setQueueIndex,
     playFromDiscography
   } = deps;
 
@@ -182,13 +193,50 @@ function renderPlaying(queue, index) {
   const album = findAlbum(entry.albumId);
   const track = findTrackByIndex(entry.albumId, entry.trackIndex);
 
+  // ── Capa do álbum
+  const safeCover = album ? safeMediaUrl(album.coverImage) : '';
+  const coverInitials = album
+    ? esc(album.coverInitials || album.cover || '♪')
+    : '♪';
+
+  const coverHTML = safeCover
+    ? `<div class="radio-cover" style="background-image:url('${esc(safeCover)}')" role="img" aria-label="Capa de ${esc(album?.title || 'álbum')}"></div>`
+    : `<div class="radio-cover radio-cover--initials" aria-hidden="true">${coverInitials}</div>`;
+
+  // ── Estado do áudio
+  const audioEl = document.getElementById('audio');
+  const isPaused = !audioEl || audioEl.paused;
+  const playIcon = isPaused ? '▶' : '⏸';
+  const playLabel = isPaused ? 'Retomar' : 'Pausar';
+
+  // ── Próxima existe?
+  const hasNext = index + 1 < queue.length;
+
   content.innerHTML = `
-    <div class="radio-status">
-      <span class="radio-status-label">Tocando agora</span>
-      <span class="radio-status-track">${esc(track?.title || '—')}</span>
-      <span class="radio-status-album">
-        ${esc(album?.title || '—')} · faixa ${index + 1} de ${queue.length}
-      </span>
+    <div class="radio-now-playing">
+      ${coverHTML}
+
+      <div class="radio-now-info">
+        <span class="radio-status-label">Tocando agora</span>
+        <span class="radio-status-track">${esc(track?.title || '—')}</span>
+        <span class="radio-status-album">
+          ${esc(album?.title || '—')} · faixa ${index + 1} de ${queue.length}
+        </span>
+      </div>
+
+      <div class="radio-controls">
+        <button class="radio-ctrl-btn" type="button" id="radioPlayPauseBtn"
+                aria-label="${esc(playLabel)}">
+          <span class="radio-ctrl-icon">${playIcon}</span>
+          <span class="radio-ctrl-text">${esc(playLabel)}</span>
+        </button>
+
+        <button class="radio-ctrl-btn" type="button" id="radioNextBtn"
+                aria-label="Próxima faixa" ${hasNext ? '' : 'disabled'}>
+          <span class="radio-ctrl-icon">⏭</span>
+          <span class="radio-ctrl-text">Próxima</span>
+        </button>
+      </div>
     </div>
 
     <div class="radio-stats">
@@ -206,6 +254,28 @@ function renderPlaying(queue, index) {
     </div>
   `;
 
+  // ── Bind: pausar/retomar
+  content.querySelector('#radioPlayPauseBtn')?.addEventListener('click', () => {
+    if (!audioEl) return;
+    if (audioEl.paused) {
+      audioEl.play().catch(() => {});
+    } else {
+      audioEl.pause();
+    }
+    // Re-renderiza com o novo ícone
+    renderPlaying(queue, index);
+  });
+
+  // ── Bind: próxima
+  content.querySelector('#radioNextBtn')?.addEventListener('click', () => {
+    if (!hasNext) return;
+    const next = queue[index + 1];
+    if (typeof setQueueIndex === 'function') setQueueIndex(index + 1);
+    playFromDiscography(next.albumId, next.trackIndex, { fromQueue: true });
+    renderPlaying(queue, index + 1);
+  });
+
+  // ── Bind: embaralhar
   content.querySelector('#radioShuffleBtn')?.addEventListener('click', () => {
     const all = collectAllTracks();
     const newQueue = shuffleArray(all.slice());
@@ -218,7 +288,34 @@ function renderPlaying(queue, index) {
     }
   });
 
+  // ── Bind: minimizar
   content.querySelector('#radioCloseBtn')?.addEventListener('click', closeRadio);
+
+  // ── Sincroniza o botão quando o áudio mudar de estado
+  //    (play/pause disparado por outras fontes: tecla espaço, player fixo, etc)
+  if (audioEl && audioEl.dataset.radioBound !== '1') {
+    audioEl.dataset.radioBound = '1';
+
+    audioEl.addEventListener('play', () => {
+      if (!_radioActive) return;
+      const btn = document.getElementById('radioPlayPauseBtn');
+      if (!btn) return;
+      const icon = btn.querySelector('.radio-ctrl-icon');
+      const text = btn.querySelector('.radio-ctrl-text');
+      if (icon) icon.textContent = '⏸';
+      if (text) text.textContent = 'Pausar';
+    });
+
+    audioEl.addEventListener('pause', () => {
+      if (!_radioActive) return;
+      const btn = document.getElementById('radioPlayPauseBtn');
+      if (!btn) return;
+      const icon = btn.querySelector('.radio-ctrl-icon');
+      const text = btn.querySelector('.radio-ctrl-text');
+      if (icon) icon.textContent = '▶';
+      if (text) text.textContent = 'Retomar';
+    });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
