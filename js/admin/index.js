@@ -9,6 +9,8 @@
    - Uploads de imagem (bg, vinil, sobre) via Base64
    - Uploads de áudio vivem em editors/albums.js
      (presigned URL + PATCH automático em tracks.*_path)
+   - Downloads de faixa/álbum vivem em editors/albums.js
+     (URLs assinadas via /api/admin?action=download-*)
 
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
@@ -17,6 +19,8 @@
    3. Comentários atualizados para refletir o fluxo real
    4. bindUpload de imagem mantido (imagens continuam Base64)
    5. Resiliente a falhas (safeRender, safeCall)
+   6. Aba "Downloads" removida — funcionalidade embutida
+      em editors/albums.js (ícone por faixa + botão por álbum)
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -210,7 +214,7 @@ async function onClickNavButton(event) {
     } else if (tab === 'contato') {
       renderSocialEditor(AdminState.content);
     } else if (tab === 'discografia') {
-      // Editor de álbuns/faixas — agora funcional
+      // Editor de álbuns/faixas — funcional (CRUD + upload + downloads)
       renderAlbumsEditor(AdminState.content);
     }
   } catch (err) {
@@ -316,7 +320,7 @@ function bindContentInputs() {
 // Botões dos editores
 // ------------------------------------------------------------
 // Nota: bindAlbumsAddButton foi removido — o editor de álbuns
-// agora cuida dos próprios binds (CRUD + upload).
+// agora cuida dos próprios binds (CRUD + upload + downloads).
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
@@ -345,7 +349,7 @@ function bindEditorButtons() {
 // Uploads de imagem retornam { url, path, bucket } e continuam
 // via Base64 (imagens são pequenas e cabem no body da Vercel).
 //
-// ⚠️  Uploads de ÁUDIO não são mais tratados aqui.
+// ⚠️  Uploads de ÁUDIO não são tratados aqui.
 //     Eles vivem em editors/albums.js, com presigned URL
 //     e PATCH automático em tracks.preview_path / full_path.
 // ─────────────────────────────────────────────────────────────
@@ -414,9 +418,8 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ⚠️  Uploads de áudio (previewUpload / fullUpload) foram REMOVIDOS.
-  //     O editor de álbuns (editors/albums.js) agora cuida disso
-  //     via presigned URL + PATCH automático em tracks.*_path.
+  // ⚠️  Uploads de áudio (previewUpload / fullUpload) vivem em
+  //     editors/albums.js (presigned URL + PATCH automático).
 }
 
 // ─────────────────────────────────────────────────────────────
