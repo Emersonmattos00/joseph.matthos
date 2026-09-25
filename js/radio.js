@@ -5,37 +5,38 @@
    em ordem aleatória, sem repetição até esgotar, e reembaralha
    automaticamente ao chegar ao fim (loop infinito).
 
-   🎨 UI: reaproveita o #expandedPlayerModal.
-   - Botão STOP (encerra a rádio)
-   - Painel "Fila da rádio" (lista completa, clicável)
-   - Badge "RÁDIO" no topo
+   🔌 API pública:
+     initRadio(deps)              → injeta dependências do site
+     openRadioModal()             → abre o modal da rádio
+     onRadioTrackEnded()          → chamado quando uma faixa acaba
+     syncRadioOnTrackChange(a,t)  → sincroniza modal com o player
+     isRadioActive()              → true se a rádio está tocando
+     resetRadio()                 → limpa estado (logout)
 
-   🔌 API pública (usada por js/site.js):
-     initRadio(deps)
-     openRadioModal()          → ativa a rádio e abre o player
-     onRadioTrackEnded()       → retorna true se a rádio tratou
-     syncRadioOnTrackChange()  → atualiza UI quando a faixa muda
-     isRadioActive()           → true se rádio ativa
-     stopRadio()               → encerra a rádio
-     resetRadio()              → limpa estado (logout)
+   🔗 Dependências injetadas via initRadio():
+     isPremium, findAlbum, findTrackByIndex, playFromDiscography,
+     shuffleArray, collectAllTracks, openModal, closeModal, esc,
+     setQueue, getQueue, getQueueIndex
    ============================================================ */
 
 'use strict';
 
 // ─────────────────────────────────────────────────────────────
-// Estado
+// Estado interno
 // ─────────────────────────────────────────────────────────────
 let _deps = null;
 let _radioActive = false;
 
 // ─────────────────────────────────────────────────────────────
-// Injeção de dependências
+// Injeção de dependências (chamado pelo site.js)
 // ─────────────────────────────────────────────────────────────
 export function initRadio(deps) {
   _deps = deps || null;
-  bindStopButton();
 }
 
+// ─────────────────────────────────────────────────────────────
+// Helper: dependências obrigatórias
+// ─────────────────────────────────────────────────────────────
 function requireDeps() {
   if (!_deps) {
     console.warn('[radio] initRadio() não foi chamado');
@@ -45,17 +46,7 @@ function requireDeps() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind: botão STOP
-// ─────────────────────────────────────────────────────────────
-function bindStopButton() {
-  const btn = document.getElementById('expandedStopBtn');
-  if (!btn || btn.dataset.bound === '1') return;
-  btn.dataset.bound = '1';
-  btn.addEventListener('click', () => stopRadio());
-}
-
-// ─────────────────────────────────────────────────────────────
-// Abrir rádio
+// Abre o modal da rádio
 // ─────────────────────────────────────────────────────────────
 export function openRadioModal() {
   const deps = requireDeps();
@@ -69,89 +60,174 @@ export function openRadioModal() {
     openModal
   } = deps;
 
-  // ── Estado 1: não assinante → abre modal de planos
+  const modal = document.getElementById('radioModal');
+  const content = document.getElementById('radioContent');
+  if (!modal || !content) return;
+
+  // ── Estado 1: não assinante
   if (!isPremium()) {
-    stopRadio();
-    openModal('plansModal');
+    _radioActive = false;
+    content.innerHTML = `
+      <div class="radio-locked">
+        <span class="radio-locked-icon" aria-hidden="true">🔒</span>
+        <h3>Exclusivo para assinantes</h3>
+        <p>
+          A Rádio Joseph Matthos toca <strong>toda a discografia</strong>
+          em ordem aleatória, sem parar.
+        </p>
+        <p>
+          Assine o Premium para ouvir sem limites, com downloads inclusos.
+        </p>
+      </div>
+      <div class="radio-actions">
+        <button class="btn btn-primary" type="button" id="radioSubscribeBtn">
+          Assinar Premium
+        </button>
+        <button class="btn btn-outline" type="button" id="radioLoginBtn">
+          Já sou assinante
+        </button>
+      </div>
+    `;
+
+    content.querySelector('#radioSubscribeBtn')?.addEventListener('click', () => {
+      closeRadio();
+      openModal('plansModal');
+    });
+
+    content.querySelector('#radioLoginBtn')?.addEventListener('click', () => {
+      closeRadio();
+      openModal('loginModal');
+    });
+
+    openModal('radioModal');
     return;
   }
 
-  // ── Coleta todas as faixas
+  // ── Estado 2: assinante
   const allTracks = collectAllTracks();
   if (!allTracks.length) {
-    console.warn('[radio] catálogo vazio');
+    _radioActive = false;
+    content.innerHTML = `
+      <div class="radio-locked">
+        <span class="radio-locked-icon" aria-hidden="true">📭</span>
+        <h3>Catálogo vazio</h3>
+        <p>Nenhuma faixa publicada disponível para a rádio.</p>
+      </div>
+    `;
+    openModal('radioModal');
     return;
   }
 
-  // ── Shuffle a cada abertura
+  // ── Monta fila aleatória
   const queue = shuffleArray(allTracks.slice());
 
   deps.setQueue(queue);
   _radioActive = true;
 
-  // ── Atualiza UI
-  showRadioBadge(true);
-  showStopButton(true);
-  setRightPanel('queue');
-  renderQueuePanel(queue, 0);
+  renderPlaying(queue, 0);
 
-  // ── Abre o modal do player
-  const modal = document.getElementById('expandedPlayerModal');
-  if (modal) {
-    modal.classList.add('open');
-    document.body.style.overflow = 'hidden';
-  }
-
-  // ── Toca a primeira faixa
+  // ── Toca a primeira
   const first = queue[0];
   if (first) {
     playFromDiscography(first.albumId, first.trackIndex, { fromQueue: true });
   }
+
+  openModal('radioModal');
 }
 
 // ─────────────────────────────────────────────────────────────
-// Parar rádio
+// Fecha o modal (o áudio continua)
 // ─────────────────────────────────────────────────────────────
-export function stopRadio() {
-  if (!_radioActive) return;
-
-  _radioActive = false;
-
-  const deps = requireDeps();
-  if (deps) {
-    deps.setQueue([]);
-  }
-
-  // ── Para o áudio
-  const audio = document.getElementById('audio');
-  if (audio) {
-    audio.pause();
-    audio.removeAttribute('src');
-    audio.load();
-  }
-
-  // ── Esconde UI da rádio
-  showRadioBadge(false);
-  showStopButton(false);
-  setRightPanel('lyrics');
-
-  const queuePanel = document.getElementById('radioQueuePanel');
-  if (queuePanel) {
-    queuePanel.hidden = true;
-    const list = document.getElementById('radioQueueList');
-    if (list) list.innerHTML = '';
-    const count = document.getElementById('radioQueueCount');
-    if (count) count.textContent = '';
-  }
-
-  // ── Fecha o player se estiver aberto
-  const modal = document.getElementById('expandedPlayerModal');
+function closeRadio() {
+  const modal = document.getElementById('radioModal');
   if (modal) modal.classList.remove('open');
   document.body.style.overflow = '';
 }
 
 // ─────────────────────────────────────────────────────────────
-// Callback: faixa terminou
+// Renderiza o estado "tocando"
+// ─────────────────────────────────────────────────────────────
+function renderPlaying(queue, index) {
+  const deps = requireDeps();
+  if (!deps) return;
+
+  const {
+    findAlbum,
+    findTrackByIndex,
+    esc,
+    shuffleArray,
+    collectAllTracks,
+    setQueue,
+    playFromDiscography
+  } = deps;
+
+  const content = document.getElementById('radioContent');
+  if (!content) return;
+
+  const entry = queue[index];
+  if (!entry) {
+    _radioActive = false;
+    content.innerHTML = `
+      <div class="radio-status">
+        <span class="radio-status-label">Rádio encerrada</span>
+      </div>
+      <div class="radio-actions">
+        <button class="btn btn-primary" type="button" id="radioRestartBtn">
+          ↻ Tocar novamente
+        </button>
+      </div>
+    `;
+    content.querySelector('#radioRestartBtn')?.addEventListener('click', openRadioModal);
+    return;
+  }
+
+  const album = findAlbum(entry.albumId);
+  const track = findTrackByIndex(entry.albumId, entry.trackIndex);
+
+  content.innerHTML = `
+    <div class="radio-status">
+      <span class="radio-status-label">Tocando agora</span>
+      <span class="radio-status-track">${esc(track?.title || '—')}</span>
+      <span class="radio-status-album">
+        ${esc(album?.title || '—')} · faixa ${index + 1} de ${queue.length}
+      </span>
+    </div>
+
+    <div class="radio-stats">
+      <span><strong>${queue.length}</strong> faixas na fila</span>
+      <span><strong>∞</strong> aleatório</span>
+    </div>
+
+    <div class="radio-actions">
+      <button class="btn btn-outline" type="button" id="radioShuffleBtn">
+        🔀 Embaralhar de novo
+      </button>
+      <button class="btn btn-ghost" type="button" id="radioCloseBtn">
+        Minimizar (continua tocando)
+      </button>
+    </div>
+  `;
+
+  content.querySelector('#radioShuffleBtn')?.addEventListener('click', () => {
+    const all = collectAllTracks();
+    const newQueue = shuffleArray(all.slice());
+    setQueue(newQueue);
+    renderPlaying(newQueue, 0);
+
+    const first = newQueue[0];
+    if (first) {
+      playFromDiscography(first.albumId, first.trackIndex, { fromQueue: true });
+    }
+  });
+
+  content.querySelector('#radioCloseBtn')?.addEventListener('click', closeRadio);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Callback: faixa terminou (chamado pelo player do site.js)
+// ------------------------------------------------------------
+// Retorna true se a rádio tratou o evento (para o site.js
+// não chamar nextTrack() padrão).
 // ─────────────────────────────────────────────────────────────
 export function onRadioTrackEnded() {
   if (!_radioActive) return false;
@@ -173,19 +249,19 @@ export function onRadioTrackEnded() {
 
   if (!queue.length || index < 0) return false;
 
-  // ── Ainda tem faixas
+  // ── Ainda tem faixas na fila
   if (index + 1 < queue.length) {
     const next = queue[index + 1];
     playFromDiscography(next.albumId, next.trackIndex, { fromQueue: true });
-    renderQueuePanel(queue, index + 1);
+    renderPlaying(queue, index + 1);
     return true;
   }
 
-  // ── Esgotou: reembaralha
+  // ── Esgotou: reembaralha e recomeça
   const all = collectAllTracks();
   const newQueue = shuffleArray(all.slice());
   setQueue(newQueue);
-  renderQueuePanel(newQueue, 0);
+  renderPlaying(newQueue, 0);
 
   const first = newQueue[0];
   if (first) {
@@ -196,13 +272,16 @@ export function onRadioTrackEnded() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sincroniza UI quando a faixa muda
+// Callback: faixa mudou (chamado pelo playFromDiscography do site)
 // ─────────────────────────────────────────────────────────────
 export function syncRadioOnTrackChange(albumId, trackIndex) {
   if (!_radioActive) return;
 
   const deps = requireDeps();
   if (!deps) return;
+
+  const modal = document.getElementById('radioModal');
+  if (!modal || !modal.classList.contains('open')) return;
 
   const { getQueue, getQueueIndex } = deps;
   const queue = getQueue();
@@ -213,113 +292,21 @@ export function syncRadioOnTrackChange(albumId, trackIndex) {
   if (!entry) return;
   if (entry.albumId !== albumId || entry.trackIndex !== trackIndex) return;
 
-  renderQueuePanel(queue, index);
+  renderPlaying(queue, index);
 }
 
 // ─────────────────────────────────────────────────────────────
-// Consulta
+// Consulta: rádio ativa?
 // ─────────────────────────────────────────────────────────────
 export function isRadioActive() {
   return _radioActive === true;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Reset (logout)
+// Reseta o estado (ex: logout)
 // ─────────────────────────────────────────────────────────────
 export function resetRadio() {
-  if (_radioActive) stopRadio();
   _radioActive = false;
-
-  const list = document.getElementById('radioQueueList');
-  if (list) list.innerHTML = '';
-  const count = document.getElementById('radioQueueCount');
-  if (count) count.textContent = '';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Helpers de UI
-// ─────────────────────────────────────────────────────────────
-function showRadioBadge(visible) {
-  const badge = document.getElementById('radioBadge');
-  if (badge) badge.hidden = !visible;
-}
-
-function showStopButton(visible) {
-  const btn = document.getElementById('expandedStopBtn');
-  if (btn) btn.hidden = !visible;
-}
-
-function setRightPanel(which) {
-  const lyricsEl = document.getElementById('expandedLyricsContent');
-  const queuePanel = document.getElementById('radioQueuePanel');
-  const titleEl = document.getElementById('rightPanelTitle');
-
-  if (!lyricsEl || !queuePanel) return;
-
-  if (which === 'queue') {
-    lyricsEl.hidden = true;
-    queuePanel.hidden = false;
-    if (titleEl) titleEl.textContent = 'Fila da rádio';
-  } else {
-    lyricsEl.hidden = false;
-    queuePanel.hidden = true;
-    if (titleEl) titleEl.textContent = 'Letra';
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Renderiza a fila da rádio
-// ─────────────────────────────────────────────────────────────
-function renderQueuePanel(queue, currentIndex) {
-  const list = document.getElementById('radioQueueList');
-  const count = document.getElementById('radioQueueCount');
-  if (!list) return;
-
-  if (count) count.textContent = `${queue.length} faixas`;
-
-  const deps = requireDeps();
-  if (!deps) return;
-  const { findAlbum, findTrackByIndex, esc, playFromDiscography } = deps;
-
-  list.innerHTML = queue.map((item, idx) => {
-    const album = findAlbum(item.albumId);
-    const track = findTrackByIndex(item.albumId, item.trackIndex);
-    const isCurrent = idx === currentIndex;
-
-    const title = track?.title || '—';
-    const albumTitle = album?.title || '—';
-
-    return `
-      <button class="radio-queue-item ${isCurrent ? 'playing' : ''}"
-              type="button"
-              data-radio-index="${idx}">
-        <span class="radio-queue-item-index">${isCurrent ? '▶' : idx + 1}</span>
-        <span class="radio-queue-item-info">
-          <span class="radio-queue-item-title">${esc(title)}</span>
-          <span class="radio-queue-item-album">${esc(albumTitle)}</span>
-        </span>
-        <span class="radio-queue-item-action">${isCurrent ? 'tocando' : 'tocar'}</span>
-      </button>
-    `;
-  }).join('');
-
-  // ── Bind: clicar numa faixa pula para ela
-  list.querySelectorAll('[data-radio-index]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.radioIndex);
-      if (!Number.isInteger(idx)) return;
-      if (idx === currentIndex) return;
-
-      deps.setQueueIndex(idx);
-      const item = queue[idx];
-      playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
-      renderQueuePanel(queue, idx);
-    });
-  });
-
-  // ── Scroll até a faixa atual
-  const currentBtn = list.querySelector('.radio-queue-item.playing');
-  if (currentBtn && currentBtn.scrollIntoView) {
-    currentBtn.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }
+  const content = document.getElementById('radioContent');
+  if (content) content.innerHTML = '';
 }
