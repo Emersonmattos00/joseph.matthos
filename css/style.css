@@ -3271,3 +3271,217 @@ tr.track-row:hover {
 }
 
 #radioModal .btn { width: 100%; }
+
+/* ============================================================
+   RÁDIO — modo dentro do player expandido
+   ============================================================ */
+
+/* Botão STOP */
+.control-btn-stop {
+  width: 44px;
+  height: 44px;
+  color: #f87171;
+  opacity: 0.75;
+}
+
+.control-btn-stop:hover {
+  color: #fca5a5;
+  opacity: 1;
+  background: rgba(248, 113, 113, 0.15);
+}
+
+.control-btn-stop svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Badge RÁDIO no topo do modal */
+.radio-badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  background: rgba(212, 175, 55, 0.15);
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  border-radius: 30px;
+  color: #d4af37;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.radio-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d4af37;
+  animation: radioBadgePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes radioBadgePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(1.3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radio-badge-dot { animation: none; }
+}
+
+/* Painel da fila da rádio (ocupa o lugar da letra) */
+.radio-queue-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.radio-queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.18);
+  flex-shrink: 0;
+}
+
+.radio-queue-label {
+  font-family: 'Georgia', serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #d4af37;
+}
+
+.radio-queue-count {
+  font-size: 0.72rem;
+  color: rgba(212, 175, 55, 0.6);
+  font-variant-numeric: tabular-nums;
+}
+
+.radio-queue-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
+}
+
+.radio-queue-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.radio-queue-list::-webkit-scrollbar-thumb {
+  background: rgba(212, 175, 55, 0.3);
+  border-radius: 3px;
+}
+
+/* Item da fila da rádio */
+.radio-queue-item {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.18s;
+  width: 100%;
+}
+
+.radio-queue-item:hover {
+  background: rgba(212, 175, 55, 0.08);
+}
+
+.radio-queue-item.playing {
+  background: rgba(212, 175, 55, 0.14);
+}
+
+.radio-queue-item-index {
+  font-size: 0.8rem;
+  color: rgba(212, 175, 55, 0.5);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.radio-queue-item.playing .radio-queue-item-index {
+  color: #f0d98f;
+  font-weight: 700;
+}
+
+.radio-queue-item-info {
+  min-width: 0;
+}
+
+.radio-queue-item-title {
+  display: block;
+  font-size: 0.88rem;
+  color: #eee9e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+}
+
+.radio-queue-item.playing .radio-queue-item-title {
+  font-weight: 700;
+  color: #f0d98f;
+}
+
+.radio-queue-item-album {
+  display: block;
+  font-size: 0.72rem;
+  color: rgba(212, 175, 55, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+}
+
+.radio-queue-item-action {
+  font-size: 0.75rem;
+  color: rgba(212, 175, 55, 0.6);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.radio-queue-item.playing .radio-queue-item-action {
+  color: #f0d98f;
+  font-weight: 700;
+}
+
+/* Mobile — ajusta posição do badge */
+@media (max-width: 768px) {
+  .radio-badge {
+    top: 12px;
+    left: 12px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.65rem;
+  }
+}
+
+/* Impede que a fila da rádio se sobreponha à letra no mobile */
+.music-player.mobile-lyrics .radio-queue-panel {
+  display: flex;
+}
+
+.music-player.mobile-music .radio-queue-panel {
+  display: none;
+}
