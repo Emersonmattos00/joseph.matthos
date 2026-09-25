@@ -1,9 +1,10 @@
 /* ============================================================
-   js/admin/editors/albums.js — v5 (drag & drop)
+   js/admin/editors/albums.js — v6 (drag & drop + downloads)
    ------------------------------------------------------------
    - Listeners diretos em cada botão (sem delegação)
    - Drag & drop para reordenar faixas dentro de um álbum
    - Backend: PATCH /api/admin?action=track-order
+   - Download de faixa individual e álbum completo (admin)
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -240,6 +241,14 @@ function bindAlbumButtons(scope) {
     });
   });
 
+  scope.querySelectorAll('[data-album-download]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadAlbum(btn.dataset.albumDownload);
+    });
+  });
+
   scope.querySelectorAll('[data-track-new]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -288,8 +297,130 @@ function bindTrackButtons(scope) {
     });
   });
 
+  scope.querySelectorAll('[data-track-download]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadTrack(btn.dataset.trackDownload, btn.dataset.trackDownloadTitle);
+    });
+  });
+
   // ⚡ Drag & drop
   bindTrackDragDrop(scope);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Download — faixa individual
+// ─────────────────────────────────────────────────────────────
+async function downloadTrack(trackId, titleHint) {
+  if (!trackId) return;
+
+  const btn = document.querySelector(`[data-track-download="${trackId}"]`);
+  const originalHtml = btn?.innerHTML;
+
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⬇ …';
+    }
+
+    const res = await apiFetch('download-url', {
+      method: 'GET',
+      query: { id: trackId }
+    });
+
+    if (!res?.ok || !res.url) {
+      throw new Error(res?.error || 'Falha ao gerar URL.');
+    }
+
+    triggerDownload(res.url, res.filename);
+    toast(`Download iniciado: ${res.filename}`, '⬇');
+  } catch (err) {
+    console.error('[albums] downloadTrack:', err);
+    toast(err?.message || `Falha ao baixar "${titleHint || trackId}".`, '⚠');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Download — álbum completo (múltiplas URLs)
+// ─────────────────────────────────────────────────────────────
+async function downloadAlbum(albumId) {
+  if (!albumId) return;
+
+  const album = State.albums.find((a) => a.id === albumId);
+  const albumTitle = album?.title || albumId;
+
+  const confirmed = confirm(
+    `Baixar TODAS as faixas do álbum "${albumTitle}"?\n\n` +
+    `O navegador vai pedir permissão para salvar múltiplos arquivos.`
+  );
+  if (!confirmed) return;
+
+  try {
+    toast(`Preparando álbum "${albumTitle}"…`, '⏳');
+
+    const res = await apiFetch('download-album', {
+      method: 'GET',
+      query: { id: albumId }
+    });
+
+    if (!res?.ok || !Array.isArray(res.tracks)) {
+      throw new Error(res?.error || 'Falha ao listar faixas.');
+    }
+
+    const valid = res.tracks.filter((t) => t.url);
+    if (!valid.length) {
+      toast('Este álbum não tem áudios completos.', '⚠');
+      return;
+    }
+
+    toast(`Baixando ${valid.length} faixa(s) de "${albumTitle}"…`, '⬇');
+
+    let ok = 0;
+    let fail = 0;
+
+    for (let i = 0; i < valid.length; i++) {
+      const t = valid[i];
+      try {
+        triggerDownload(t.url, t.filename);
+        ok++;
+      } catch {
+        fail++;
+      }
+      await sleep(600);
+    }
+
+    toast(`Álbum baixado (${ok}/${valid.length}).`, '✓');
+    if (fail > 0) {
+      console.warn(`[albums] ${fail} faixa(s) falharam no download`);
+    }
+  } catch (err) {
+    console.error('[albums] downloadAlbum:', err);
+    toast(err?.message || 'Falha ao baixar álbum.', '⚠');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helpers de download
+// ─────────────────────────────────────────────────────────────
+function triggerDownload(url, filename) {
+  const a = document.createElement('a');
+  a.href = url;
+  if (filename) a.download = filename;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => a.remove(), 1000);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -454,6 +585,9 @@ function renderAlbumBlock(album) {
         </div>
         <div class="album-actions" style="display:flex;gap:0.4rem;align-items:center;">
           <button class="btn btn-ghost btn-sm"
+                  data-album-download="${escAttr(album.id)}"
+                  type="button" title="Baixar álbum completo">⬇</button>
+          <button class="btn btn-ghost btn-sm"
                   data-album-edit="${escAttr(album.id)}"
                   type="button" title="Editar álbum">✎</button>
           <button class="btn btn-ghost btn-sm"
@@ -501,7 +635,7 @@ function renderTracksList(albumId, tracks) {
           <th style="width:100px;">Preço</th>
           <th style="width:120px;">Áudio</th>
           <th style="width:100px;">Status</th>
-          <th style="width:180px;">Ações</th>
+          <th style="width:240px;">Ações</th>
         </tr>
       </thead>
       <tbody data-tracks-body="${escAttr(albumId)}">
@@ -549,6 +683,12 @@ function renderTrackRow(albumId, track, idx) {
       <td>${statusBadge}</td>
       <td>
         <div class="actions">
+          <button class="btn btn-ghost btn-sm"
+                  data-track-download="${escAttr(String(track.id))}"
+                  data-track-download-title="${escAttr(track.title || '')}"
+                  type="button"
+                  title="Baixar áudio completo"
+                  ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
           <button class="btn btn-ghost btn-sm"
                   data-track-edit="${escAttr(String(track.id))}"
                   data-track-album="${escAttr(albumId)}"
@@ -715,10 +855,10 @@ function openTrackModal(albumId, track) {
   };
 
   // Mostra a letra como JSON (para permitir edição de timestamps)
-const lyricsText = (() => {
-  if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '[]';
-  return JSON.stringify(t.lyrics, null, 2);
-})();
+  const lyricsText = (() => {
+    if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '[]';
+    return JSON.stringify(t.lyrics, null, 2);
+  })();
 
   openAdminModal(`
     <h3>${isNew ? 'Nova faixa' : 'Editar faixa'}</h3>
@@ -788,14 +928,14 @@ const lyricsText = (() => {
     </div>
 
     <div class="form-group">
-  <label for="trackLyrics">Letra (JSON sincronizado)</label>
-  <textarea id="trackLyrics" rows="10" style="font-family:monospace;font-size:0.85rem;line-height:1.5;tab-size:2;">${esc(lyricsText)}</textarea>
-  <div class="form-hint">
-    Formato: <code>[{ "time": 0, "text": "Primeira linha" }, ...]</code><br>
-    <strong>time</strong> em segundos (ex: <code>0</code>, <code>4.5</code>, <code>12</code>).<br>
-    <button type="button" class="btn btn-ghost btn-sm" id="trackLyricsHelpBtn" style="margin-top:0.5rem;padding:0.2rem 0.6rem;font-size:0.75rem;">📖 Ver exemplo completo</button>
-  </div>
-</div>
+      <label for="trackLyrics">Letra (JSON sincronizado)</label>
+      <textarea id="trackLyrics" rows="10" style="font-family:monospace;font-size:0.85rem;line-height:1.5;tab-size:2;">${esc(lyricsText)}</textarea>
+      <div class="form-hint">
+        Formato: <code>[{ "time": 0, "text": "Primeira linha" }, ...]</code><br>
+        <strong>time</strong> em segundos (ex: <code>0</code>, <code>4.5</code>, <code>12</code>).<br>
+        <button type="button" class="btn btn-ghost btn-sm" id="trackLyricsHelpBtn" style="margin-top:0.5rem;padding:0.2rem 0.6rem;font-size:0.75rem;">📖 Ver exemplo completo</button>
+      </div>
+    </div>
 
     <div class="form-error" id="trackError"></div>
 
