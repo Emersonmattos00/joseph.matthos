@@ -28,38 +28,16 @@
    🚫 Áudios e álbuns NÃO moram aqui.
      Eles vêm de /api/public (albums + tracks) e /api/stream (URLs).
 
-   🔍 CATEGORIAS DE DADOS NESTE ARQUIVO
-   ------------------------------------------------------------
-   Nem tudo aqui é "fallback" no mesmo sentido. São 3 categorias:
-
-   1. UI FALLBACK PURO
-      - frases, hero, sobre, filosofia, branding, contato, aparencia
-      - Se o admin editar e o /api/public falhar, o usuário vê o
-        conteúdo ANTIGO. Cosmético, sem impacto funcional.
-
-   2. UI FALLBACK DE NEGÓCIO ⚠️
-      - plans, RENTAL_PLANS_FALLBACK
-      - Contém dados que o admin edita no painel (nome de plano,
-        features, labels de aluguel). Se desatualizado, o usuário
-        pode ver informação INCONSISTENTE com o que foi salvo.
-      - ⚠️ NÃO é fonte de verdade. Só é usado quando o backend
-        falha por completo.
-
-   3. CONSTANTES DE APP (não-fallback)
-      - PRICE_FORMATTER, SOCIAL_LABELS, NETWORKS_ORDER
-      - São utilitários do frontend. Não mudam com o backend.
-
    📦 Uso:
      - Módulos ES:   import { DEFAULT_CONTENT } from './config.js';
      - Código legado: window.DEFAULT_CONTENT
    ============================================================ */
 
 // Bump quando a estrutura mudar de forma incompatível
-// v3 → v4: marcadas categorias de dados (UI fallback / constantes)
-export const CONTENT_SCHEMA_VERSION = 4;
+export const CONTENT_SCHEMA_VERSION = 3;
 
 // ─────────────────────────────────────────────────────────────
-// Conteúdo padrão (categoria 1 + 2 — ver cabeçalho)
+// Conteúdo padrão
 // ─────────────────────────────────────────────────────────────
 export const DEFAULT_CONTENT = {
   branding: {
@@ -145,22 +123,10 @@ export const DEFAULT_CONTENT = {
     showCart: false
   },
 
-  // ─────────────────────────────────────────────────────────
-  // ⚠️ UI FALLBACK ONLY — categoria 2
-  // ─────────────────────────────────────────────────────────
-  // Este array é EDITÁVEL pelo admin (js/admin/editors/plans.js).
-  // Em produção, o site lê de /api/public → SITE.content.planos.plans.
-  //
-  // Se o backend falhar, o site usa ESTA versão — que pode estar
-  // desatualizada em relação ao que o admin salvou.
-  //
-  // 🚫 Preço NÃO vive aqui. Preço vem das envs MP_PREMIUM_*.
-  //    O frontend só monta o texto do preço quando /api/public
-  //    devolve `plans[]` com `priceCents`.
-  // ─────────────────────────────────────────────────────────
   planos: {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
+    // ⚠️ SEM `price` — preço sempre de /api/public (envs MP_PREMIUM_*).
     plans: [
       {
         id: "free",
@@ -219,7 +185,7 @@ export const DEFAULT_CONTENT = {
     heading: "Vamos trocar ideias.",
     description: "Para convites, parcerias ou apenas para compartilhar um verso, me encontre nas redes.",
     socials: [
-      { network: "spotify",   url: "https://open.spotify.com/s/30gmNPu" },
+      { network: "spotify",   url: "https://open.spotify.com/playlist/3flgUEol1uBvFAlriXZE24?si=PtjKfVQuQfms4zMCjyIqaA" },
       { network: "youtube",   url: "https://www.youtube.com/@josephmatthos" },
       { network: "amazon",    url: "https://music.amazon.com.br/artists/B0H7Z173V1/joseph-matthos" },
       { network: "facebook",  url: "https://www.facebook.com/profile.php?id=61593112378384" },
@@ -243,9 +209,7 @@ export const DEFAULT_CONTENT = {
 // ─────────────────────────────────────────────────────────────
 // Planos de aluguel — APENAS METADATA DE EXIBIÇÃO
 // ------------------------------------------------------------
-// ⚠️ UI FALLBACK ONLY — categoria 2
-//
-// PREÇOS NÃO FICAM AQUI.
+// ⚠️ PREÇOS NÃO FICAM AQUI.
 //
 // Fonte de verdade: `/api/public` (campo `rentalPlans[]`).
 // O backend lê das envs:
@@ -258,19 +222,6 @@ export const DEFAULT_CONTENT = {
 //
 // Este array é usado APENAS como fallback quando /api/public
 // falha ou ainda não carregou. NUNCA exibe `price` daqui.
-//
-// 🚨 IMPORTANTE — não adicione campo `price` aqui.
-//    O `site.js` sobrescreve com `price: 0` e
-//    `available: false` quando usa este fallback:
-//
-//      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
-//        ...p,
-//        price: 0,
-//        available: false
-//      }));
-//
-//    Ou seja: o usuário vê os labels e a ordem, mas
-//    "Indisponível" no lugar do preço. Isso é intencional.
 // ─────────────────────────────────────────────────────────────
 export const RENTAL_PLANS_FALLBACK = [
   { id: '24h', label: '24 horas', days: 1,  popular: false },
@@ -283,9 +234,6 @@ export const RENTAL_PLANS_FALLBACK = [
 
 // ─────────────────────────────────────────────────────────────
 // Labels de redes sociais
-// ------------------------------------------------------------
-// Categoria 3: CONSTANTE DE APP (não-fallback)
-// Só usada se o `label` do social não vier do banco.
 // ─────────────────────────────────────────────────────────────
 export const SOCIAL_LABELS = {
   spotify:   "Spotify",
@@ -304,8 +252,6 @@ export const SOCIAL_LABELS = {
 
 // ─────────────────────────────────────────────────────────────
 // Ordem preferencial de exibição das redes no editor
-// ------------------------------------------------------------
-// Categoria 3: CONSTANTE DE APP
 // ─────────────────────────────────────────────────────────────
 export const NETWORKS_ORDER = [
   'spotify', 'youtube', 'amazon', 'apple',
@@ -315,8 +261,6 @@ export const NETWORKS_ORDER = [
 
 // ─────────────────────────────────────────────────────────────
 // Formatação de preço (pt-BR / BRL)
-// ------------------------------------------------------------
-// Categoria 3: CONSTANTE DE APP
 // ─────────────────────────────────────────────────────────────
 export const PRICE_FORMATTER = new Intl.NumberFormat('pt-BR', {
   style: 'currency',
