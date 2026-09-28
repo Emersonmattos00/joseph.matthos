@@ -10,11 +10,11 @@
    HEAD /api/public[?resource=...]    → mesmos headers, sem body
 
    - Só GET e HEAD
-   - Cache HTTP por recurso (CDN-first, browser revalida)
+   - Cache HTTP por recurso
    - Rate limit por IP (opcional)
    - NUNCA expõe URLs de áudio (vêm via /api/stream)
    - NUNCA expõe paths de áudio (preview_path / full_path)
-   - NUNCA expõe mime dos áudios (evita fingerprinting)
+   - NUNCA expõe dados sensíveis
    - Preços vêm das envs (fonte de verdade)
 
    🛡️ REGRA DE OURO
@@ -25,12 +25,9 @@
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
    1. Rental plans SEMPRE presentes, com `available` explícito.
+      Preço indisponível → available: false (não desaparece).
    2. Plans SEMPRE presentes, com `available` explícito.
    3. mapTrack devolve `trackIndex` (do banco), não posição.
-   4. Cache-Control: max-age=0 + s-maxage + swr (CDN alivia,
-      browser sempre revalida → admin vê mudanças rápido).
-   5. mapTrack não expõe mais `previewMime`/`fullMime`
-      (evita fingerprinting do formato dos áudios).
    ============================================================ */
 
 'use strict';
@@ -49,15 +46,8 @@ const MAX_TRACKS = 2000;
 const RATE_MAX_REQUESTS = 120;
 const RATE_WINDOW_MS = 60_000;
 
-// 🔧 Cache-Control revisado:
-//   - max-age=0        → browser sempre revalida (admin vê mudança rápido)
-//   - s-maxage=60      → CDN cacheia 60s (alivia Supabase)
-//   - stale-while-revalidate=300 → CDN serve stale por até 5min enquanto
-//                                    revalida em background
-const CACHE_AGGREGATE =
-  'public, max-age=0, s-maxage=60, stale-while-revalidate=300';
-const CACHE_PLANS =
-  'public, max-age=0, s-maxage=300, stale-while-revalidate=3600';
+const CACHE_AGGREGATE = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
+const CACHE_PLANS = 'public, max-age=300, s-maxage=300, stale-while-revalidate=3600';
 
 const VALID_RESOURCES = new Set([
   'content',
@@ -78,6 +68,24 @@ const RENTAL_PLAN_DEFS = [
   { id: '10d', envKey: 'RENTAL_PRICE_10D', label: '10 dias',  days: 10, hours: 240, popular: false },
   { id: '15d', envKey: 'RENTAL_PRICE_15D', label: '15 dias',  days: 15, hours: 360, popular: false }
 ];
+
+// ─────────────────────────────────────────────────────────────
+// MIME por extensão (diagnóstico)
+// ─────────────────────────────────────────────────────────────
+const MIME_BY_EXT = {
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  mp4: 'audio/mp4',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  opus: 'audio/opus',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  webm: 'audio/webm',
+  aif: 'audio/aiff',
+  aiff: 'audio/aiff'
+};
 
 module.exports = async function handler(req, res) {
   res.setHeader('Allow', 'GET, HEAD');
@@ -279,13 +287,12 @@ async function fetchTracks() {
 
 // ─────────────────────────────────────────────────────────────
 // mapTrack — devolve trackIndex (do banco) e id
-// 🔧 NÃO expõe mime dos áudios (evita fingerprinting)
 // ─────────────────────────────────────────────────────────────
 function mapTrack(t) {
   return {
     id: t.id,
     albumId: t.album_id,
-    trackIndex: Number(t.track_index) || 0,
+    trackIndex: Number(t.track_index) || 0,   // ← SEMPRE do banco
     title: t.title || '',
     duration: t.duration || '',
     previewStart: Number(t.preview_start) || 0,
@@ -294,12 +301,9 @@ function mapTrack(t) {
     forSale: t.for_sale !== false,
     lyrics: Array.isArray(t.lyrics) ? t.lyrics : [],
     hasPreview: !!t.preview_path,
-    hasFull: !!t.full_path
-    // 🔧 REMOVIDO: previewMime, fullMime
-    //   O cliente não precisa; /api/stream devolve o mime correto
-    //   quando o player realmente carrega o áudio. Expor aqui
-    //   revelava a extensão dos arquivos (mp3/flac/wav) e ajudava
-    //   fingerprinting do catálogo.
+    hasFull: !!t.full_path,
+    previewMime: guessMime(t.preview_path),
+    fullMime: guessMime(t.full_path)
   };
 }
 
@@ -350,7 +354,7 @@ function fetchRentalPlans() {
       hours: def.hours,
       price: hasPrice ? price : 0,
       popular: def.popular,
-      available: hasPrice
+      available: hasPrice   // ← explícito
     };
   });
 
@@ -371,6 +375,12 @@ function parsePriceCents(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n * 100);
+}
+
+function guessMime(path) {
+  if (!path) return null;
+  const ext = String(path).split('.').pop().toLowerCase();
+  return MIME_BY_EXT[ext] || null;
 }
 
 function respond(res, method, payload) {
