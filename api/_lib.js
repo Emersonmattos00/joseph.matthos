@@ -29,15 +29,6 @@
    2. getPlanForUser() mantida como wrapper simples (string),
       retrocompatível com o código existente.
    3. Cache KV só guarda planos confirmados (não cacheia fallback).
-
-   🔧 CORREÇÕES DESTA VERSÃO (v2)
-   ------------------------------------------------------------
-   4. checkOrigin() — fail-secure em produção (antes: fail-open).
-      Dev sem config: permite. Prod sem config: bloqueia.
-   5. clientIp() — prioriza headers confiáveis da Vercel.
-      x-forwarded-for só é usado em dev.
-   6. assertProductionSecurityConfig() — valida config mínima.
-   7. [planejado] logger estruturado — migração em PR separado.
    ============================================================ */
 
 'use strict';
@@ -77,40 +68,6 @@ const ALLOWED_ORIGINS = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
 );
-
-// ═════════════════════════════════════════════════════════════
-// 🔧 FIX 6 — Validação de configuração em produção
-// ------------------------------------------------------------
-// Chamar dentro de handlers críticos (login admin, mutações).
-// NÃO chamar no topo do módulo (quebraria /api/public que é
-// read-only e não precisa de ALLOWED_ORIGINS).
-// ═════════════════════════════════════════════════════════════
-function assertProductionSecurityConfig() {
-  if (!IS_PROD) return;
-
-  const errors = [];
-
-  if (ALLOWED_ORIGINS.size === 0) {
-    errors.push('ALLOWED_ORIGINS vazio');
-  }
-  if (!process.env.ADMIN_SESSION_SECRET) {
-    errors.push('ADMIN_SESSION_SECRET ausente');
-  }
-  if (!process.env.SUPABASE_URL) {
-    errors.push('SUPABASE_URL ausente');
-  }
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    errors.push('SUPABASE_SERVICE_ROLE_KEY ausente');
-  }
-
-  if (errors.length) {
-    const err = new Error(
-      `[_lib] Configuração de produção incompleta: ${errors.join(', ')}`
-    );
-    err.code = 'CONFIG_INCOMPLETE';
-    throw err;
-  }
-}
 
 // ═════════════════════════════════════════════════════════════
 // 1. CONFIGURAÇÃO
@@ -193,33 +150,14 @@ function parseCookies(header) {
   return out;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 🔧 FIX 5 — clientIp() prioriza headers da Vercel
-// ------------------------------------------------------------
-// Vercel higieniza `x-vercel-forwarded-for` e `x-real-ip`
-// antes da função — não podem ser forjados pelo cliente.
-// `x-forwarded-for` puro é aceito APENAS em dev.
-// Fallback final: socket.remoteAddress (TCP real, sempre ok).
-// ─────────────────────────────────────────────────────────────
 function clientIp(req) {
   const h = req.headers || {};
-
-  const trusted =
+  const fwd =
     h['x-vercel-forwarded-for'] ||
-    h['x-real-ip'];
-
-  if (trusted) {
-    return String(trusted).split(',')[0].trim();
-  }
-
-  if (!IS_PROD) {
-    const fwd = h['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
-  }
-
-  return String(
-    (req.socket && req.socket.remoteAddress) || 'unknown'
-  ).split(',')[0].trim();
+    h['x-real-ip'] ||
+    h['x-forwarded-for'];
+  return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
+    .split(',')[0].trim();
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -597,6 +535,12 @@ async function audit(event, options = {}) {
 // ═════════════════════════════════════════════════════════════
 const PLAN_CACHE_TTL_SEC = 60;
 
+/**
+ * Versão detalhada — distingue free real de falha de lookup.
+ *
+ * @param {string} userId
+ * @returns {Promise<{ plan: string, degraded: boolean, reason: string|null }>}
+ */
 async function getPlanForUserDetailed(userId) {
   if (!userId) {
     return { plan: 'free', degraded: false, reason: 'no_user_id' };
@@ -627,6 +571,7 @@ async function getPlanForUserDetailed(userId) {
     );
 
     if (!result.response.ok) {
+      // 5xx, 4xx → não conseguimos confirmar
       degraded = true;
       reason = `http_${result.response.status}`;
       console.warn(
@@ -642,10 +587,12 @@ async function getPlanForUserDetailed(userId) {
         reason = 'invalid_plan_value';
       }
     } else {
+      // Sem linha → usuário realmente free (não é degradação)
       plan = 'free';
       reason = 'no_row';
     }
   } catch (err) {
+    // Erro de rede, timeout, etc.
     degraded = true;
     reason = err.code || 'query_error';
     console.warn(
@@ -664,6 +611,16 @@ async function getPlanForUserDetailed(userId) {
   return { plan, degraded, reason };
 }
 
+/**
+ * Versão simples — retrocompatível.
+ * Retorna 'free' | 'premium' | 'anual'.
+ *
+ * ⚠️  Em caso de falha de lookup, retorna 'free' (fail-secure).
+ *     Se o caller precisar distinguir, use getPlanForUserDetailed().
+ *
+ * @param {string} userId
+ * @returns {Promise<string>}
+ */
 async function getPlanForUser(userId) {
   const result = await getPlanForUserDetailed(userId);
   return result.plan;
@@ -680,29 +637,12 @@ async function invalidatePlanCache(userId) {
 
 // ═════════════════════════════════════════════════════════════
 // 8. CSRF — Origin check
-// ------------------------------------------------------------
-// 🔧 FIX 4 — fail-secure em produção
-//
-// Política:
-//   - Métodos seguros (GET/HEAD/OPTIONS) → sempre passa
-//   - Dev sem config   → permite (facilita localhost)
-//   - Prod sem config  → BLOQUEIA (fail-secure) + log de erro
-//   - Com config       → valida contra a whitelist
 // ═════════════════════════════════════════════════════════════
 function checkOrigin(req) {
   const method = (req.method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
 
-  // Dev sem config: permite (localhost)
-  if (!IS_PROD && ALLOWED_ORIGINS.size === 0) return true;
-
-  // Prod sem config: bloqueia (fail-secure)
-  if (IS_PROD && ALLOWED_ORIGINS.size === 0) {
-    console.error(
-      '[_lib] ALLOWED_ORIGINS vazio em produção — bloqueando requisição mutante.'
-    );
-    return false;
-  }
+  if (ALLOWED_ORIGINS.size === 0) return true;
 
   const origin = req.headers.origin || req.headers.referer;
   if (!origin) return false;
@@ -754,18 +694,9 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 // Formato do hash armazenado:
 //   scrypt$<salt-em-hex>$<hash-em-hex>
 //
-// Gere com o script `scripts/hash-admin-password.js`:
-//   node scripts/hash-admin-password.js "sua-senha-forte"
-//
-// 🔧 NOTA — parâmetros scrypt
-//   Os valores { N: 16384, r: 8, p: 1 } DEVEM ser idênticos
-//   aos usados em scripts/hash-admin-password.js.
-//   Se um dia aumentar N (ex: 32768), hashes antigos param de
-//   validar. Considere migrar para hash auto-descritivo:
-//   scrypt$N=...,r=...,p=...$salt$hash
+// Gere com o script `gerar-hash-admin.js` na raiz do projeto:
+//   node gerar-hash-admin.js "sua-senha-forte"
 // ═════════════════════════════════════════════════════════════
-const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 };
-
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
     try {
@@ -775,7 +706,7 @@ function verifyScrypt(password, storedHash) {
       const salt = Buffer.from(saltHex, 'hex');
       const expected = Buffer.from(hashHex, 'hex');
 
-      crypto.scrypt(password, salt, expected.length, SCRYPT_PARAMS, (err, derived) => {
+      crypto.scrypt(password, salt, expected.length, (err, derived) => {
         if (err) return resolve(false);
         try {
           resolve(
@@ -811,7 +742,6 @@ module.exports = {
   // Config
   getConfig,
   getAdminKey,
-  assertProductionSecurityConfig,  // ← NOVO
 
   // HTTP
   sendJson,
@@ -840,7 +770,7 @@ module.exports = {
 
   // Plano efetivo
   getPlanForUser,
-  getPlanForUserDetailed,
+  getPlanForUserDetailed,   // ← NOVO
   invalidatePlanCache,
 
   // CSRF
