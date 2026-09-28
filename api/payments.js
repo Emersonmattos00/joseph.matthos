@@ -12,19 +12,15 @@
    - Manage: gerenciar assinatura do usuário (GET/POST)
    - Webhook: valida HMAC + idempotência via payments_events
    - Preços SEMPRE do servidor (envs + tracks.price_cents)
-   - Duração do rental SEMPRE do planId (propagada via metadata)
+   - Webhook duplicado NÃO processado → reprocessa (retry_count)
 
-   🔧 CORREÇÕES APLICADAS (v2 — cirúrgicas)
+   🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
-   1. `planId` inválido agora retorna 400 (não mais fallback 48h)
-   2. Webhook valida consistência `plan_id` ↔ `rental_hours`
-   3. Webhook valida valor pago vs. `payments_attempts.amount`
-   4. Idempotência por status (duplicata exata vs. transição)
-   5. `retry_count` incrementado em markEventFailed
-   6. LGPD: sanitizeForLog remove PII; getActiveSubscription
-      prioriza provider=mercadopago sobre manual
-   7. Coluna `status` em payments_events (pending/processed/
-      ignored/rejected/failed/retrying)
+   1. `planId` respeitado no aluguel (24h, 48h, 3d, 5d, 10d, 15d)
+   2. Duração calculada a partir do planId (não mais fixa em 48h)
+   3. Preço lido da env correspondente (RENTAL_PRICE_*)
+   4. Fallback para tracks.price_cents se planId inválido (legado)
+   5. NOVO: type=manage — GET status / POST cancel
    ============================================================ */
 
 'use strict';
@@ -61,9 +57,6 @@ const MAX_ALBUM_ID_LENGTH = 64;
 const SIGNATURE_MAX_AGE_MS = 5 * 60 * 1000;
 const MAX_RETRY_COUNT = 10;
 
-// 🔧 FIX 3 — tolerância de valor (centavos)
-const AMOUNT_TOLERANCE = 0.01;
-
 const GENERIC_ERROR = 'Não foi possível iniciar o pagamento.';
 const GENERIC_RATE = 'Muitas tentativas. Tente novamente mais tarde.';
 
@@ -79,9 +72,7 @@ const RENTAL_PLAN_DEFS = {
   '15d': { hours: 360, envKey: 'RENTAL_PRICE_15D', label: '15 dias'  }
 };
 
-// 🔧 FIX 1 — legado mantido APENAS para compatibilidade de webhooks
-// antigos que vieram sem metadata.plan_id. Novos rentals SEMPRE
-// têm plan_id válido (não mais fallback silencioso).
+// Fallback legado (quando planId não vem — compatibilidade)
 const RENTAL_DURATION_HOURS_LEGACY = 48;
 
 // ─────────────────────────────────────────────────────────────
@@ -205,6 +196,7 @@ async function handleManage(req, res) {
     }
 
     try {
+      // Busca assinatura ativa
       const r = await supabaseAdminRequest(
         `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(user.id)}` +
           `&status=in.(authorized,trialing)` +
@@ -221,6 +213,7 @@ async function handleManage(req, res) {
         });
       }
 
+      // Se for Mercado Pago, cancela lá também
       const mpToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
       let mpCancelled = false;
 
@@ -253,6 +246,7 @@ async function handleManage(req, res) {
         }
       }
 
+      // Cancela localmente
       const patchRes = await supabaseAdminRequest(
         `/rest/v1/subscriptions?id=eq.${encodeURIComponent(sub.id)}`,
         {
@@ -411,33 +405,33 @@ async function handleSubscription(req, res) {
 
   let mp;
   try {
-    mp = await createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user });
-  } catch (error) {
-    console.error('[payments/subscription] erro MP detalhado:', {
-      code: error.code,
-      message: error.message,
-      mpStatus: error.mpStatus,
-      mpBody: error.mpBody
-    });
+  mp = await createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user });
+} catch (error) {
+  console.error('[payments/subscription] erro MP detalhado:', {
+    code: error.code,
+    message: error.message,
+    mpStatus: error.mpStatus,
+    mpBody: error.mpBody
+  });
 
-    await markAttemptFailed(attemptId, error.code || 'mp_error');
-    await audit('payment_subscription', {
-      userId: user.id,
-      ip,
-      userAgent,
-      success: false,
-      reason: error.code || 'mp_error',
-      metadata: {
-        mpStatus: error.mpStatus || null,
-        mpMessage: error.message || null
-      }
-    });
-
-    if (error.code === 'TIMEOUT') {
-      return sendJson(res, 504, { ok: false, error: 'Tempo esgotado. Tente novamente.' });
+  await markAttemptFailed(attemptId, error.code || 'mp_error');
+  await audit('payment_subscription', {
+    userId: user.id,
+    ip,
+    userAgent,
+    success: false,
+    reason: error.code || 'mp_error',
+    metadata: {
+      mpStatus: error.mpStatus || null,
+      mpMessage: error.message || null
     }
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+  });
+
+  if (error.code === 'TIMEOUT') {
+    return sendJson(res, 504, { ok: false, error: 'Tempo esgotado. Tente novamente.' });
   }
+  return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+}
 
   try {
     await supabaseAdminRequest(
@@ -478,6 +472,7 @@ function loadSubscriptionConfig() {
 
   if (missing.length) return { ok: false, missing };
 
+  // ⚡ Detecta ambiente pelo prefixo do token (ignora MP_ENV)
   const env = token.startsWith('TEST-') ? 'sandbox' : 'production';
 
   return {
@@ -537,22 +532,23 @@ async function createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user
   });
 
   if (!response.ok || !response.body || !response.body.id) {
-    const reason =
-      response.body?.message ||
-      response.body?.error ||
-      `http_${response.status}`;
+  const reason =
+    response.body?.message ||
+    response.body?.error ||
+    `http_${response.status}`;
 
-    console.error('[payments/subscription] MP respondeu:', {
-      status: response.status,
-      body: response.body,
-      reason
-    });
+  // ⚡ Log detalhado para diagnóstico
+  console.error('[payments/subscription] MP respondeu:', {
+    status: response.status,
+    body: response.body,
+    reason
+  });
 
-    const err = new Error('MP error: ' + reason);
-    err.code = 'MP_ERROR';
-    err.mpStatus = response.status;
-    err.mpBody = response.body;
-    throw err;
+  const err = new Error('MP error: ' + reason);
+  err.code = 'MP_ERROR';
+  err.mpStatus = response.status;
+  err.mpBody = response.body;
+  throw err;
   }
 
   const checkoutUrl =
@@ -570,7 +566,7 @@ async function createMercadoPagoPreapproval({ cfg, planConfig, externalRef, user
 }
 
 // ─────────────────────────────────────────────────────────────
-// RENTAL
+// RENTAL — com planId respeitado
 // ─────────────────────────────────────────────────────────────
 async function handleRental(req, res) {
   const cfg = loadRentalConfig();
@@ -633,40 +629,29 @@ async function handleRental(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Faixa inválida.' });
   }
 
-  // 🔧 FIX 1 — Rejeitar planId inválido em vez de usar fallback 48h.
-  // Motivo: fallback silencioso cobra preço de X dias mas concede 48h.
-  // Preferimos 400 para o cliente recarregar o JS (que pode estar
-  // cacheado com versão antiga sem planId).
   const planDef = RENTAL_PLAN_DEFS[planId] || null;
 
-  if (!planDef) {
-    await audit('payment_rental', {
-      userId: user.id, ip, userAgent,
-      success: false,
-      reason: 'invalid_plan_id',
-      metadata: { planId: planId || null }
-    });
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Plano de aluguel inválido. Recarregue a página.',
-      code: 'INVALID_RENTAL_PLAN'
-    });
-  }
-
-  const rentalHours = planDef.hours;
-
+  let rentalHours;
   let unitPrice;
   let priceSource;
 
-  const envPrice = Number(process.env[planDef.envKey]);
-  if (Number.isFinite(envPrice) && envPrice > 0) {
-    unitPrice = Number(envPrice.toFixed(2));
-    priceSource = planDef.envKey;
+  if (planDef) {
+    rentalHours = planDef.hours;
+
+    const envPrice = Number(process.env[planDef.envKey]);
+    if (Number.isFinite(envPrice) && envPrice > 0) {
+      unitPrice = Number(envPrice.toFixed(2));
+      priceSource = planDef.envKey;
+    } else {
+      console.warn(
+        `[payments/rental] ${planDef.envKey} não configurada, usando tracks.price_cents`
+      );
+      priceSource = 'tracks.price_cents';
+    }
   } else {
-    console.warn(
-      `[payments/rental] ${planDef.envKey} não configurada, usando tracks.price_cents`
-    );
-    priceSource = 'tracks.price_cents';
+    rentalHours = RENTAL_DURATION_HOURS_LEGACY;
+    priceSource = 'legacy_48h';
+    console.warn('[payments/rental] planId ausente/inválido, usando fallback 48h');
   }
 
   let track;
@@ -797,7 +782,7 @@ async function handleRental(req, res) {
     ok: true,
     checkoutUrl: preference.checkoutUrl,
     preferenceId: preference.id,
-    planId,
+    planId: planId || null,
     rentalHours
   });
 }
@@ -813,6 +798,7 @@ function loadRentalConfig() {
 
   if (missing.length) return { ok: false, missing };
 
+  // ⚡ Detecta ambiente pelo prefixo do token (ignora MP_ENV)
   const env = token.startsWith('TEST-') ? 'sandbox' : 'production';
 
   return {
@@ -912,12 +898,6 @@ async function handleWebhook(req, res) {
   const { type, resourceId } = event;
   const providerEvent = `${type}:${resourceId}`;
 
-  // Payload do webhook (para comparação de status em duplicatas)
-  const incomingBody = parseBody(req);
-  const incomingStatus = String(
-    incomingBody?.status || incomingBody?.action || ''
-  ).trim().toLowerCase() || null;
-
   let eventRow = null;
   try {
     const inserted = await supabaseAdminRequest('/rest/v1/payments_events', {
@@ -928,8 +908,7 @@ async function handleWebhook(req, res) {
         provider_event: providerEvent,
         event_type: type,
         external_id: resourceId,
-        payload: sanitizeForLog(req.body),
-        status: 'pending'
+        payload: sanitizeForLog(req.body)
       })
     });
 
@@ -938,13 +917,12 @@ async function handleWebhook(req, res) {
     }
 
     if (!Array.isArray(inserted.body) || inserted.body.length === 0) {
-      // Evento já existia — buscar para decidir
       let existing = null;
       try {
         const check = await supabaseAdminRequest(
           `/rest/v1/payments_events?provider=eq.mercadopago` +
             `&provider_event=eq.${encodeURIComponent(providerEvent)}` +
-            `&select=id,processed_at,failure_reason,retry_count,payload,status` +
+            `&select=id,processed_at,failure_reason,retry_count` +
             `&limit=1`,
           { method: 'GET' }
         );
@@ -954,30 +932,7 @@ async function handleWebhook(req, res) {
         return sendJson(res, 502, { ok: false });
       }
 
-      if (!existing) {
-        console.error('[payments/webhook] evento duplicado sem registro:', providerEvent);
-        return sendJson(res, 502, { ok: false });
-      }
-
-      // 🔧 FIX 4 — Diferenciar duplicata exata de transição de status.
-      const previousStatus = String(
-        existing.payload?.status || existing.payload?.action || ''
-      ).trim().toLowerCase() || null;
-
-      const isExactDuplicate =
-        previousStatus && incomingStatus && previousStatus === incomingStatus;
-
-      if (existing.processed_at && isExactDuplicate) {
-        // Duplicata exata já processada → ignora
-        await supabaseAdminRequest(
-          `/rest/v1/payments_events?id=eq.${encodeURIComponent(existing.id)}`,
-          {
-            method: 'PATCH',
-            headers: { Prefer: 'return=minimal' },
-            body: JSON.stringify({ status: 'ignored' })
-          }
-        ).catch(() => {});
-
+      if (existing && existing.processed_at) {
         await audit('payment_webhook', {
           success: true,
           reason: 'duplicated_processed',
@@ -986,31 +941,10 @@ async function handleWebhook(req, res) {
         return sendJson(res, 200, { ok: true, duplicated: true });
       }
 
-      if (existing.processed_at && !isExactDuplicate) {
-        // Transição legítima de status (ex: approved → refunded)
-        console.warn('[payments/webhook] transição de status:', {
-          providerEvent,
-          from: previousStatus,
-          to: incomingStatus
-        });
-        eventRow = existing;
-        // Segue fluxo normal de processamento
-      }
-
-      if (!existing.processed_at) {
-        // Evento pendente — reprocessar com retry
+      if (existing && !existing.processed_at) {
         const retryCount = Number(existing.retry_count) || 0;
         if (retryCount >= MAX_RETRY_COUNT) {
           console.error('[payments/webhook] retry limit atingido:', providerEvent);
-          await supabaseAdminRequest(
-            `/rest/v1/payments_events?id=eq.${encodeURIComponent(existing.id)}`,
-            {
-              method: 'PATCH',
-              headers: { Prefer: 'return=minimal' },
-              body: JSON.stringify({ status: 'failed' })
-            }
-          ).catch(() => {});
-
           await audit('payment_webhook', {
             success: false,
             reason: 'retry_limit',
@@ -1024,10 +958,7 @@ async function handleWebhook(req, res) {
           {
             method: 'PATCH',
             headers: { Prefer: 'return=minimal' },
-            body: JSON.stringify({
-              retry_count: retryCount + 1,
-              status: 'retrying'
-            })
+            body: JSON.stringify({ retry_count: retryCount + 1 })
           }
         ).catch(() => {});
 
@@ -1038,6 +969,9 @@ async function handleWebhook(req, res) {
           'retry:',
           retryCount + 1
         );
+      } else {
+        console.error('[payments/webhook] evento duplicado sem registro:', providerEvent);
+        return sendJson(res, 502, { ok: false });
       }
     } else {
       eventRow = inserted.body[0];
@@ -1191,74 +1125,8 @@ async function applyPayment({ resourceId, token }) {
     return;
   }
 
-  // 🔧 FIX 3 — Validar valor pago contra o banco ANTES de conceder acesso.
-  // O MP é confiável, mas o link entre ele e nós pode ser manipulado
-  // (MITM raro, bug no MP, sandbox vs prod, webhook forjado).
-  const paidAmount = Number(data.transaction_amount);
-  const expectedAmount = Number(attempt.amount);
-
-  if (
-    !Number.isFinite(paidAmount) ||
-    !Number.isFinite(expectedAmount) ||
-    Math.abs(paidAmount - expectedAmount) > AMOUNT_TOLERANCE
-  ) {
-    console.error('[payments/webhook] valor divergente:', {
-      paymentId: String(data.id),
-      paidAmount,
-      expectedAmount,
-      externalRef: ref.ref
-    });
-
-    await supabaseAdminRequest(
-      `/rest/v1/payments_attempts?id=eq.${encodeURIComponent(attempt.id)}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          status: 'failed',
-          failure_reason: `amount_mismatch:${paidAmount}!=${expectedAmount}`,
-          updated_at: new Date().toISOString()
-        })
-      }
-    ).catch(() => {});
-
-    await audit('payment_rental', {
-      userId: attempt.user_id,
-      success: false,
-      reason: 'amount_mismatch',
-      metadata: { paidAmount, expectedAmount, paymentId: String(data.id) }
-    });
-
-    // Não concede acesso. Retorna sem erro para o MP não reenviar.
-    return;
-  }
-
-  // 🔧 FIX 2 — Validar consistência entre plan_id e rental_hours
-  // do metadata. Se plan_id é válido, ele MANDA (fonte canônica).
   const metadata = data.metadata || {};
-  const metaPlanId = metadata.plan_id ? String(metadata.plan_id).trim() : null;
-  const metaHours = Number(metadata.rental_hours);
-
-  let rentalHours;
-
-  if (metaPlanId && RENTAL_PLAN_DEFS[metaPlanId]) {
-    rentalHours = RENTAL_PLAN_DEFS[metaPlanId].hours;
-
-    if (Number.isFinite(metaHours) && metaHours !== rentalHours) {
-      console.warn('[payments/webhook] rental_hours divergente do plan_id:', {
-        metaPlanId,
-        metaHours,
-        canonicalHours: rentalHours
-      });
-    }
-  } else if (Number.isFinite(metaHours) && metaHours > 0) {
-    // Compatibilidade: metadata antigo sem plan_id
-    rentalHours = metaHours;
-  } else {
-    // Último recurso — só em webhooks muito antigos
-    console.warn('[payments/webhook] metadata sem plan_id e sem rental_hours, usando fallback 48h');
-    rentalHours = RENTAL_DURATION_HOURS_LEGACY;
-  }
+  const rentalHours = Number(metadata.rental_hours) || RENTAL_DURATION_HOURS_LEGACY;
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + rentalHours * 3600 * 1000);
@@ -1273,7 +1141,7 @@ async function applyPayment({ resourceId, token }) {
         track_id: attempt.track_id,
         payment_id: String(data.id),
         external_reference: ref.ref,
-        amount_cents: Math.round(paidAmount * 100),
+        amount_cents: Math.round(Number(data.transaction_amount) * 100),
         status: 'active',
         started_at: now.toISOString(),
         expires_at: expiresAt.toISOString()
@@ -1299,23 +1167,12 @@ async function applyPayment({ resourceId, token }) {
 // Banco — helpers
 // ─────────────────────────────────────────────────────────────
 async function getActiveSubscription(userId) {
-  // 🔧 FIX 6b — Priorizar mercadopago sobre manual.
-  // Se o usuário tem assinatura manual E do MP ativas, a do MP
-  // é a que importa pra cobrança. Sem isso, um admin pode marcar
-  // manual e o webhook do MP atualiza a linha errada.
   const r = await supabaseAdminRequest(
-    `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}` +
-      `&status=in.(authorized,trialing)` +
-      `&select=id,plan,status,provider,provider_sub_id,current_period_end,created_at` +
-      `&order=created_at.desc&limit=10`,
+    `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)&select=id,plan,status,current_period_end&limit=1`,
     { method: 'GET' }
   );
-
-  if (!r.response.ok || !Array.isArray(r.body) || !r.body.length) return null;
-
-  // Preferência: mercadopago > manual > qualquer
-  const fromMP = r.body.find((s) => s.provider === 'mercadopago');
-  return fromMP || r.body[0];
+  if (!r.response.ok || !Array.isArray(r.body)) return null;
+  return r.body[0] || null;
 }
 
 async function getPendingSubscriptionAttempt(userId, plan) {
@@ -1357,9 +1214,8 @@ async function getActiveRental(userId, trackId) {
 
 async function getAttemptByRef(externalRef) {
   if (!externalRef || typeof externalRef !== 'string') return null;
-  // 🔧 FIX 3 — incluir `amount` para validação de valor
   const r = await supabaseAdminRequest(
-    `/rest/v1/payments_attempts?external_reference=eq.${encodeURIComponent(externalRef)}&select=id,user_id,kind,plan,track_id,status,amount&limit=1`,
+    `/rest/v1/payments_attempts?external_reference=eq.${encodeURIComponent(externalRef)}&select=id,user_id,kind,plan,track_id,status&limit=1`,
     { method: 'GET' }
   );
   if (!r.response.ok || !Array.isArray(r.body)) return null;
@@ -1391,43 +1247,21 @@ async function markEventProcessed(eventId) {
     {
       method: 'PATCH',
       headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify({
-        processed_at: new Date().toISOString(),
-        status: 'processed'
-      })
+      body: JSON.stringify({ processed_at: new Date().toISOString() })
     }
   ).catch(() => {});
 }
 
-// 🔧 FIX 5 — Incrementar retry_count a cada falha.
-// Sem isso, eventos que falham N vezes antes de processar
-// ficam com retry_count=0, dificultando diagnóstico.
 async function markEventFailed(eventId, reason) {
   if (!eventId) return;
-
-  try {
-    const current = await supabaseAdminRequest(
-      `/rest/v1/payments_events?id=eq.${encodeURIComponent(eventId)}&select=retry_count&limit=1`,
-      { method: 'GET' }
-    );
-
-    const currentCount = Number(current.body?.[0]?.retry_count) || 0;
-
-    await supabaseAdminRequest(
-      `/rest/v1/payments_events?id=eq.${encodeURIComponent(eventId)}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          failure_reason: String(reason || '').slice(0, 200),
-          retry_count: currentCount + 1,
-          status: 'failed'
-        })
-      }
-    );
-  } catch (err) {
-    console.error('[payments/webhook] markEventFailed:', err.message);
-  }
+  await supabaseAdminRequest(
+    `/rest/v1/payments_events?id=eq.${encodeURIComponent(eventId)}`,
+    {
+      method: 'PATCH',
+      headers: { Prefer: 'return=minimal' },
+      body: JSON.stringify({ failure_reason: String(reason || '').slice(0, 200) })
+    }
+  ).catch(() => {});
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1554,25 +1388,13 @@ function parsePrice(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// 🔧 FIX 6a — Minimização LGPD: remover PII do payload.
-// MP pode enviar nome, telefone, endereço, CPF. Nada disso
-// precisa ser persistido em payments_events.
 function sanitizeForLog(body) {
   try {
     const clone = JSON.parse(JSON.stringify(body || {}));
-
     if (clone.payer) {
       if (clone.payer.email) clone.payer.email = maskEmail(clone.payer.email);
       delete clone.payer.identification;
-      delete clone.payer.first_name;
-      delete clone.payer.last_name;
-      delete clone.payer.phone;
-      delete clone.payer.address;
-      delete clone.payer.registration_date;
     }
-
-    if (clone.card) delete clone.card;
-
     return clone;
   } catch {
     return { _unserializable: true };
