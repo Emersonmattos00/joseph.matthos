@@ -1,509 +1,994 @@
-/* ============================================================
-   api/stream.js — Resolve URL de áudio com verificação de permissão
-   ------------------------------------------------------------
-   GET /api/stream?albumId=X&trackIndex=Y
-   GET /api/stream?albumId=X&trackIndex=Y&debug=1
+-- ═══════════════════════════════════════════════════════════════════════
+--  JOSEPH MATTHOS — schema.sql
+--  ---------------------------------------------------------------
+--  Estrutura completa do banco (Supabase / PostgreSQL)
+--
+--  Ordem de criação:
+--    01. profiles
+--    02. albums
+--    03. tracks
+--    04. subscriptions
+--    04b. subscriptions — índice parcial (1 ativa por provider)
+--    05. payments_attempts
+--    06. payments_events
+--    07. rentals
+--    07b. rental_plans — planos de aluguel (fase 2)
+--    08. site_content
+--    09. site_content_history
+--    10. admin_audit
+--    11. auth_audit_log
+--    12. view effective_plan
+--    13. grants
+--    14. reload PostgREST
+--    15. policies service_role (tabelas)
+--    16. migração de áudio (full_audio → full_path)
+--    17. STORAGE — policies (buckets via Dashboard)
+--    18. reload PostgREST (final)
+--
+--  Idempotente: pode ser rodado várias vezes sem erro.
+--
+--  ⚠️  IMPORTANTE — BUCKETS DE STORAGE
+--  ---------------------------------------------------------------
+--  Os 3 buckets (site-assets, audio-preview, audio-premium) NÃO
+--  são criados por este SQL. A role do SQL Editor não tem permissão
+--  de owner sobre `storage.buckets` (essa tabela pertence à role
+--  interna `supabase_storage_admin`).
+--
+--  Crie-os manualmente pelo Dashboard do Supabase:
+--     Storage → New bucket
+--  Veja a seção 17 para os parâmetros exatos.
+-- ═══════════════════════════════════════════════════════════════════════
 
-   Fluxo:
-     1. Busca a faixa no banco
-     2. Verifica permissão:
-        a) premium / anual                → libera
-        b) aluguel de faixa ativo         → libera
-     3. SEM acesso → retorna previewUrl (público) + previewStart
-     4. COM acesso → retorna fullUrl ASSINADA (expira em TTL configurável)
 
-   🛡️ SEGURANÇA
-   ------------------------------------------------------------
-   - Cache-Control: private, no-store (nunca cachear)
-   - Vary: Cookie, Authorization (resposta muda por usuário)
-   - Referrer-Policy: no-referrer (não vaza URL assinada)
-   - X-Content-Type-Options: nosniff
-   - URLs assinadas NUNCA vão para CDN/browser cache
-   - TTL configurável via env, com clamp entre 60s e 3600s
+-- ═══════════════════════════════════════════════════════════════════════
+--  01. profiles — dados públicos do usuário (NÃO guarda plano)
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.profiles (
+  id          uuid primary key references auth.users(id) on delete cascade,
+  email       text not null default '',
+  name        text not null default '',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
 
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Inclui `preview_start` no SELECT e na resposta (previewStart)
-   2. Remove `scope=eq.track` (coluna inexistente no schema)
-   3. Remove verificação de aluguel de álbum (não suportado no schema)
-   4. TTL padrão elevado para 1800s (30 min) — cobre músicas longas
-   5. Modo `?debug=1` devolve estado completo da faixa (sem URLs)
-   6. Respostas de erro estruturadas (code + message)
-   7. encodePath() — path codificado por segmento (espaços/acentos)
-   8. normalizeSignedUrl() — aceita /object/sign/... ou URL absoluta
-   9. objectExists() — HEAD no Storage antes de gerar signed URL
-  10. source: 'preview' | 'full' | null — frontend sabe o que toca
-  11. mimeType inferido pela extensão do arquivo
-  12. Fallback: se full sumiu, cai para preview com warning
-   ============================================================ */
+comment on table public.profiles is
+  'Dados públicos do usuário. Plano vive em subscriptions; plano efetivo em effective_plan.';
+comment on column public.profiles.name is
+  'Nome de exibição. Editável pelo próprio usuário.';
+comment on column public.profiles.email is
+  'Espelho do e-mail do auth.users. Imutável pelo cliente.';
 
-'use strict';
+-- Índices
+create index if not exists idx_profiles_email
+  on public.profiles (email);
+create index if not exists idx_profiles_email_lower
+  on public.profiles (lower(email));
+create index if not exists idx_profiles_created_at
+  on public.profiles (created_at desc);
 
-const {
-  sendJson,
-  methodNotAllowed,
-  getAuthUser,
-  getPlanForUser,
-  supabaseAdminRequest,
-  getConfig
-} = require('./_lib');
+-- RLS
+alter table public.profiles enable row level security;
 
-// ─────────────────────────────────────────────────────────────
-// TTL da URL assinada
-// ─────────────────────────────────────────────────────────────
-const DEFAULT_SIGNED_URL_TTL_SEC = 1800;   // 30 min
-const MIN_SIGNED_URL_TTL_SEC = 60;         // 1 min
-const MAX_SIGNED_URL_TTL_SEC = 3600;       // 1 hora
+drop policy if exists "profiles_select_own" on public.profiles;
+create policy "profiles_select_own" on public.profiles
+  for select
+  using (auth.uid() = id);
 
-const PREMIUM_BUCKET = 'audio-premium';
-const PREVIEW_BUCKET = 'audio-preview';
+drop policy if exists "profiles_update_own_name" on public.profiles;
+create policy "profiles_update_own_name" on public.profiles
+  for update
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
 
-// Cache em memória: path → { exists, checkedAt }
-const EXISTS_CACHE_TTL_MS = 60_000;
-const _existsCache = new Map();
+drop policy if exists "profiles_no_insert" on public.profiles;
+create policy "profiles_no_insert" on public.profiles
+  for insert with check (false);
 
-// ─────────────────────────────────────────────────────────────
-// MIME por extensão (diagnóstico)
-// ─────────────────────────────────────────────────────────────
-const MIME_BY_EXT = {
-  mp3: 'audio/mpeg',
-  m4a: 'audio/mp4',
-  mp4: 'audio/mp4',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  oga: 'audio/ogg',
-  opus: 'audio/opus',
-  flac: 'audio/flac',
-  aac: 'audio/aac',
-  webm: 'audio/webm',
-  aif: 'audio/aiff',
-  aiff: 'audio/aiff'
-};
+drop policy if exists "profiles_no_delete" on public.profiles;
+create policy "profiles_no_delete" on public.profiles
+  for delete using (false);
 
-module.exports = async function handler(req, res) {
-  // ── Headers (sempre antes de tudo)
-  res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
-  res.setHeader('Vary', 'Cookie, Authorization');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Allow', 'GET, HEAD');
+-- Função: touch updated_at
+create or replace function public.touch_updated_at()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
 
-  const method = String(req.method || 'GET').toUpperCase();
+drop trigger if exists trg_profiles_updated_at on public.profiles;
+create trigger trg_profiles_updated_at
+before update on public.profiles
+for each row execute function public.touch_updated_at();
 
-  if (method !== 'GET' && method !== 'HEAD') {
-    return methodNotAllowed(res, 'GET, HEAD');
-  }
+-- Função: bloqueia alteração de id/email
+create or replace function public.prevent_profile_immutable_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.id is distinct from old.id then
+    raise exception 'O id do perfil não pode ser alterado.';
+  end if;
+  if new.email is distinct from old.email then
+    raise exception 'O e-mail não pode ser alterado diretamente.';
+  end if;
+  return new;
+end;
+$$;
 
-  const albumId = String(req.query?.albumId || '').trim();
-  const trackIndex = Number(req.query?.trackIndex);
-  const debug = String(req.query?.debug || '') === '1';
+drop trigger if exists trg_profiles_prevent_immutable on public.profiles;
+create trigger trg_profiles_prevent_immutable
+before update on public.profiles
+for each row execute function public.prevent_profile_immutable_change();
 
-  if (!albumId || !Number.isInteger(trackIndex) || trackIndex < 0) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Parâmetros inválidos.',
-      code: 'INVALID_PARAMS'
-    });
-  }
+-- Função: cria perfil no signup
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (id, email, name)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    coalesce(new.raw_user_meta_data ->> 'name', '')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
 
-  // ── 1) Buscar faixa
-  let track;
-  try {
-    const query =
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
-      `&track_index=eq.${trackIndex}` +
-      `&select=id,album_id,track_index,title,` +
-      `full_path,preview_path,preview_start,preview_duration,` +
-      `published,for_sale,price_cents` +
-      `&limit=1`;
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
 
-    const result = await supabaseAdminRequest(query, { method: 'GET' });
+-- Backfill
+insert into public.profiles (id, email, name)
+select
+  u.id,
+  coalesce(u.email, ''),
+  coalesce(u.raw_user_meta_data ->> 'name', '')
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id)
+on conflict (id) do nothing;
 
-    if (!result.response.ok) {
-      console.error('[stream] Supabase erro:', result.response.status, result.body);
-      return sendJson(res, 502, {
-        ok: false,
-        error: 'Serviço indisponível.',
-        code: 'DB_ERROR'
-      });
-    }
 
-    if (!Array.isArray(result.body) || !result.body[0]) {
-      return sendJson(res, 404, {
-        ok: false,
-        error: 'Faixa não encontrada.',
-        code: 'TRACK_NOT_FOUND'
-      });
-    }
+-- ═══════════════════════════════════════════════════════════════════════
+--  02. albums — catálogo
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.albums (
+  id          text primary key,
+  title       text not null,
+  artist      text,
+  year        int,
+  type        text not null default 'album'
+              check (type in ('album', 'ep', 'single')),
+  cover_initials text,
+  cover_image text,
+  description text default '',
+  published   boolean not null default false,
+  order_index int not null default 0,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
 
-    track = result.body[0];
-  } catch (err) {
-    console.error('[stream] erro ao buscar faixa:', err);
-    return sendJson(res, 502, {
-      ok: false,
-      error: 'Serviço indisponível.',
-      code: 'DB_ERROR'
-    });
-  }
+comment on table public.albums is 'Álbuns, EPs e singles.';
 
-  const previewStart = Math.max(0, Number(track.preview_start) || 0);
-  const previewDuration = Math.max(1, Number(track.preview_duration) || 30);
-  const previewMime = guessMime(track.preview_path);
-  const fullMime = guessMime(track.full_path);
+create index if not exists idx_albums_published
+  on public.albums (published) where published = true;
+create index if not exists idx_albums_published_order
+  on public.albums (published, order_index);
 
-  // ── Debug: estado completo sem URLs
-  if (debug) {
-    const [previewExists, fullExists] = await Promise.all([
-      track.preview_path ? objectExists(PREVIEW_BUCKET, track.preview_path) : false,
-      track.full_path ? objectExists(PREMIUM_BUCKET, track.full_path) : false
-    ]);
+alter table public.albums enable row level security;
 
-    return respond(res, method, {
-      ok: true,
-      debug: true,
-      track: {
-        id: track.id,
-        albumId: track.album_id,
-        trackIndex: track.track_index,
-        title: track.title,
-        published: !!track.published,
-        forSale: !!track.for_sale,
-        priceCents: Number(track.price_cents) || 0,
-        previewPath: track.preview_path || null,
-        previewExists,
-        previewMime,
-        previewStart,
-        previewDuration,
-        fullPath: track.full_path || null,
-        fullExists,
-        fullMime
-      }
-    });
-  }
+drop policy if exists "albums_select_published" on public.albums;
+create policy "albums_select_published" on public.albums
+  for select using (published = true);
 
-  // ── 2) Preview: só expõe URL se o arquivo existir
-  let previewUrl = null;
-  if (track.preview_path) {
-    const ok = await objectExists(PREVIEW_BUCKET, track.preview_path);
-    if (ok) {
-      previewUrl = buildPublicUrl(PREVIEW_BUCKET, track.preview_path);
-    } else {
-      console.warn('[stream] preview_path não existe:', track.preview_path);
-    }
-  }
+drop policy if exists "albums_no_write" on public.albums;
+create policy "albums_no_write" on public.albums
+  for all using (false) with check (false);
 
-  // ── 3) Permissão
-  let unlocked = false;
-  let reason = 'not_authenticated';
-  let rentalExpiresAt = null;
+drop trigger if exists trg_albums_updated_at on public.albums;
+create trigger trg_albums_updated_at
+before update on public.albums
+for each row execute function public.touch_updated_at();
 
-  try {
-    const user = await getAuthUser(req);
 
-    if (user?.id) {
-      reason = 'free_plan';
+-- ═══════════════════════════════════════════════════════════════════════
+--  03. tracks — faixas do catálogo
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.tracks (
+  id           bigserial primary key,
+  album_id     text not null references public.albums(id) on delete cascade,
+  track_index  int  not null check (track_index >= 0),
+  title        text not null,
+  duration     text,
+  -- Áudio: paths no Supabase Storage
+  --   full_path    → bucket privado  'audio-premium'  (URL assinada via /api/stream)
+  --   preview_path → bucket público  'audio-preview'  (URL direta no /api/stream)
+  full_path    text,
+  preview_path text,
+  preview_start int default 0 check (preview_start >= 0),
+  preview_duration int default 30 check (preview_duration between 5 and 120),
+  price_cents  int  not null check (price_cents > 0 and price_cents <= 1000000),
+  for_sale     boolean not null default true,
+  lyrics       jsonb default '[]'::jsonb,
+  published    boolean not null default false,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  unique (album_id, track_index)
+);
 
-      const plan = await getPlanForUser(user.id);
-      if (plan === 'premium' || plan === 'anual') {
-        unlocked = true;
-        reason = 'premium';
-      } else {
-        // ⚠️  rentals NÃO tem `scope` nem `album_id`.
-        //     Só verificamos por track_id.
-        const now = new Date().toISOString();
+comment on table public.tracks is 'Faixas do catálogo. Preço em centavos.';
+comment on column public.tracks.price_cents is 'Preço em centavos (R$ 4,90 = 490).';
+comment on column public.tracks.full_path is
+  'Nome do arquivo no bucket privado audio-premium. URL assinada gerada em /api/stream.';
+comment on column public.tracks.preview_path is
+  'Nome do arquivo no bucket público audio-preview. URL direta.';
 
-        const trackRental = await supabaseAdminRequest(
-          `/rest/v1/rentals` +
-          `?user_id=eq.${encodeURIComponent(user.id)}` +
-          `&track_id=eq.${encodeURIComponent(track.id)}` +
-          `&status=eq.active` +
-          `&expires_at=gt.${encodeURIComponent(now)}` +
-          `&select=id,expires_at` +
-          `&order=expires_at.desc` +
-          `&limit=1`,
-          { method: 'GET' }
-        );
+create index if not exists idx_tracks_album
+  on public.tracks (album_id, track_index);
+create index if not exists idx_tracks_published
+  on public.tracks (published) where published = true;
 
-        if (
-          trackRental.response.ok &&
-          Array.isArray(trackRental.body) &&
-          trackRental.body[0]
-        ) {
-          unlocked = true;
-          reason = 'track_rental_active';
-          rentalExpiresAt = trackRental.body[0].expires_at || null;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[stream] erro ao verificar permissão:', err.message);
-  }
+alter table public.tracks enable row level security;
 
-  // ── 4) Sem acesso → só preview
-  if (!unlocked) {
-    return respond(res, method, {
-      ok: true,
-      unlocked: false,
-      source: previewUrl ? 'preview' : null,
-      reason,
-      previewUrl,
-      previewStart,
-      previewDuration,
-      previewMime,
-      fullUrl: null,
-      fullMime: null,
-      expiresIn: null,
-      rentalExpiresAt: null,
-      warning: previewUrl
-        ? null
-        : (track.preview_path
-            ? 'Arquivo de prévia não encontrado.'
-            : 'Prévia não cadastrada.')
-    });
-  }
+drop policy if exists "tracks_select_published" on public.tracks;
+create policy "tracks_select_published" on public.tracks
+  for select using (published = true);
 
-  // ── 5) Autorizado, mas sem full_path
-  if (!track.full_path) {
-    return respond(res, method, {
-      ok: true,
-      unlocked: true,
-      source: previewUrl ? 'preview' : null,
-      reason,
-      previewUrl,
-      previewStart,
-      previewDuration,
-      previewMime,
-      fullUrl: null,
-      fullMime: null,
-      expiresIn: null,
-      rentalExpiresAt,
-      warning: 'Áudio completo não cadastrado.',
-      code: 'FULL_PATH_MISSING'
-    });
-  }
+drop policy if exists "tracks_no_write" on public.tracks;
+create policy "tracks_no_write" on public.tracks
+  for all using (false) with check (false);
 
-  // ── 6) Autorizado, mas arquivo sumiu do Storage
-  const fullExists = await objectExists(PREMIUM_BUCKET, track.full_path);
-  if (!fullExists) {
-    console.error('[stream] full_path não existe:', track.full_path);
-    return respond(res, method, {
-      ok: true,
-      unlocked: true,
-      source: previewUrl ? 'preview' : null,
-      reason,
-      previewUrl,
-      previewStart,
-      previewDuration,
-      previewMime,
-      fullUrl: null,
-      fullMime: null,
-      expiresIn: null,
-      rentalExpiresAt,
-      warning: 'Áudio completo não encontrado no Storage.',
-      code: 'FULL_FILE_MISSING'
-    });
-  }
+drop trigger if exists trg_tracks_updated_at on public.tracks;
+create trigger trg_tracks_updated_at
+before update on public.tracks
+for each row execute function public.touch_updated_at();
 
-  // ── 7) Gera URL assinada
-  const ttl = getSignedUrlTtl();
 
-  let fullUrl;
-  try {
-    fullUrl = await createSignedUrl(PREMIUM_BUCKET, track.full_path, ttl);
-  } catch (err) {
-    console.error('[stream] erro ao criar URL assinada:', err);
-    fullUrl = null;
-  }
+-- ═══════════════════════════════════════════════════════════════════════
+--  04. subscriptions — fonte de verdade do plano
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.subscriptions (
+  id                  bigserial primary key,
+  user_id             uuid not null references auth.users(id) on delete cascade,
+  plan                text not null check (plan in ('premium', 'anual')),
+  status              text not null check (status in ('pending', 'authorized', 'paused', 'canceled', 'trialing')),
+  provider            text not null default 'mercadopago',
+  provider_sub_id     text not null,
+  external_reference  text,
+  current_period_end  timestamptz,
+  started_at          timestamptz,
+  canceled_at         timestamptz,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  unique (provider, provider_sub_id)
+);
 
-  if (!fullUrl) {
-    return sendJson(res, 502, {
-      ok: false,
-      error: 'Falha ao gerar URL de áudio.',
-      code: 'SIGNED_URL_ERROR'
-    });
-  }
+comment on table public.subscriptions is
+  'Estado atual da assinatura. Fonte de verdade do plano.';
 
-  return respond(res, method, {
-    ok: true,
-    unlocked: true,
-    source: 'full',
-    reason,
-    previewUrl,
-    previewStart,
-    previewDuration,
-    previewMime,
-    fullUrl,
-    fullMime,
-    expiresIn: ttl,
-    rentalExpiresAt
-  });
-};
+create index if not exists idx_subscriptions_user
+  on public.subscriptions (user_id);
+create index if not exists idx_subscriptions_status
+  on public.subscriptions (status);
+create index if not exists idx_subscriptions_user_status
+  on public.subscriptions (user_id, status);
+create index if not exists idx_subscriptions_period_end
+  on public.subscriptions (current_period_end)
+  where status in ('authorized', 'trialing');
 
-// ─────────────────────────────────────────────────────────────
-// TTL com clamp
-// ─────────────────────────────────────────────────────────────
-function getSignedUrlTtl() {
-  const raw = Number(process.env.SIGNED_URL_TTL_SEC);
+alter table public.subscriptions enable row level security;
 
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return DEFAULT_SIGNED_URL_TTL_SEC;
-  }
+drop policy if exists "subscriptions_select_own" on public.subscriptions;
+create policy "subscriptions_select_own" on public.subscriptions
+  for select using (auth.uid() = user_id);
 
-  if (raw < MIN_SIGNED_URL_TTL_SEC) {
-    console.warn(
-      `[stream] SIGNED_URL_TTL_SEC=${raw} abaixo do mínimo; usando ${MIN_SIGNED_URL_TTL_SEC}`
-    );
-    return MIN_SIGNED_URL_TTL_SEC;
-  }
+drop policy if exists "subscriptions_no_write" on public.subscriptions;
+create policy "subscriptions_no_write" on public.subscriptions
+  for all using (false) with check (false);
 
-  if (raw > MAX_SIGNED_URL_TTL_SEC) {
-    console.warn(
-      `[stream] SIGNED_URL_TTL_SEC=${raw} acima do máximo; usando ${MAX_SIGNED_URL_TTL_SEC}`
-    );
-    return MAX_SIGNED_URL_TTL_SEC;
-  }
+drop trigger if exists trg_subscriptions_updated_at on public.subscriptions;
+create trigger trg_subscriptions_updated_at
+before update on public.subscriptions
+for each row execute function public.touch_updated_at();
 
-  return raw;
-}
 
-// ─────────────────────────────────────────────────────────────
-// Path encoding — segmento por segmento
-// ─────────────────────────────────────────────────────────────
-function encodePath(path) {
-  return String(path || '')
-    .replace(/^\/+/, '')
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-}
+-- ═══════════════════════════════════════════════════════════════════════
+--  04b. subscriptions — invariantes de negócio
+-- ---------------------------------------------------------------
+--  🎯 REGRA
+--
+--  Um usuário pode ter no máximo UMA assinatura ativa por provider.
+--
+--  Motivo:
+--    - MP nunca cria 2 preapprovals simultâneos pro mesmo usuário
+--    - Manual nunca deveria ter 2 ativos (admin erra)
+--    - Histórico (canceled) pode ter N — mantido para auditoria
+--
+--  ⚠️  Não usamos UNIQUE(user_id) puro porque:
+--     - O webhook faz upsert por (provider, provider_sub_id)
+--     - A troca manual→MP cria uma nova linha antes de cancelar
+--       a antiga (por 1 instante podem coexistir)
+--     - O índice parcial cobre o caso real (evita 2 ativos do
+--       MESMO provider)
+--
+--  ⚠️  Índice `where`: aplica só em status ativos (authorized,
+--     trialing). 'pending' não conta — é assinatura ainda não
+--     confirmada.
+--
+--  ⚠️  ANTES DE RODAR EM PRODUÇÃO: verifique duplicatas existentes
+--     (ver diagnóstico no final do arquivo). Se houver, o CREATE
+--     UNIQUE INDEX vai falhar com "duplicate key value violates".
+-- ═══════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────
-// URL pública
-// ─────────────────────────────────────────────────────────────
-function buildPublicUrl(bucket, path) {
-  const { url } = getConfig();
-  const clean = encodePath(path);
-  return `${url}/storage/v1/object/public/${encodeURIComponent(bucket)}/${clean}`;
-}
+create unique index if not exists uniq_active_subscription_per_provider
+  on public.subscriptions (user_id, provider)
+  where status in ('authorized', 'trialing');
 
-// ─────────────────────────────────────────────────────────────
-// Signed URL — aceita 3 formatos
-// ─────────────────────────────────────────────────────────────
-function normalizeSignedUrl(signedURL, baseUrl) {
-  const raw = String(signedURL || '').trim();
-  if (!raw) return null;
+comment on index public.uniq_active_subscription_per_provider is
+  'Impede 2 assinaturas ativas do mesmo provider para o mesmo usuário.';
 
-  // URL absoluta
-  if (/^https?:\/\//i.test(raw)) return raw;
 
-  // Já vem com /storage/v1/
-  if (raw.startsWith('/storage/v1/')) return baseUrl + raw;
+-- ═══════════════════════════════════════════════════════════════════════
+--  05. payments_attempts — idempotência de checkout
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.payments_attempts (
+  id                  bigserial primary key,
+  user_id             uuid not null references auth.users(id) on delete cascade,
+  kind                text not null default 'subscription'
+                      check (kind in ('subscription', 'rental')),
+  status              text not null default 'creating'
+                      check (status in ('creating', 'pending', 'failed', 'completed', 'expired')),
+  plan                text check (plan in ('premium', 'anual')),
+  track_id            bigint references public.tracks(id) on delete set null,
+  album_id            text,
+  track_index         int,
+  amount              numeric(10,2) not null check (amount > 0),
+  currency            text not null default 'BRL',
+  provider            text not null default 'mercadopago',
+  preapproval_id      text,
+  preference_id       text,
+  checkout_url        text,
+  external_reference  text not null unique,
+  failure_reason      text,
+  ip                  inet,
+  user_agent          text,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
 
-  // Relativo: /object/sign/...
-  const clean = raw.replace(/^\/+/, '');
-  return `${baseUrl}/storage/v1/${clean}`;
-}
+comment on table public.payments_attempts is
+  'Tentativas de checkout. Base da idempotência de criação.';
 
-async function createSignedUrl(bucket, path, expiresInSec) {
-  const { url } = getConfig();
-  const adminKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!adminKey) {
-    console.error('[stream] SUPABASE_SERVICE_ROLE_KEY ausente');
-    return null;
-  }
+create index if not exists idx_attempts_user_kind_status
+  on public.payments_attempts (user_id, kind, status);
+create index if not exists idx_attempts_preapproval
+  on public.payments_attempts (preapproval_id);
+create index if not exists idx_attempts_preference
+  on public.payments_attempts (preference_id);
+create index if not exists idx_attempts_created
+  on public.payments_attempts (created_at desc);
 
-  const clean = encodePath(path);
-  const endpoint =
-    `${url}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${clean}`;
+alter table public.payments_attempts enable row level security;
 
-  try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        apikey: adminKey,
-        Authorization: `Bearer ${adminKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ expiresIn: expiresInSec })
-    });
+drop policy if exists "attempts_no_access" on public.payments_attempts;
+create policy "attempts_no_access" on public.payments_attempts
+  for all using (false) with check (false);
 
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      console.error('[stream] Storage sign:', response.status, body.slice(0, 500));
-      return null;
-    }
+drop trigger if exists trg_attempts_updated_at on public.payments_attempts;
+create trigger trg_attempts_updated_at
+before update on public.payments_attempts
+for each row execute function public.touch_updated_at();
 
-    const data = await response.json();
-    if (!data?.signedURL) {
-      console.error('[stream] Supabase não retornou signedURL');
-      return null;
-    }
 
-    return normalizeSignedUrl(data.signedURL, url);
-  } catch (err) {
-    console.error('[stream] erro de rede:', err.message);
-    return null;
-  }
-}
+-- ═══════════════════════════════════════════════════════════════════════
+--  06. payments_events — idempotência de webhooks
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.payments_events (
+  id              bigserial primary key,
+  provider        text not null default 'mercadopago',
+  provider_event  text not null,
+  event_type      text not null,
+  external_id     text,
+  payload         jsonb not null,
+  status          text not null default 'pending',
+  processed_at    timestamptz,
+  failure_reason  text,
+  retry_count     int not null default 0,
+  created_at      timestamptz not null default now(),
+  unique (provider, provider_event)
+);
 
-// ─────────────────────────────────────────────────────────────
-// objectExists — HEAD no Storage, com cache de 60s
-// ─────────────────────────────────────────────────────────────
-async function objectExists(bucket, path) {
-  if (!bucket || !path) return false;
+comment on table public.payments_events is
+  'Log de webhooks. Chave (provider, provider_event) garante idempotência.';
+comment on column public.payments_events.status is
+  'pending | processed | ignored | rejected | failed | retrying.';
 
-  const key = `${bucket}/${path}`;
-  const now = Date.now();
-  const cached = _existsCache.get(key);
+-- Constraint de status (idempotente)
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'payments_events_status_check'
+  ) then
+    alter table public.payments_events
+      add constraint payments_events_status_check
+      check (status in ('pending', 'processed', 'ignored', 'rejected', 'failed', 'retrying'));
+  end if;
+end $$;
 
-  if (cached && (now - cached.checkedAt) < EXISTS_CACHE_TTL_MS) {
-    return cached.exists;
-  }
+create index if not exists idx_events_external
+  on public.payments_events (external_id);
+create index if not exists idx_events_created
+  on public.payments_events (created_at desc);
+create index if not exists idx_events_unprocessed
+  on public.payments_events (created_at)
+  where processed_at is null;
+create index if not exists idx_events_status_pending
+  on public.payments_events (status, created_at)
+  where status in ('pending', 'retrying');
 
-  const { url } = getConfig();
-  const adminKey = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!adminKey) return false;
+alter table public.payments_events enable row level security;
 
-  const clean = encodePath(path);
-  const endpoint =
-    `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${clean}`;
+drop policy if exists "events_no_access" on public.payments_events;
+create policy "events_no_access" on public.payments_events
+  for all using (false) with check (false);
 
-  try {
-    const r = await fetch(endpoint, {
-      method: 'HEAD',
-      headers: {
-        apikey: adminKey,
-        Authorization: `Bearer ${adminKey}`
-      }
-    });
 
-    const exists = r.ok;
-    _existsCache.set(key, { exists, checkedAt: now });
-    return exists;
-  } catch (err) {
-    console.warn('[stream] objectExists falhou:', bucket, path, err.message);
-    return false;
-  }
-}
+-- ═══════════════════════════════════════════════════════════════════════
+--  07. rentals — acesso temporário
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.rentals (
+  id                  bigserial primary key,
+  user_id             uuid not null references auth.users(id) on delete cascade,
+  track_id            bigint not null references public.tracks(id) on delete cascade,
+  payment_id          text not null,
+  external_reference  text,
+  amount_cents        int not null check (amount_cents > 0),
+  status              text not null default 'active'
+                      check (status in ('active', 'expired', 'refunded')),
+  started_at          timestamptz not null default now(),
+  expires_at          timestamptz not null,
+  created_at          timestamptz not null default now(),
+  unique (user_id, track_id, payment_id)
+);
 
-// ─────────────────────────────────────────────────────────────
-// MIME por extensão
-// ─────────────────────────────────────────────────────────────
-function guessMime(path) {
-  if (!path) return null;
-  const ext = String(path).split('.').pop().toLowerCase();
-  return MIME_BY_EXT[ext] || null;
-}
+comment on table public.rentals is
+  'Direito de acesso temporário a uma faixa. Unique por (user, track, payment).';
 
-// ─────────────────────────────────────────────────────────────
-// Resposta (trata HEAD)
-// ─────────────────────────────────────────────────────────────
-function respond(res, method, payload) {
-  if (method === 'HEAD') {
-    res.status(200);
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    return res.end();
-  }
-  return sendJson(res, 200, payload);
-}
+create index if not exists idx_rentals_user_track
+  on public.rentals (user_id, track_id);
+create index if not exists idx_rentals_expires
+  on public.rentals (expires_at) where status = 'active';
+create index if not exists idx_rentals_payment
+  on public.rentals (payment_id);
+
+alter table public.rentals enable row level security;
+
+drop policy if exists "rentals_select_own" on public.rentals;
+create policy "rentals_select_own" on public.rentals
+  for select using (auth.uid() = user_id);
+
+drop policy if exists "rentals_no_write" on public.rentals;
+create policy "rentals_no_write" on public.rentals
+  for all using (false) with check (false);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  07b. rental_plans — planos de aluguel (opcional, fase 2)
+-- ---------------------------------------------------------------
+--  🎯 ESCOPO
+--
+--  Hoje (fase 1) os planos de aluguel são definidos por ENVS:
+--    RENTAL_PRICE_24H, RENTAL_PRICE_48H, RENTAL_PRICE_3D,
+--    RENTAL_PRICE_5D,  RENTAL_PRICE_10D, RENTAL_PRICE_15D
+--
+--  O /api/public lê essas envs e monta o array `rentalPlans[]`.
+--
+--  Esta tabela existe para a FASE 2, quando você quiser:
+--    ✅ Editar preços pelo painel admin (sem redeploy)
+--    ✅ Criar/desativar planos dinamicamente
+--    ✅ Ter histórico de mudanças de preço
+--
+--  ⚠️  ENQUANTO O BACKEND NÃO LER DESTA TABELA, ela é apenas
+--      documentação viva dos preços sugeridos.
+--
+--  💡 MIGRAÇÃO (quando quiser usar):
+--     1. Popular a tabela com os valores das envs (INSERT abaixo)
+--     2. Alterar /api/public para ler daqui (com fallback pra env)
+--     3. Alterar /api/payments para ler `hours` daqui
+--     4. Remover as envs RENTAL_PRICE_* do Vercel
+-- ═══════════════════════════════════════════════════════════════════════
+
+create table if not exists public.rental_plans (
+  id           text primary key
+               check (id in ('24h', '48h', '3d', '5d', '10d', '15d')),
+  label        text not null,
+  days         int  not null check (days > 0),
+  hours        int  not null check (hours > 0),
+  price_cents  int  not null check (price_cents > 0),
+  popular      boolean not null default false,
+  active       boolean not null default true,
+  order_index  int  not null default 0,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+
+comment on table public.rental_plans is
+  'Planos de aluguel de faixas. Fase 2: fonte de verdade. Fase 1: as envs RENTAL_PRICE_* mandam.';
+comment on column public.rental_plans.hours is
+  'Duração do acesso em horas. DEVE bater com RENTAL_PLAN_DEFS no api/payments.js.';
+comment on column public.rental_plans.price_cents is
+  'Preço em centavos (R$ 4,90 = 490). Mesma unidade de tracks.price_cents.';
+comment on column public.rental_plans.popular is
+  'Marca o plano como "Mais popular" no modal de aluguel.';
+
+create index if not exists idx_rental_plans_active_order
+  on public.rental_plans (active, order_index);
+
+alter table public.rental_plans enable row level security;
+
+drop policy if exists "rental_plans_public_read" on public.rental_plans;
+create policy "rental_plans_public_read" on public.rental_plans
+  for select using (active = true);
+
+drop policy if exists "rental_plans_no_write" on public.rental_plans;
+create policy "rental_plans_no_write" on public.rental_plans
+  for all using (false) with check (false);
+
+drop trigger if exists trg_rental_plans_updated_at on public.rental_plans;
+create trigger trg_rental_plans_updated_at
+before update on public.rental_plans
+for each row execute function public.touch_updated_at();
+
+-- Seed opcional — insere se a tabela estiver vazia
+insert into public.rental_plans (id, label, days, hours, price_cents, popular, order_index)
+values
+  ('24h', '24 horas', 1,  24,  290,   false, 1),
+  ('48h', '48 horas', 2,  48,  490,   true,  2),
+  ('3d',  '3 dias',   3,  72,  690,   false, 3),
+  ('5d',  '5 dias',   5,  120, 990,   false, 4),
+  ('10d', '10 dias',  10, 240, 1490,  false, 5),
+  ('15d', '15 dias',  15, 360, 1990,  false, 6)
+on conflict (id) do nothing;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  08. site_content — conteúdo do site (JSON)
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.site_content (
+  key         text primary key,
+  data        jsonb not null default '{}'::jsonb,
+  version     int not null default 0,
+  updated_by  uuid references auth.users(id) on delete set null,
+  updated_at  timestamptz not null default now()
+);
+
+comment on table public.site_content is
+  'Conteúdo editável do site (branding, hero, discografia, planos, etc).';
+
+alter table public.site_content enable row level security;
+
+drop policy if exists "site_content_public_read" on public.site_content;
+create policy "site_content_public_read" on public.site_content
+  for select using (true);
+
+drop policy if exists "site_content_no_write" on public.site_content;
+create policy "site_content_no_write" on public.site_content
+  for all using (false) with check (false);
+
+insert into public.site_content (key, data)
+values ('default', '{}'::jsonb)
+on conflict (key) do nothing;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  09. site_content_history — histórico para rollback
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.site_content_history (
+  id          bigserial primary key,
+  key         text not null,
+  data        jsonb not null,
+  version     int not null,
+  created_by  uuid references auth.users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+comment on table public.site_content_history is
+  'Versões anteriores de site_content. Permite rollback.';
+
+create index if not exists idx_content_history_key
+  on public.site_content_history (key, created_at desc);
+
+alter table public.site_content_history enable row level security;
+
+drop policy if exists "content_history_no_access" on public.site_content_history;
+create policy "content_history_no_access" on public.site_content_history
+  for all using (false) with check (false);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  10. admin_audit — trilha de auditoria do painel admin
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.admin_audit (
+  id          bigserial primary key,
+  actor       text,
+  action      text not null,
+  target      text,
+  metadata    jsonb,
+  ip          inet,
+  user_agent  text,
+  created_at  timestamptz not null default now()
+);
+
+comment on table public.admin_audit is
+  'Trilha de auditoria de ações do painel admin.';
+
+create index if not exists idx_admin_audit_created
+  on public.admin_audit (created_at desc);
+create index if not exists idx_admin_audit_action
+  on public.admin_audit (action);
+
+alter table public.admin_audit enable row level security;
+
+drop policy if exists "admin_audit_no_access" on public.admin_audit;
+create policy "admin_audit_no_access" on public.admin_audit
+  for all using (false) with check (false);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  11. auth_audit_log — auditoria de autenticação
+-- ═══════════════════════════════════════════════════════════════════════
+create table if not exists public.auth_audit_log (
+  id          bigserial primary key,
+  event       text not null,
+  email_hash  text,
+  user_id     uuid,
+  ip          inet,
+  user_agent  text,
+  success     boolean not null,
+  reason      text,
+  created_at  timestamptz not null default now()
+);
+
+comment on table public.auth_audit_log is
+  'Auditoria de login/signup/logout. E-mail hasheado.';
+
+create index if not exists idx_auth_audit_created
+  on public.auth_audit_log (created_at desc);
+create index if not exists idx_auth_audit_email_hash
+  on public.auth_audit_log (email_hash);
+create index if not exists idx_auth_audit_ip
+  on public.auth_audit_log (ip);
+create index if not exists idx_auth_audit_event
+  on public.auth_audit_log (event, created_at desc);
+
+alter table public.auth_audit_log enable row level security;
+
+drop policy if exists "auth_audit_no_access" on public.auth_audit_log;
+create policy "auth_audit_no_access" on public.auth_audit_log
+  for all using (false) with check (false);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  12. view effective_plan — plano derivado de subscriptions
+-- ═══════════════════════════════════════════════════════════════════════
+create or replace view public.effective_plan as
+select
+  p.id as user_id,
+  case
+    when s.status in ('authorized', 'trialing')
+         and (s.current_period_end is null or s.current_period_end > now())
+      then s.plan
+    else 'free'
+  end as plan
+from public.profiles p
+left join lateral (
+  select plan, status, current_period_end
+  from public.subscriptions
+  where user_id = p.id
+  order by
+    case status
+      when 'authorized' then 1
+      when 'trialing' then 2
+      when 'pending' then 3
+      when 'paused' then 4
+      when 'canceled' then 5
+      else 6
+    end,
+    created_at desc
+  limit 1
+) s on true;
+
+comment on view public.effective_plan is
+  'Plano efetivo do usuário: deriva de subscriptions. Nunca escreve direto.';
+
+revoke all on public.effective_plan from anon, authenticated;
+grant select on public.effective_plan to service_role;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  13. grants explícitos
+-- ═══════════════════════════════════════════════════════════════════════
+revoke all on public.profiles from anon, authenticated;
+grant select, update on public.profiles to authenticated;
+grant all on public.profiles to service_role;
+
+revoke all on public.albums from anon, authenticated;
+grant select on public.albums to anon, authenticated;
+grant all on public.albums to service_role;
+
+revoke all on public.tracks from anon, authenticated;
+grant select on public.tracks to anon, authenticated;
+grant all on public.tracks to service_role;
+
+revoke all on public.subscriptions from anon, authenticated;
+grant select on public.subscriptions to authenticated;
+grant all on public.subscriptions to service_role;
+
+revoke all on public.rentals from anon, authenticated;
+grant select on public.rentals to authenticated;
+grant all on public.rentals to service_role;
+
+revoke all on public.rental_plans from anon, authenticated;
+grant select on public.rental_plans to anon, authenticated;
+grant all on public.rental_plans to service_role;
+
+revoke all on public.site_content from anon, authenticated;
+grant select on public.site_content to anon, authenticated;
+grant all on public.site_content to service_role;
+
+revoke all on public.payments_attempts from anon, authenticated;
+grant all on public.payments_attempts to service_role;
+
+revoke all on public.payments_events from anon, authenticated;
+grant all on public.payments_events to service_role;
+
+revoke all on public.site_content_history from anon, authenticated;
+grant all on public.site_content_history to service_role;
+
+revoke all on public.admin_audit from anon, authenticated;
+grant all on public.admin_audit to service_role;
+
+revoke all on public.auth_audit_log from anon, authenticated;
+grant all on public.auth_audit_log to service_role;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  14. reload PostgREST
+-- ═══════════════════════════════════════════════════════════════════════
+notify pgrst, 'reload schema';
+
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  15. POLICIES para service_role (tabelas) — ESSENCIAL!
+-- ---------------------------------------------------------------
+--  O service_role NÃO bypassa RLS automaticamente no Supabase.
+--  Sem estas policies, o painel admin retorna 502.
+-- ═══════════════════════════════════════════════════════════════════════
+
+drop policy if exists "profiles_service_all" on public.profiles;
+create policy "profiles_service_all" on public.profiles
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "albums_service_all" on public.albums;
+create policy "albums_service_all" on public.albums
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "tracks_service_all" on public.tracks;
+create policy "tracks_service_all" on public.tracks
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "subscriptions_service_all" on public.subscriptions;
+create policy "subscriptions_service_all" on public.subscriptions
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "rentals_service_all" on public.rentals;
+create policy "rentals_service_all" on public.rentals
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "rental_plans_service_all" on public.rental_plans;
+create policy "rental_plans_service_all" on public.rental_plans
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "site_content_service_all" on public.site_content;
+create policy "site_content_service_all" on public.site_content
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "site_content_history_service_all" on public.site_content_history;
+create policy "site_content_history_service_all" on public.site_content_history
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "payments_attempts_service_all" on public.payments_attempts;
+create policy "payments_attempts_service_all" on public.payments_attempts
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "payments_events_service_all" on public.payments_events;
+create policy "payments_events_service_all" on public.payments_events
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "admin_audit_service_all" on public.admin_audit;
+create policy "admin_audit_service_all" on public.admin_audit
+  for all to service_role using (true) with check (true);
+
+drop policy if exists "auth_audit_log_service_all" on public.auth_audit_log;
+create policy "auth_audit_log_service_all" on public.auth_audit_log
+  for all to service_role using (true) with check (true);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  16. MIGRAÇÃO — de full_audio/preview_audio para full_path/preview_path
+-- ---------------------------------------------------------------
+--  Bancos criados com versões antigas do schema podem ter as colunas
+--  antigas. Este bloco:
+--    1) Garante que full_path/preview_path existam
+--    2) Migra dados das colunas antigas (se existirem)
+--    3) Remove as colunas antigas (se existirem)
+--
+--  Idempotente: rodar várias vezes não causa erro.
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- 1) Garante que as colunas novas existem
+alter table public.tracks
+  add column if not exists full_path text,
+  add column if not exists preview_path text;
+
+-- 2) Migra dados das colunas antigas (só se existirem)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'tracks'
+      and column_name = 'full_audio'
+  ) then
+    execute $sql$
+      update public.tracks
+      set full_path = regexp_replace(full_audio, '^.*/', '')
+      where full_path is null
+        and full_audio is not null
+        and full_audio <> ''
+    $sql$;
+
+    execute $sql$
+      update public.tracks
+      set preview_path = regexp_replace(preview_audio, '^.*/', '')
+      where preview_path is null
+        and preview_audio is not null
+        and preview_audio <> ''
+    $sql$;
+  end if;
+end $$;
+
+-- 3) Remove as colunas antigas (só se existirem)
+alter table public.tracks
+  drop column if exists full_audio,
+  drop column if exists preview_audio;
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  17. STORAGE — policies (buckets devem ser criados pelo Dashboard)
+-- ---------------------------------------------------------------
+--  ⚠️  IMPORTANTE
+--
+--  Os 3 buckets NÃO são criados via SQL porque a role do SQL Editor
+--  não tem permissão de owner sobre `storage.buckets` (essa tabela
+--  pertence à role interna `supabase_storage_admin`).
+--
+--  Tentar rodar `insert into storage.buckets (...)` resulta em:
+--     ERROR: 42501: must be owner of table buckets
+--
+--  Crie os buckets manualmente pelo Dashboard do Supabase:
+--     Storage → New bucket
+--
+--  Parâmetros exatos:
+--
+--  ┌────────────────┬──────────┬────────────┬─────────────────────────────────────────────────────┐
+--  │ Nome           │ Público? │ Limite     │ MIME types permitidos                               │
+--  ├────────────────┼──────────┼────────────┼─────────────────────────────────────────────────────┤
+--  │ site-assets    │ ✅ Sim   │ 10 MB      │ image/jpeg, image/png, image/webp, image/gif        │
+--  │ audio-preview  │ ✅ Sim   │ 10 MB      │ audio/mpeg, audio/mp4, audio/wav, audio/ogg         │
+--  │ audio-premium  │ ❌ Não   │ 50 MB      │ audio/mpeg, audio/mp4, audio/wav, audio/ogg         │
+--  └────────────────┴──────────┴────────────┴─────────────────────────────────────────────────────┘
+--
+--  ⚠️  ATENÇÃO: `audio-premium` deve ser PRIVADO. Se você marcar como
+--  público, o sistema de signed URLs perde a proteção — qualquer pessoa
+--  com a URL direta consegue baixar o áudio completo.
+--
+--  Depois de criar os buckets, as policies abaixo configuram o acesso.
+--  Elas PODEM ser criadas via SQL Editor (a role tem permissão em
+--  `storage.objects`).
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- 17.1. Policies de RLS para storage.objects
+
+-- site-assets: leitura pública (imagens)
+drop policy if exists "site_assets_public_read" on storage.objects;
+create policy "site_assets_public_read"
+  on storage.objects for select
+  using (bucket_id = 'site-assets');
+
+-- audio-preview: leitura pública (previews)
+drop policy if exists "audio_preview_public_read" on storage.objects;
+create policy "audio_preview_public_read"
+  on storage.objects for select
+  using (bucket_id = 'audio-preview');
+
+-- audio-premium: NENHUMA policy de SELECT pública.
+--   O bucket é privado. Acesso via signed URLs geradas pelo /api/stream.
+
+-- service_role: acesso total a todos os buckets
+--   Necessário para uploads via /api/admin?action=upload
+drop policy if exists "storage_service_role_all" on storage.objects;
+create policy "storage_service_role_all"
+  on storage.objects for all
+  to service_role
+  using (true)
+  with check (true);
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  18. reload PostgREST (final)
+-- ═══════════════════════════════════════════════════════════════════════
+notify pgrst, 'reload schema';
+
+
+-- ═══════════════════════════════════════════════════════════════════════
+--  📋 DIAGNÓSTICO — rodar ANTES de aplicar o índice parcial 04b
+-- ---------------------------------------------------------------
+--  Se houver duplicatas (2+ assinaturas ativas do mesmo provider
+--  para o mesmo usuário), o CREATE UNIQUE INDEX da seção 04b vai
+--  falhar com:
+--     ERROR: could not create unique index
+--     DETAIL: Key (user_id, provider)=(...) is duplicated.
+--
+--  Antes de rodar o schema completo, execute:
+-- ═══════════════════════════════════════════════════════════════════════
+--
+--  SELECT
+--    user_id,
+--    provider,
+--    count(*) AS ativas,
+--    array_agg(id ORDER BY created_at DESC) AS sub_ids,
+--    array_agg(provider_sub_id ORDER BY created_at DESC) AS provider_ids
+--  FROM public.subscriptions
+--  WHERE status IN ('authorized', 'trialing')
+--  GROUP BY user_id, provider
+--  HAVING count(*) > 1
+--  ORDER BY ativas DESC;
+--
+--  Se retornar linhas, cancele as duplicatas (mantém a mais recente):
+--
+--  WITH ranked AS (
+--    SELECT
+--      id,
+--      row_number() OVER (
+--        PARTITION BY user_id, provider
+--        ORDER BY created_at DESC
+--      ) AS rn
+--    FROM public.subscriptions
+--    WHERE status IN ('authorized', 'trialing')
+--  )
+--  UPDATE public.subscriptions
+--  SET status = 'canceled',
+--      canceled_at = now(),
+--      updated_at = now()
+--  WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+--
+--  Só depois disso rodar o schema completo.
+-- ═══════════════════════════════════════════════════════════════════════
