@@ -61,7 +61,6 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  /* ── Cores base */
   --bg: #0b0a0c;
   --bg-elev: #131216;
   --card: #1a181f;
@@ -71,56 +70,15 @@
   --accent-dark: #8b6f2c;
   --accent-glow: rgba(212, 175, 55, 0.25);
   --border: #2b272f;
-
-  /* ── Semânticas */
   --success: #4ade80;
   --danger: #f87171;
   --info: #60a5fa;
   --warning: #f0a100;
-
-  /* ── Accent com opacidades pré-definidas
-     Uso: var(--accent-08) em vez de rgba(212,175,55,0.08)
-     Trocar --accent propaga pra todos. */
-  --accent-04: rgba(212, 175, 55, 0.04);
-  --accent-06: rgba(212, 175, 55, 0.06);
-  --accent-08: rgba(212, 175, 55, 0.08);
-  --accent-10: rgba(212, 175, 55, 0.10);
-  --accent-15: rgba(212, 175, 55, 0.15);
-  --accent-18: rgba(212, 175, 55, 0.18);
-  --accent-20: rgba(212, 175, 55, 0.20);
-  --accent-25: rgba(212, 175, 55, 0.25);
-  --accent-30: rgba(212, 175, 55, 0.30);
-  --accent-35: rgba(212, 175, 55, 0.35);
-  --accent-40: rgba(212, 175, 55, 0.40);
-  --accent-50: rgba(212, 175, 55, 0.50);
-  --accent-60: rgba(212, 175, 55, 0.60);
-  --accent-70: rgba(212, 175, 55, 0.70);
-
-  /* ── Tipografia */
   --font-serif: 'Playfair Display', serif;
   --font-sans: 'Inter', sans-serif;
-
-  /* ── Dimensões */
   --player-h: 92px;
-
-  /* ── Z-INDEX — mapa semântico
-     Ordem crescente. Nunca use número solto em z-index.
-     Adicione novos valores AQUI antes de usar. */
-  --z-base: 1;
-  --z-noise: 100;         /* body::before (grão) */
-  --z-header: 200;        /* <header> fixo */
-  --z-filter-bar: 300;    /* filtros sticky (se houver) */
-  --z-modal: 500;         /* modais públicos (login, signup, conta, aluguel) */
-  --z-admin-overlay: 600; /* overlay do admin */
-  --z-player: 700;        /* player expandido */
-  --z-modal-on-player: 900; /* modais que abrem POR CIMA do player */
-  --z-admin-modal: 1000;  /* #adminModal */
-  --z-fullscreen: 1100;   /* elementos em :fullscreen */
-  --z-toast: 9999;        /* toasts globais e do admin */
-
-  /* ── Cor do ruído (fundo) */
-  --noise-opacity: 0.6;
 }
+
 
 /* ============================================================
    02. ACESSIBILIDADE E SCROLLBAR
@@ -1556,48 +1514,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 
 .mobile-tabs { display: none; }
 
-/* §17 — Capa do álbum no player expandido (regra única)
-   ⚠️  Regra canônica. A antiga §43 (correção duplicada) foi
-   removida — tinha dois `margin` conflitantes no mesmo bloco. */
-.music-player .album-cover {
-  width: 100%;
-  max-width: 320px;
-  aspect-ratio: 1 / 1;
-  height: auto;
-  min-height: 0;
-  margin: 0 auto 1.5rem;
-  padding: 0;
-  border-radius: 12px;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  flex-shrink: 0;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  border: 1px solid var(--accent-15);
-  position: relative;
-  font-size: 4rem;
-  font-weight: 700;
-  color: var(--accent-30);
-}
-
-.music-player .album-cover img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  display: block;
-  border-radius: inherit;
-}
-
-.music-player .album-cover::before,
-.music-player .album-cover::after {
-  display: none !important;
-  content: none !important;
-}
 
 /* ============================================================
    18. TOAST GLOBAL
@@ -2990,6 +2906,25 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 
 
 /* ============================================================
+   43. CORREÇÃO — CAPA DO ÁLBUM NO PLAYER (mobile + fullscreen)
+   ============================================================ */
+.music-player .album-cover img {
+  position: absolute !important;
+  margin-top: 32px !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  object-position: center !important;
+  display: block !important;
+  border-radius: inherit !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+
+/* ============================================================
    44. ADMIN — MODAL GENÉRICO (#adminModal)
    ------------------------------------------------------------
    Bloco dedicado ao modal genérico usado por openAdminModal().
@@ -3628,17 +3563,13 @@ tr.track-row:hover {
 }
 
 /* ============================================================
-   49. FONTE GLOBAL — Segoe UI
+   49. GLOBAL — Fonte unificada Segoe UI
    ------------------------------------------------------------
-   ⚠️  Estratégia: redefinir APENAS as variáveis tipográficas.
-   NÃO usar `* { font-family: ... !important }` porque:
-     - Invalida overrides pontuais
-     - Atrapalha ícones (font-family de icon-fonts)
-     - Força re-render em libs externas
-
-   As declarações literais (Georgia, Courier New, etc) que
-   existiam no arquivo foram substituídas por var(--font-sans)
-   ou var(--font-serif). O `!important` global foi removido.
+   Substitui TODAS as fontes do site por Segoe UI + fallbacks.
+   - Windows       → Segoe UI
+   - macOS         → San Francisco (-apple-system)
+   - Android       → Roboto
+   - Outros        → Helvetica Neue / Arial / sans-serif
    ============================================================ */
 
 :root {
@@ -3650,8 +3581,17 @@ tr.track-row:hover {
                  'Helvetica Neue', Arial, sans-serif;
 }
 
-/* Monospace — onde faz sentido (log de downloads) */
+/* Força Segoe UI em TODOS os elementos, incluindo os que
+   declararam fontes literais ('Georgia', 'Courier New', etc.) */
+html, body, *,
+*::before, *::after,
+button, input, textarea, select, optgroup, option {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
+               'Helvetica Neue', Arial, sans-serif !important;
+}
+
+/* Mantém o monospace apenas onde faz sentido (log de downloads) */
 .downloads-log,
 .downloads-log-line {
-  font-family: 'Consolas', 'Courier New', monospace;
+  font-family: 'Consolas', 'Courier New', monospace !important;
 }
