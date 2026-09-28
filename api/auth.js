@@ -13,6 +13,15 @@
    - Nenhum segredo exposto ao cliente
    - Rate limit por IP + e-mail (Redis/KV)
    - Auditoria em todas as ações
+
+   🔧 CORREÇÕES DESTA VERSÃO (v2)
+   ------------------------------------------------------------
+   1. handleLogin devolve `plan` REAL (via getPlanForUserDetailed)
+      em vez de 'free' fixo. Elimina 2º request e UX inconsistente.
+   2. handleLogin lê `degraded` do plano e loga (mas não falha).
+   3. Comentário explícito sobre failClosed em login de usuário.
+      (NÃO usamos failClosed no login do usuário — derrubaria
+       a base inteira se o Redis cair. Admin usa, user não.)
    ============================================================ */
 
 'use strict';
@@ -26,7 +35,7 @@ const {
   getAuthUser,
   getAccessToken,
   getRefreshToken,
-  getPlanForUser,
+  getPlanForUserDetailed,   // 🔧 NOVO
   VALID_PLANS,
   checkAndIncrement,
   resetBucket,
@@ -121,6 +130,24 @@ module.exports = async function handler(req, res) {
 
 // ─────────────────────────────────────────────────────────────
 // ACTION: login
+// ------------------------------------------------------------
+// 🔧 NOTA SOBRE failClosed
+//
+// NÃO usamos `failClosed: true` no login de usuário, ao contrário
+// do login admin. Motivo:
+//
+//   - Se o Redis (Upstash) cair, login ADMIN precisa bloquear
+//     (só 1 usuário espera, risco de brute-force é alto).
+//
+//   - Login de USUÁRIO precisa continuar funcionando. Um blip
+//     de 30s no Redis derrubaria a base inteira se fosse
+//     fail-closed. O custo (UX + suporte) é maior que o risco
+//     mitigado.
+//
+// Mitigações em vigor:
+//   - equalizeTiming() — evita timing attack
+//   - GENERIC_AUTH_ERROR — evita user enumeration
+//   - Rate limit em memória como fallback (roadmap)
 // ─────────────────────────────────────────────────────────────
 async function handleLogin(req, res) {
   const startedAt = Date.now();
@@ -140,6 +167,7 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
   }
 
+  // ⚠️  failClosed: false (padrão) — não derruba a base se KV cair
   const [ipRate, emailRate] = await Promise.all([
     checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000),
     checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000)
@@ -173,6 +201,23 @@ async function handleLogin(req, res) {
     await resetBucket(`login:email:${email}`).catch(() => {});
     setAuthCookies(res, result.body);
 
+    // 🔧 FIX — busca plano REAL (não mais 'free' fixo).
+    // `getPlanForUserDetailed` devolve `degraded` para sabermos
+    // se foi falha de lookup ou plano free real. Nunca falha:
+    // se não conseguir, devolve `plan: 'free', degraded: true`.
+    let plan = 'free';
+    let planDegraded = false;
+    try {
+      const planResult = await getPlanForUserDetailed(user.id);
+      plan = planResult.plan;
+      planDegraded = planResult.degraded;
+      if (planDegraded) {
+        console.warn('[auth/login] plano degradado:', planResult.reason);
+      }
+    } catch (err) {
+      console.warn('[auth/login] falha ao obter plano:', err.code || err.message);
+    }
+
     await audit('login', {
       email, userId: user.id, ip, userAgent, success: true, reason: null
     });
@@ -185,7 +230,7 @@ async function handleLogin(req, res) {
         id: String(user.id || ''),
         email: sanitizeEmail(user.email || email),
         name: sanitizeName(metadata.name),
-        plan: 'free' // plano real vem do /me
+        plan
       }
     });
   } catch (error) {
@@ -220,6 +265,8 @@ async function handleSignup(req, res) {
     return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
   }
 
+  // ⚠️  failClosed: false (padrão) — cadastro cai se KV off,
+  //     mas o endpoint continua funcional.
   const [ipRate, emailRate] = await Promise.all([
     checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000),
     checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000)
@@ -474,7 +521,8 @@ async function handleMe(req, res) {
 // ─────────────────────────────────────────────────────────────
 async function resolvePlan(userId) {
   try {
-    return await getPlanForUser(userId);
+    const result = await getPlanForUserDetailed(userId);
+    return result.plan;
   } catch {
     try {
       const r = await supabaseAdminRequest(
@@ -580,7 +628,6 @@ async function ensureProfile(userId, { email, name }) {
         id: userId,
         email,
         name
-        // profiles NÃO tem coluna plan — plano vive em subscriptions
       })
     });
 
@@ -665,11 +712,18 @@ function isValidPassword(password) {
 // ─────────────────────────────────────────────────────────────
 function clientIp(req) {
   const h = req.headers || {};
-  const fwd =
+  const trusted =
     h['x-vercel-forwarded-for'] ||
-    h['x-real-ip'] ||
-    h['x-forwarded-for'];
-  return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
+    h['x-real-ip'];
+
+  if (trusted) return String(trusted).split(',')[0].trim();
+
+  if (process.env.NODE_ENV !== 'production') {
+    const fwd = h['x-forwarded-for'];
+    if (fwd) return String(fwd).split(',')[0].trim();
+  }
+
+  return String((req.socket && req.socket.remoteAddress) || 'unknown')
     .split(',')[0]
     .trim();
 }
