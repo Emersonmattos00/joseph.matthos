@@ -1,7 +1,13 @@
 {
+  "name": "josephmatthos",
+  "version": "1.0.0",
+  "description": "Plataforma oficial de Joseph Matthos — site, painel admin, loja de faixas e assinaturas.",
   "private": true,
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "hash-admin": "node scripts/hash-admin-password.js"
   },
   "dependencies": {
     "@upstash/redis": "1.34.0"
