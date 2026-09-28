@@ -3,7 +3,20 @@
    ------------------------------------------------------------
    Vive separado para evitar import circular entre
    index.js ↔ auth.js ↔ users.js ↔ ...
-   ------------------------------------------------------------
+
+   ⚠️  Este objeto só deve conter estado que CRUZA fronteiras.
+
+   ❌ NÃO adicionar aqui:
+      - albums, tracks (cada editor mantém o seu)
+      - users, sales, audit (cada tabela mantém o seu)
+      - loading, error (cada módulo tem o seu ciclo)
+
+   ✅ Adicionar aqui quando:
+      - 2+ módulos precisam ler o mesmo dado
+      - 2+ módulos precisam escrever no mesmo dado
+      - A mudança precisa notificar "fora" do módulo
+        (beforeunload, botão salvar global, etc)
+
    Estado:
      - content           → conteúdo atual em memória
      - contentVersion    → versão (controle otimista)
@@ -11,8 +24,8 @@
      - user              → admin logado
      - dirty             → alterações não salvas
      - busy              → operação em andamento (upload/import/save)
-   ------------------------------------------------------------
-   ⚠️ O aviso `beforeunload` dispara se `dirty` OU `busy` estiver ativo.
+
+   ⚠️  O aviso `beforeunload` dispara se `dirty` OU `busy` estiver ativo.
    ============================================================ */
 
 export const AdminState = {
@@ -25,16 +38,55 @@ export const AdminState = {
 };
 
 // ─────────────────────────────────────────────────────────────
+// PUB/SUB — notificação de mudanças
+// ------------------------------------------------------------
+// Módulos podem se inscrever para reagir a mudanças de estado
+// sem que o state.js precise conhecer cada um deles.
+//
+// Uso:
+//   const off = subscribe((event, payload) => {
+//     if (event === 'dirty') console.log('alterações pendentes');
+//   });
+//   // ... mais tarde
+//   off();  // unsubscribe
+//
+// Eventos emitidos:
+//   - 'dirty'    → markDirty() foi chamado
+//   - 'clean'    → markClean() foi chamado
+//   - 'busy'     → beginBusy() foi chamado
+//   - 'idle'     → endBusy() foi chamado
+// ─────────────────────────────────────────────────────────────
+const _listeners = new Set();
+
+export function subscribe(fn) {
+  if (typeof fn !== 'function') return () => {};
+  _listeners.add(fn);
+  return () => _listeners.delete(fn);
+}
+
+function notify(event, payload) {
+  for (const fn of _listeners) {
+    try {
+      fn(event, payload);
+    } catch (err) {
+      console.warn('[state] listener falhou:', err);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // Mutação do estado "dirty"
 // ─────────────────────────────────────────────────────────────
 export function markDirty() {
   AdminState.dirty = true;
   updateSaveButtonState();
+  notify('dirty');
 }
 
 export function markClean() {
   AdminState.dirty = false;
   updateSaveButtonState();
+  notify('clean');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -48,12 +100,14 @@ export function beginBusy(label = 'operação') {
   AdminState.busy = true;
   AdminState.busyLabel = label;
   updateSaveButtonState();
+  notify('busy', { label });
 }
 
 export function endBusy() {
   AdminState.busy = false;
   AdminState.busyLabel = null;
   updateSaveButtonState();
+  notify('idle');
 }
 
 export function isBusy() {
@@ -72,6 +126,25 @@ export function resetState() {
   AdminState.busy = false;
   AdminState.busyLabel = null;
   updateSaveButtonState();
+  notify('clean');
+  notify('idle');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Snapshot imutável (opcional — para debug e logs)
+// ------------------------------------------------------------
+// Retorna uma cópia rasa. Útil para console.log e para
+// expor via window.__admin.state.
+// ─────────────────────────────────────────────────────────────
+export function getSnapshot() {
+  return {
+    contentVersion: AdminState.contentVersion,
+    contentUpdatedAt: AdminState.contentUpdatedAt,
+    user: AdminState.user,
+    dirty: AdminState.dirty,
+    busy: AdminState.busy,
+    busyLabel: AdminState.busyLabel
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
