@@ -1,39 +1,29 @@
 /* ============================================================
    js/admin/api.js — Wrapper de fetch para o painel admin
    ------------------------------------------------------------
-   ⚠️  CONTRATO — leia antes de adicionar código
-
-   ✅ USE esta camada para TODA comunicação com /api/admin.
-      Não importa se é GET, POST, PATCH ou DELETE.
-      Não importa se é leitura ou escrita.
-
-   ❌ NÃO adicione:
-      - fetch('/api/admin?...') direto em outro arquivo
-      - Axios / jQuery / XMLHttpRequest direto
-      - `apiFetch` em código do site público (só o admin usa)
-
-   ✅ PODE usar fetch direto (fora desta camada) APENAS para:
-      - /api/public      (playlists-api.js — não exige sessão)
-      - /api/auth        (auth do site público — não é admin)
-      - /api/stream      (player — não é admin)
-      - /api/payments    (checkout — não é admin)
-      - URLs externas    (Supabase Storage, MP, etc)
-
-   🔧 Quando adicionar uma action nova:
-      1. Adicione o helper semântico aqui
-      2. Use o helper no código que precisa
-      3. NUNCA chame apiFetch('x', ...) direto do editor
+   - Aceita `action` + `query` (objeto) → monta URL corretamente
+   - Aceita `body` (JSON) → Content-Type automático
+   - Preserva status, code e data em erros
+   - Propaga 401/403/429/503 para o caller
+   - Envia credentials: same-origin
 
    Uso básico:
      apiFetch('users', { method: 'GET' })
      apiFetch('sales', { query: { days: 30 } })
      apiFetch('content', { method: 'PUT', body: { data, baseVersion } })
 
-   Helpers semânticos:
-     listAlbums() / createAlbum() / updateAlbum() / deleteAlbum()
-     listTracks() / createTrack() / updateTrack() / deleteTrack() / reorderTracks()
-     requestUploadSign() / confirmUpload()
-     getDownloadUrl() / getDownloadAlbum()
+   Helpers semânticos (açúcar por cima do apiFetch):
+     updateTrack(trackId, patch)
+     deleteTrack(trackId)
+     createTrack(payload)
+     listTracks(albumId)
+     updateAlbum(albumId, patch)
+     deleteAlbum(albumId, force)
+     createAlbum(payload)
+     listAlbums()
+
+     getDownloadUrl(trackId)
+     getDownloadAlbum(albumId)
 
    🔧 CONTRATO COM O BACKEND
    ------------------------------------------------------------
@@ -46,23 +36,9 @@
 
    ⚠️  `album` e `track` são SINGULARES (operam sobre um item).
        `albums` e `tracks` são PLURAIS (operam sobre coleção).
-
-   🔧 TIMEOUT
-   ------------------------------------------------------------
-   Todas as requisições têm timeout de 30s (TIMEOUT_DEFAULT_MS).
-   O caller pode sobrescrever via `timeoutMs`.
-
-   Erros estruturados:
-     err.code === 'ABORTED'       → caller cancelou (via signal)
-     err.code === 'TIMEOUT'       → tempo esgotado
-     err.code === 'NETWORK_ERROR' → falha de rede
-
-   ⚠️  NÃO adicione retry automático. PATCH/POST não são
-       idempotentes. Cada módulo já tem botão "Tentar novamente".
    ============================================================ */
 
 const API_BASE = '/api/admin';
-const TIMEOUT_DEFAULT_MS = 30000;
 
 // ─────────────────────────────────────────────────────────────
 // Monta a URL final com action + query string
@@ -88,11 +64,10 @@ function buildUrl(action, query) {
  * @param {string} action
  * @param {object} [options]
  * @param {string} [options.method='GET']
- * @param {object} [options.query]      — pares chave/valor para query string
- * @param {object} [options.body]       — objeto → JSON.stringify
- * @param {object} [options.headers]    — headers adicionais
- * @param {AbortSignal} [options.signal] — sinal externo (cancelamento)
- * @param {number} [options.timeoutMs=30000] — timeout em ms
+ * @param {object} [options.query]   — pares chave/valor para query string
+ * @param {object} [options.body]    — objeto → JSON.stringify
+ * @param {object} [options.headers] — headers adicionais
+ * @param {AbortSignal} [options.signal]
  */
 export async function apiFetch(action, options = {}) {
   const {
@@ -100,8 +75,7 @@ export async function apiFetch(action, options = {}) {
     query = null,
     body = null,
     headers = {},
-    signal,
-    timeoutMs = TIMEOUT_DEFAULT_MS
+    signal
   } = options;
 
   const url = buildUrl(action, query);
@@ -114,18 +88,6 @@ export async function apiFetch(action, options = {}) {
     finalBody = JSON.stringify(body);
   }
 
-  // ── Compõe timeout com signal externo (se houver)
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener('abort', () => controller.abort(), { once: true });
-    }
-  }
-
   let response;
   try {
     response = await fetch(url, {
@@ -133,27 +95,18 @@ export async function apiFetch(action, options = {}) {
       headers: finalHeaders,
       body: finalBody,
       credentials: 'same-origin',
-      signal: controller.signal
+      signal
     });
   } catch (err) {
-    clearTimeout(timeout);
-
-    const isExternalAbort = signal && signal.aborted;
-    const isTimeout = err?.name === 'AbortError' && !isExternalAbort;
-
     const networkErr = new Error(
-      isExternalAbort ? 'Requisição cancelada.'
-      : isTimeout ? 'Tempo esgotado. Tente novamente.'
-      : 'Falha de conexão com o servidor.'
+      err?.name === 'AbortError'
+        ? 'Requisição cancelada.'
+        : 'Falha de conexão com o servidor.'
     );
     networkErr.status = 0;
-    networkErr.code = isExternalAbort ? 'ABORTED'
-                    : isTimeout ? 'TIMEOUT'
-                    : 'NETWORK_ERROR';
+    networkErr.code = err?.name === 'AbortError' ? 'ABORTED' : 'NETWORK_ERROR';
     networkErr.cause = err;
     throw networkErr;
-  } finally {
-    clearTimeout(timeout);
   }
 
   // Tenta parsear JSON (mesmo em erro, para extrair {error, code})
@@ -276,17 +229,19 @@ export function createTrack(payload) {
 
 /**
  * Atualiza uma faixa.
+ * Este é o helper que o editor de álbuns usa para associar
+ * `preview_path` e `full_path` após o upload.
  *
- * Exemplo:
+ * @param {number|string} trackId
+ * @param {object} patch — { title?, duration?, preview_path?, full_path?, ... }
+ * @returns {Promise<{ ok: true, track: object }>}
+ *
+ * @example
  *   // Após upload do áudio completo
  *   await updateTrack(42, { full_path: '1699_abc.mp3' });
  *
  *   // Após upload da prévia
  *   await updateTrack(42, { preview_path: '1699_def.mp3' });
- *
- * @param {number|string} trackId
- * @param {object} patch
- * @returns {Promise<{ ok: true, track: object }>}
  */
 export function updateTrack(trackId, patch) {
   return apiFetch('track', {
@@ -354,6 +309,10 @@ export function confirmUpload(payload) {
  *
  * @param {number|string} trackId
  * @returns {Promise<{ ok: true, url: string, filename: string, expiresIn: number }>}
+ *
+ * @example
+ *   const { url, filename } = await getDownloadUrl(42);
+ *   // Dispara download no navegador
  */
 export function getDownloadUrl(trackId) {
   return apiFetch('download-url', {
@@ -367,7 +326,14 @@ export function getDownloadUrl(trackId) {
  * Cada URL expira em 1 hora. O frontend itera e baixa uma a uma.
  *
  * @param {string} albumId
- * @returns {Promise<{ ok: true, albumId: string, expiresIn: number, tracks: Array }>}
+ * @returns {Promise<{ ok: true, albumId: string, expiresIn: number, tracks: Array<{ id, title, trackIndex, url, filename, error }> }>}
+ *
+ * @example
+ *   const { tracks } = await getDownloadAlbum('album-bbb');
+ *   for (const t of tracks) {
+ *     if (t.url) triggerDownload(t.url, t.filename);
+ *     await sleep(600);
+ *   }
  */
 export function getDownloadAlbum(albumId) {
   return apiFetch('download-album', {
