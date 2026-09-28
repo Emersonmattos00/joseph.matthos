@@ -107,7 +107,7 @@
       </div>
       <div class="hero-visual">
         <div class="vinyl-container" id="heroVinyl" aria-hidden="true">
-          <div class="lyric" id="heroLyric">“Nada acabou. Só estamos começando.”</div>
+          <div class="lyric" id="heroLyric">"Nada acabou. Só estamos começando."</div>
         </div>
       </div>
     </div>
@@ -647,12 +647,13 @@
   </div>
 </div>
 
-<!-- ============ MODAL GENÉRICO DO ADMIN ============ -->
-<div id="adminModal" class="admin-modal-overlay" aria-hidden="true">
-  <div class="admin-modal">
-    <div id="adminModalContent"></div>
-  </div>
-</div>
+<!--
+  ⚠️ NOTA: #adminModal NÃO está mais no HTML.
+  Ele é criado dinamicamente por js/admin/ui/modal.js
+  quando o painel admin é aberto (ensureModalExists()).
+  Isso reduz o DOM público em ~5 nós e evita carregar
+  markup que 99% dos visitantes nunca usam.
+-->
 
 <!-- ============ SCRIPTS ============ -->
 <script type="module" src="js/site.js"></script>
