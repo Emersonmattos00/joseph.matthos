@@ -2990,25 +2990,6 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
 
 
 /* ============================================================
-   43. CORREÇÃO — CAPA DO ÁLBUM NO PLAYER (mobile + fullscreen)
-   ============================================================ */
-.music-player .album-cover img {
-  position: absolute !important;
-  margin-top: 32px !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  object-position: center !important;
-  display: block !important;
-  border-radius: inherit !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-
-/* ============================================================
    44. ADMIN — MODAL GENÉRICO (#adminModal)
    ------------------------------------------------------------
    Bloco dedicado ao modal genérico usado por openAdminModal().
