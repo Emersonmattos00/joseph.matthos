@@ -109,8 +109,6 @@ out/
 coverage/
 .nyc_output/
 *.lcov
-playwright-report/
-test-results/
 
 # ============================================================
 # ÁUDIOS LOCAIS (grandes — não commitar)
