@@ -130,3 +130,7 @@ assets/img/*.psd
 assets/img/*.ai
 assets/img/*.tiff
 assets/img/raw/
+.env
+.env.local
+.env
+.env.local
