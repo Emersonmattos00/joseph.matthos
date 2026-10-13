@@ -78,6 +78,8 @@ const GENERIC_ERROR = 'Serviço indisponível.';
 // Handler
 // ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Vary', 'Cookie');
   res.setHeader('Allow', 'GET, HEAD, POST');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -443,7 +445,7 @@ async function handleRefresh(req, res) {
 
     await audit('refresh', { ip, userAgent, success: true, reason: null });
 
-    return sendJson(res, 200, { ok: true });
+    return res.status(200).json({ ok: true, user });
   } catch (error) {
     console.error('[auth/refresh]', error.code || error.message);
     clearAuthCookies(res);

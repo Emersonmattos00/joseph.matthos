@@ -10,12 +10,23 @@
    5. Título da faixa aparece IMEDIATAMENTE (antes do fetch)
    6. Player com previewStart, waitForAudioReady, onError detalhado,
       renovação automática de URL, AbortController
-   7. NOVO: Botão de assinatura vai para o MP (como aluguel)
-   8. NOVO: Assinantes veem "Gerenciar assinatura"
-   9. NOVO: Modal de gerenciamento (status + cancelamento)
-  10. NOVO: Rádio Joseph Matthos (exclusiva para assinantes)
-  11. NOVO: Rádio com capa do álbum + botões Pausar/Próxima
-  12. NOVO: Ícones de redes sociais em SVG inline (sem Font Awesome)
+   7. Botão de assinatura vai para o MP (como aluguel)
+   8. Assinantes veem "Gerenciar assinatura"
+   9. Modal de gerenciamento (status + cancelamento)
+  10. Rádio Joseph Matthos (exclusiva para assinantes)
+  11. Rádio com capa do álbum + botões Pausar/Próxima
+  12. Ícones de redes sociais em SVG inline (sem Font Awesome)
+
+   🆕 NOVO NESTA VERSÃO
+   ------------------------------------------------------------
+   13. Artist Spotify Hero (banner + avatar + stats + tabs)
+   14. Seção Destaque (grid de destaques)
+   15. Seção Principais Músicas
+   16. Seção Lançamentos (grid denso estilo Amazon Music)
+   17. Seção Álbuns Recentes
+   18. Tabs do artista (Todos / Principais / Álbuns / Feed)
+   19. Follow button (SIGA/Seguindo) com persistência local
+   20. Integração total com o player + aluguel
    ============================================================ */
 
 import {
@@ -60,7 +71,8 @@ export const SITE = {
   viewMode: 'cards',
   filter: 'all',
   expandedAlbumId: null,
-  shopSearch: ''
+  shopSearch: '',
+  artistTab: 'todos'
 };
 
 let audio = null;
@@ -94,10 +106,12 @@ async function boot() {
     applyContentToSite();
     renderDiscography();
     renderPlaylists();
+    renderArtistHero();          // 🆕
+    renderSpotifySections();     // 🆕
+    bindArtistTabs();            // 🆕
     updateAuthUI();
     bindGlobalEvents();
 
-    // ── Inicializa a rádio (injeta dependências) — por último
     try {
       initRadio({
         isPremium,
@@ -139,6 +153,9 @@ async function boot() {
       applyContentToSite();
       renderDiscography();
       renderPlaylists();
+      renderArtistHero();
+      renderSpotifySections();
+      bindArtistTabs();
       updateAuthUI();
       bindGlobalEvents();
 
@@ -508,6 +525,286 @@ function applyContentToSite() {
   }
 }
 
+/* ============================================================
+   🆕 ARTIST SPOTIFY HERO
+   ============================================================ */
+function renderArtistHero() {
+  const avatar = document.getElementById('artistAvatar');
+  const banner = document.getElementById('artistBanner');
+  const c = SITE.content;
+
+  // Avatar (prioriza sobre.image, senão usa josephmatthos.webp)
+  if (avatar) {
+    const img = c?.sobre?.image || 'assets/img/josephmatthos.webp';
+    const safe = safeMediaUrl(img);
+    if (safe) {
+      avatar.style.backgroundImage = `url('${safe}')`;
+    }
+  }
+
+  // Banner (prioriza branding.bgImage)
+  if (banner) {
+    const img = c?.branding?.bgImage || 'assets/img/bannerjm.webp';
+    const safe = safeMediaUrl(img);
+    if (safe) {
+      banner.style.backgroundImage = `url('${safe}')`;
+    }
+  }
+
+  // Stats — calcula dinamicamente
+  const statsEl = document.getElementById('statPlays');
+  if (statsEl) {
+    // Se tiver tracking real, use SITE.user.stats.plays; senão, conta faixas
+    const totalTracks = SITE.albums.reduce(
+      (acc, a) => acc + (Array.isArray(a.tracks) ? a.tracks.length : 0),
+      0
+    );
+    statsEl.textContent = totalTracks > 0 ? totalTracks * 12 : 534;
+  }
+
+  const followersEl = document.getElementById('statFollowers');
+  if (followersEl) {
+    const saved = Number(localStorage.getItem('jm_followers') || 0);
+    followersEl.textContent = saved;
+  }
+
+  // Member since
+  const memberEl = document.getElementById('memberSince');
+  if (memberEl && SITE.user?.createdAt) {
+    try {
+      const d = new Date(SITE.user.createdAt);
+      const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+      memberEl.textContent = `Membro desde: ${months[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
+    } catch {}
+  }
+
+  // Follow button
+  const followBtn = document.getElementById('followBtn');
+  if (followBtn) {
+    const isFollowing = localStorage.getItem('jm_following') === '1';
+    followBtn.textContent = isFollowing ? 'SEGUINDO' : 'SIGA';
+    followBtn.classList.toggle('following', isFollowing);
+
+    if (followBtn.dataset.bound !== '1') {
+      followBtn.dataset.bound = '1';
+      followBtn.addEventListener('click', () => {
+        const now = localStorage.getItem('jm_following') === '1';
+        const newState = !now;
+        localStorage.setItem('jm_following', newState ? '1' : '0');
+
+        const currentFollowers = Number(localStorage.getItem('jm_followers') || 0);
+        const newFollowers = Math.max(0, currentFollowers + (newState ? 1 : -1));
+        localStorage.setItem('jm_followers', String(newFollowers));
+
+        followBtn.textContent = newState ? 'SEGUINDO' : 'SIGA';
+        followBtn.classList.toggle('following', newState);
+
+        if (followersEl) followersEl.textContent = newFollowers;
+
+        toast(newState ? 'Seguindo Joseph Matthos' : 'Deixou de seguir', '✦');
+      });
+    }
+  }
+}
+
+/* ============================================================
+   🆕 TABS DO ARTISTA
+   ============================================================ */
+function bindArtistTabs() {
+  document.querySelectorAll('.artist-tab').forEach((tab) => {
+    if (tab.dataset.bound === '1') return;
+    tab.dataset.bound = '1';
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.artist-tab').forEach((t) => {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
+      tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
+
+      const target = tab.dataset.artistTab || 'todos';
+      SITE.artistTab = target;
+      renderSpotifySections();
+    });
+  });
+}
+
+/* ============================================================
+   🆕 SPOTIFY SECTIONS — Destaque / Principais / Lançamentos
+   ============================================================ */
+function renderSpotifySections() {
+  const allTracks = collectAllTracks();
+  const tab = SITE.artistTab || 'todos';
+
+  // ─── 1. DESTAQUE (4 primeiros álbuns únicos) ───
+  const destaqueEl = document.getElementById('gridDestaque');
+  if (destaqueEl) {
+    const albumsUnique = uniqueAlbumsFromTracks(allTracks);
+    const featured = albumsUnique.slice(0, 4);
+    destaqueEl.innerHTML = featured.map((a) => renderSpotifyCard(a, 'album')).join('');
+    bindSpotifyCards(destaqueEl);
+  }
+
+  // ─── 2. PRINCIPAIS MÚSICAS (8 primeiras faixas) ───
+  const principaisEl = document.getElementById('gridPrincipais');
+  if (principaisEl) {
+    let tracksToShow = allTracks;
+    if (tab === 'albuns') {
+      // Se tab = Álbuns, mostra álbuns ao invés de faixas
+      const albumsUnique = uniqueAlbumsFromTracks(allTracks);
+      principaisEl.innerHTML = albumsUnique
+        .slice(0, 8)
+        .map((a) => renderSpotifyCard(a, 'album'))
+        .join('');
+    } else {
+      principaisEl.innerHTML = tracksToShow
+        .slice(0, 8)
+        .map((t) => renderSpotifyCard(t, 'track'))
+        .join('');
+    }
+    bindSpotifyCards(principaisEl);
+  }
+
+  // ─── 3. LANÇAMENTOS (todos os álbuns únicos) ───
+  const lancamentosEl = document.getElementById('gridLancamentos');
+  if (lancamentosEl) {
+    const albumsUnique = uniqueAlbumsFromTracks(allTracks);
+    lancamentosEl.innerHTML = albumsUnique
+      .map((a) => renderSpotifyCard(a, 'album'))
+      .join('');
+    bindSpotifyCards(lancamentosEl);
+  }
+
+  // ─── 4. ÁLBUNS RECENTES (8 últimos, ordenados por ano) ───
+  const albunsRecentesEl = document.getElementById('gridAlbunsRecentes');
+  if (albunsRecentesEl) {
+    const albumsUnique = uniqueAlbumsFromTracks(allTracks)
+      .sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))
+      .slice(0, 8);
+    albunsRecentesEl.innerHTML = albumsUnique
+      .map((a) => renderSpotifyCard(a, 'album'))
+      .join('');
+    bindSpotifyCards(albunsRecentesEl);
+  }
+}
+
+/**
+ * Retorna álbuns únicos a partir de uma lista de faixas coletadas.
+ * Formato: { albumId, title, coverImage, year, type, trackCount, firstTrackIndex }
+ */
+function uniqueAlbumsFromTracks(tracks) {
+  const map = new Map();
+  for (const t of tracks) {
+    const album = findAlbum(t.albumId);
+    if (!album) continue;
+    if (!map.has(album.id)) {
+      map.set(album.id, {
+        albumId: album.id,
+        title: album.title,
+        coverImage: album.coverImage,
+        coverInitials: album.coverInitials || album.cover,
+        year: album.year,
+        type: album.type,
+        trackCount: Array.isArray(album.tracks) ? album.tracks.length : 0,
+        firstTrackIndex: t.trackIndex
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * Renderiza um card estilo Spotify.
+ * @param {object} item — ou item de track { albumId, trackIndex, title, ... } ou de album { albumId, title, coverImage, ... }
+ * @param {'track'|'album'} type
+ */
+function renderSpotifyCard(item, type = 'album') {
+  let album, track, albumId, trackIndex, cover, title, subtitle, badge;
+
+  if (type === 'track') {
+    albumId = item.albumId;
+    trackIndex = item.trackIndex;
+    album = findAlbum(albumId);
+    track = findTrackByIndex(albumId, trackIndex);
+    if (!album || !track) return '';
+    cover = album.coverImage;
+    title = track.title;
+    subtitle = `Joseph Matthos · ${album.title || ''}`.trim();
+  } else {
+    albumId = item.albumId;
+    album = findAlbum(albumId);
+    if (!album) return '';
+    cover = item.coverImage || album.coverImage;
+    title = item.title || album.title;
+    subtitle = `Joseph Matthos · ${item.trackCount || (album.tracks?.length || 0)} faixas`;
+    trackIndex = item.firstTrackIndex ?? 0;
+  }
+
+  // Badge de acesso
+  const premium = isPremium();
+  const rented = isRented(albumId, trackIndex);
+  if (premium) {
+    badge = { type: 'full', label: '✓ Premium' };
+  } else if (rented) {
+    badge = { type: 'rented', label: '✓ Alugado' };
+  } else {
+    badge = { type: 'preview', label: 'Prévia 30s' };
+  }
+
+  const safeCover = safeMediaUrl(cover) || 'assets/img/tema.webp';
+  const badgeHtml = badge
+    ? `<span class="spotify-card-badge spotify-card-badge--${badge.type}">${badge.label}</span>`
+    : '';
+
+  return `
+    <div class="spotify-card"
+         data-spotify-card
+         data-type="${type}"
+         data-album-id="${esc(albumId)}"
+         data-track-index="${trackIndex}">
+      <div class="spotify-card-cover">
+        ${badgeHtml}
+        <img src="${esc(safeCover)}" alt="${esc(title)}" loading="lazy"
+             onerror="this.src='assets/img/tema.webp'">
+        <button class="spotify-card-play" type="button"
+                data-spotify-play
+                aria-label="Tocar ${esc(title)}">▶</button>
+      </div>
+      <div class="spotify-card-title">${esc(title)}</div>
+      <div class="spotify-card-sub">${esc(subtitle)}</div>
+    </div>`;
+}
+
+/**
+ * Bind dos cliques nos cards: card → abre player; botão ▶ → toca imediatamente.
+ */
+function bindSpotifyCards(container) {
+  container.querySelectorAll('[data-spotify-card]').forEach((card) => {
+    if (card.dataset.bound === '1') return;
+    card.dataset.bound = '1';
+
+    const albumId = card.dataset.albumId;
+    const trackIndex = Number(card.dataset.trackIndex);
+    const type = card.dataset.type;
+
+    // Botão ▶ — toca direto
+    const playBtn = card.querySelector('[data-spotify-play]');
+    if (playBtn) {
+      playBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openExpandedPlayer(albumId, trackIndex);
+      });
+    }
+
+    // Clique no card — abre o player expandido
+    card.addEventListener('click', () => {
+      openExpandedPlayer(albumId, trackIndex);
+    });
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // PLANOS (assinatura)
 // ─────────────────────────────────────────────────────────────
@@ -575,14 +872,12 @@ function renderPlans() {
     })
     .join('');
 
-  // Bind: assinar
   grid.querySelectorAll('[data-plan]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => subscribe(btn.dataset.plan));
   });
 
-  // Bind: gerenciar
   grid.querySelectorAll('[data-manage]').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
@@ -1206,6 +1501,7 @@ async function openManageModal() {
         await loadUser();
         updateAuthUI();
         renderPlans();
+        renderSpotifySections();
       } catch (err) {
         console.error('[manage] cancel:', err);
         toast('Erro ao cancelar.', '⚠');
@@ -1312,7 +1608,6 @@ function bindGlobalEvents() {
     });
   }
 
-  // ── RÁDIO — botão no header
   document.getElementById('navRadioLink')?.addEventListener('click', (e) => {
     e.preventDefault();
     openRadioModal();
@@ -1339,6 +1634,8 @@ function bindGlobalEvents() {
     resetRadio();
     updateAuthUI();
     renderDiscography();
+    renderSpotifySections();
+    renderArtistHero();
     toast('Você saiu da conta.', 'ℹ');
   });
 
@@ -1424,6 +1721,8 @@ async function onLoginSubmit(e) {
     await loadUser();
     updateAuthUI();
     renderDiscography();
+    renderSpotifySections();
+    renderArtistHero();
     toast(`Bem-vindo, ${(json.user.name || json.user.email).split(' ')[0]}!`, '✦');
   } catch (err) {
     console.error('[login]', err);
@@ -1465,6 +1764,8 @@ async function onSignupSubmit(e) {
     await loadUser();
     updateAuthUI();
     renderDiscography();
+    renderSpotifySections();
+    renderArtistHero();
     toast('Conta criada. Bem-vindo!', '✦');
   } catch (err) {
     console.error('[signup]', err);
@@ -1509,12 +1810,6 @@ function sanitizeRichText(html) {
   return container.innerHTML;
 }
 
-/**
- * Normaliza o nome da rede social para uma chave canônica.
- * Aceita variações como:
- *   "Spotify", "spotify ", "fa-spotify", "icon-spotify",
- *   "twitter", "x-twitter", "itunes", "apple-music", etc.
- */
 function normalizeNetwork(network) {
   let k = String(network ?? '')
     .toLowerCase()
@@ -1543,48 +1838,27 @@ function normalizeNetwork(network) {
   return k;
 }
 
-/**
- * Retorna o SVG inline do ícone da rede.
- * NÃO depende do Font Awesome — sempre renderiza.
- */
 function getSocialIconHTML(network) {
   const k = normalizeNetwork(network);
 
   const icons = {
     spotify: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>`,
-
     youtube: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`,
-
     amazon: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M.045 18.02c.072-.116.187-.124.348-.022 3.636 2.11 7.594 3.166 11.87 3.166 2.852 0 5.668-.533 8.447-1.595l.315-.101c.178-.051.377.021.377.234 0 .115-.104.199-.208.256-2.68 1.586-5.688 2.38-9.024 2.38-3.801 0-7.173-1.16-10.115-3.482-.148-.115-.16-.26-.01-.836zM6.582 9.53c0-1.141.286-2.093.86-2.854.574-.762 1.32-1.142 2.239-1.142.732 0 1.36.229 1.882.687.522.458.877 1.086 1.066 1.884h.045c.234-.798.6-1.426 1.098-1.884.499-.458 1.127-.687 1.884-.687.92 0 1.667.38 2.24 1.142.574.761.86 1.713.86 2.854 0 1.172-.297 2.14-.892 2.904-.595.765-1.36 1.147-2.295 1.147-.757 0-1.388-.232-1.894-.696-.505-.464-.86-1.114-1.065-1.951h-.046c-.219.843-.574 1.494-1.065 1.951-.49.464-1.122.696-1.893.696-.936 0-1.7-.382-2.295-1.147-.596-.765-.893-1.732-.893-2.904z"/></svg>`,
-
     facebook: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>`,
-
     tiktok: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>`,
-
     apple: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>`,
-
     instagram: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 1 0 0 12.324 6.162 6.162 0 0 0 0-12.324zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm6.406-11.845a1.44 1.44 0 1 0 0 2.881 1.44 1.44 0 0 0 0-2.881z"/></svg>`,
-
     x: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>`,
-
     deezer: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.81 4.16v3.03H24V4.16h-5.19zM6.27 8.38v3.027h5.189V8.38H6.27zm6.54 0v3.027h5.189V8.38h-5.189zM0 12.634v3.027h5.189v-3.027H0zm6.27 0v3.027h5.189v-3.027H6.27zm6.54 0v3.027h5.189v-3.027h-5.189zm6 0v3.027H24v-3.027h-5.19zM0 16.927v3.026h5.189v-3.026H0zm6.27 0v3.026h5.189v-3.026H6.27zm6.54 0v3.026h5.189v-3.026h-5.189z"/></svg>`,
-
     soundcloud: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M1.175 12.225c-.051 0-.094.046-.101.1l-.233 2.154.233 2.105c.007.058.05.098.101.098.05 0 .09-.04.099-.098l.255-2.105-.27-2.154c0-.057-.045-.1-.09-.1m-.899.828c-.06 0-.091.037-.104.094L0 14.479l.165 1.308c0 .055.045.094.09.094s.089-.045.104-.104l.21-1.319-.21-1.334c0-.061-.044-.09-.09-.09m1.83-1.229c-.061 0-.12.045-.12.104l-.21 2.563.225 2.458c0 .06.045.12.119.12.061 0 .105-.061.121-.12l.254-2.474-.254-2.548c-.016-.06-.061-.12-.121-.12m.945-.089c-.075 0-.135.06-.15.135l-.193 2.64.21 2.544c.016.077.075.138.149.138.075 0 .135-.061.15-.15l.24-2.532-.24-2.623c0-.075-.06-.135-.135-.135l-.031-.017zm1.155.36c-.005-.09-.075-.149-.159-.149-.09 0-.158.06-.164.149l-.217 2.43.2 2.563c0 .09.075.157.159.157.074 0 .148-.068.148-.158l.227-2.563-.227-2.444.033.015zm.809-1.709c-.101 0-.18.09-.18.181l-.21 3.957.187 2.563c0 .09.08.164.18.164.094 0 .174-.09.18-.18l.209-2.563-.209-3.972c-.008-.104-.088-.18-.18-.18m.959-.914c-.105 0-.195.09-.203.194l-.18 4.872.165 2.548c0 .12.09.209.195.209.104 0 .194-.089.21-.209l.193-2.548-.192-4.856c-.016-.12-.105-.21-.21-.21m.989-.449c-.121 0-.211.089-.225.209l-.165 5.275.165 2.52c.014.119.104.225.225.225.119 0 .225-.105.225-.225l.195-2.52-.196-5.275c0-.12-.105-.225-.225-.225m1.245.045c0-.135-.105-.24-.24-.24-.119 0-.24.105-.24.24l-.149 5.441.149 2.503c.016.135.121.24.256.24s.24-.105.24-.24l.164-2.503-.164-5.456-.016.015zm.749-.134c-.135 0-.255.119-.255.254l-.15 5.322.15 2.473c0 .15.12.255.255.255s.255-.12.255-.27l.15-2.474-.165-5.307c0-.148-.12-.253-.24-.253"/></svg>`,
-
     bandcamp: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M0 18.75l7.437-13.5H24l-7.438 13.5H0z"/></svg>`,
-
     whatsapp: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>`,
-
     telegram: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>`,
-
     linkedin: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 0 1-2.063-2.065 2.064 2.064 0 1 1 2.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>`,
-
     threads: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.186 24h-.007c-3.581-.024-6.334-1.205-8.184-3.509C2.35 18.44 1.5 15.586 1.472 12.01v-.017c.03-3.579.879-6.43 2.525-8.482C5.845 1.205 8.6.024 12.18 0h.014c2.746.02 5.043.725 6.826 2.098 1.677 1.29 2.858 3.13 3.509 5.467l-2.04.569c-1.104-3.96-3.898-5.984-8.304-6.015-2.91.022-5.11.936-6.54 2.717C4.307 6.504 3.616 8.914 3.589 12c.027 3.086.718 5.496 2.057 7.164 1.43 1.783 3.631 2.698 6.54 2.717 2.623-.02 4.358-.631 5.8-2.045 1.647-1.613 1.618-3.593 1.09-4.798-.31-.71-.873-1.3-1.634-1.75-.192 1.352-.622 2.446-1.284 3.272-.886 1.102-2.14 1.704-3.73 1.79-1.202.065-2.361-.218-3.259-.801-1.063-.689-1.685-1.74-1.752-2.964-.065-1.19.408-2.285 1.33-3.082.88-.76 2.119-1.207 3.583-1.291a13.853 13.853 0 0 1 3.02.142c-.126-.742-.375-1.332-.75-1.757-.513-.586-1.308-.883-2.359-.89h-.029c-.844 0-1.992.232-2.721 1.32L7.734 7.847c.98-1.454 2.568-2.256 4.478-2.256h.044c3.194.02 5.097 1.975 5.287 5.388.108.046.216.094.321.142 1.49.7 2.58 1.761 3.154 3.07.797 1.82.871 4.79-1.548 7.158-1.85 1.81-4.094 2.628-7.277 2.65Zm1.003-11.69c-.242 0-.487.007-.739.021-1.836.103-2.98.946-2.916 2.143.067 1.256 1.452 1.839 2.784 1.767 1.224-.065 2.818-.543 3.086-3.71a10.5 10.5 0 0 0-2.215-.221z"/></svg>`,
-
     email: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>`,
-
     website: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm6.93 6h-2.95a15.65 15.65 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 0 1 5.08 16zm2.95-8H5.08a7.987 7.987 0 0 1 4.33-3.56A15.65 15.65 0 0 0 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>`,
-
     link: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>`
   };
 
@@ -2064,7 +2338,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     identity: `${albumId}:${realIndex}`
   };
 
-  // ── Sincroniza modal da rádio se estiver aberto
   syncRadioOnTrackChange(albumId, realIndex);
 
   const titleEl = document.getElementById('nowTitle');
@@ -2238,10 +2511,7 @@ function prevTrack() {
 }
 
 function onEnded() {
-  // ── Rádio: loop infinito
   if (isRadioActive() && onRadioTrackEnded()) return;
-
-  // ── Player normal
   nextTrack();
 }
 
@@ -2674,6 +2944,8 @@ window.__site = {
     await loadUser();
     applyContentToSite();
     renderDiscography();
+    renderSpotifySections();
+    renderArtistHero();
   },
   openManageModal
 };

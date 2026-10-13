@@ -8,11 +8,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node dev-server.js",
     "hash-admin": "node scripts/hash-admin-password.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "dev": "node dev-server.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1150.0",
@@ -20,9 +21,11 @@
     "@neondatabase/serverless": "^1.2.0",
     "@upstash/ratelimit": "^2.2.0",
     "@upstash/redis": "^1.39.0",
+    "dotenv": "^18.0.7",
     "drizzle-orm": "^0.45.4",
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "howler": "^2.2.4",
+    "jsonwebtoken": "^9.0.3",
     "resend": "^6.32.1",
     "sigv4-lite": "^1.0.1"
   },

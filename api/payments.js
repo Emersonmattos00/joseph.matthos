@@ -1,4 +1,3 @@
-cat > api/payments.js << 'EOF'
 const { eq, and, gt } = require('drizzle-orm');
 const { randomUUID } = require('crypto');
 const { db } = require('./_db');
@@ -172,4 +171,3 @@ async function handleSubscribe(req, res, user) {
     expiresAt: periodEnd.toISOString(),
   });
 }
-EOF

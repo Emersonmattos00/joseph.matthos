@@ -1,4 +1,3 @@
-cat > api/stream.js << 'EOF'
 const { eq } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks } = require('../src/schema.js');
@@ -63,4 +62,3 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: 'Erro interno do servidor' });
   }
 };
-EOF

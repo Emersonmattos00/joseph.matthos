@@ -1,4 +1,3 @@
-cat > api/_lib.js << 'EOF'
 const jwt = require('jsonwebtoken');
 const { eq, and, gt, isNull, or } = require('drizzle-orm');
 const { db } = require('./_db');
@@ -86,5 +85,20 @@ async function getUserAccessCached(userId, trackId) {
   return access;
 }
 
-module.exports = { verifyUser, getUserAccess, getUserAccessCached };
-EOF
+/**
+ * Helper para enviar JSON com CORS e status correto
+ */
+function sendJson(res, statusCode, data) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.status(statusCode).json(data);
+}
+
+module.exports = {
+  verifyUser,
+  getUserAccess,
+  getUserAccessCached,
+  sendJson,
+};
