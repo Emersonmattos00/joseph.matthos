@@ -18,14 +18,14 @@ describe('B2 storage configuration', () => {
   });
 
   it('uses the regional B2 endpoints and configured bucket names', () => {
-    vi.stubEnv('B2_REGION', 'us-west-004');
+    vi.stubEnv('B2_REGION', 'us-east-005');
     vi.stubEnv('B2_KEY_ID', 'key-id');
     vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
     vi.stubEnv('B2_BUCKET_SITE_ASSETS', 'media-images');
 
     expect(storage.getStorageConfig()).toMatchObject({
-      endpoint: 'https://s3.us-west-004.backblazeb2.com',
-      publicBaseUrl: 'https://f004.backblazeb2.com/file'
+      endpoint: 'https://s3.us-east-005.backblazeb2.com',
+      publicBaseUrl: 'https://f005.backblazeb2.com/file'
     });
     expect(storage.getBucketForKind('image')).toBe('media-images');
     expect(storage.getBucketForKind('audio-preview')).toBe('audio-preview');
@@ -33,17 +33,17 @@ describe('B2 storage configuration', () => {
   });
 
   it('encodes public object paths without flattening folders', () => {
-    vi.stubEnv('B2_REGION', 'us-west-004');
+    vi.stubEnv('B2_REGION', 'us-east-005');
     vi.stubEnv('B2_KEY_ID', 'key-id');
     vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
 
     expect(storage.getPublicUrl('site-assets', 'images/Capa nova.jpg')).toBe(
-      'https://f004.backblazeb2.com/file/site-assets/images/Capa%20nova.jpg'
+      'https://f005.backblazeb2.com/file/site-assets/images/Capa%20nova.jpg'
     );
   });
 
   it('creates a signed PUT URL without exposing credentials', async () => {
-    vi.stubEnv('B2_REGION', 'us-west-004');
+    vi.stubEnv('B2_REGION', 'us-east-005');
     vi.stubEnv('B2_KEY_ID', 'key-id');
     vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
 

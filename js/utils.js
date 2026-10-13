@@ -123,16 +123,17 @@ export function safeMediaUrl(value) {
 export function formatPrice(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 'R$ 0,00';
-  return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return n
+    .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    .replace(/\u00A0/g, ' ');
 }
 
 export function formatCents(cents) {
   const n = Number(cents);
   if (!Number.isFinite(n)) return 'R$ 0,00';
-  return (n / 100).toLocaleString('pt-BR', {
-    style: 'currency',
-    currency: 'BRL'
-  });
+  return (n / 100)
+    .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    .replace(/\u00A0/g, ' ');
 }
 
 export function formatTime(sec) {
@@ -143,16 +144,17 @@ export function formatTime(sec) {
 }
 
 export function formatBytes(bytes) {
-  if (bytes === null || bytes === undefined || isNaN(bytes)) return '—';
+  if (bytes === null || bytes === undefined) return '—';
   if (bytes === 0) return '0 B';
+
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = Number(bytes);
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return (v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const value = bytes / Math.pow(1024, i);
+
+  // Remove .0 no final
+  const formatted = value % 1 === 0 ? value.toString() : value.toFixed(1);
+
+  return `${formatted} ${units[i]}`;
 }
 
 export function slugify(s) {
@@ -268,6 +270,12 @@ export function compressImage(file, maxWidth, quality) {
 export function luhnCheck(num) {
   const digits = String(num).replace(/\D/g, '');
   if (digits.length < 13 || digits.length > 19) return false;
+
+  // Rejeita sequências de zeros (ex: 0000000000000000)
+  if (/^0+$/.test(digits)) return false;
+
+  // Rejeita dígitos repetidos (ex: 1111111111111111)
+  if (/^(\d)\1+$/.test(digits)) return false;
 
   let sum = 0;
   let alt = false;
