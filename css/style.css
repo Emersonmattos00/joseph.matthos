@@ -3040,3 +3040,101 @@ section[aria-labelledby="destaqueTitle"] {
 #albumModal .discography-track-card:hover {
   background: rgba(255, 255, 255, 0.06);
 }
+
+/* ═════════════════════════════════════════════════════════════
+   AÇÕES NOS CARDS DE LANÇAMENTOS / MAIS OUVIDOS — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+
+/* Wrapper das ações no canto inferior direito da capa */
+.spotify-card-cover {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotify-card-actions {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  z-index: 3;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* Aparecem ao passar o mouse no card (ou quando o like está ativo) */
+.spotify-card:hover .spotify-card-actions,
+.spotify-card-actions:has(.like.liked) {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Em mobile, sempre visível */
+@media (hover: none) {
+  .spotify-card-actions {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Botão base */
+.spotify-card-action {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.spotify-card-action svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.spotify-card-action:hover {
+  background: rgba(0, 0, 0, 0.85);
+  transform: scale(1.08);
+}
+
+/* ─── Like (coração) ─────────────────────────────────── */
+.spotify-card-action.like svg {
+  fill: transparent;
+  stroke: #ffffff;
+  stroke-width: 2;
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+.spotify-card-action.like:hover svg {
+  stroke: #ffffff;
+}
+
+.spotify-card-action.like.liked svg {
+  fill: #1DB954;
+  stroke: #1DB954;
+}
+
+.spotify-card-action.like.liked:hover svg {
+  fill: #1ed760;
+  stroke: #1ed760;
+}
+
+/* ─── Share ──────────────────────────────────────────── */
+.spotify-card-action.share svg {
+  fill: #ffffff;
+  stroke: none;
+}
+
+.spotify-card-action.share:hover svg {
+  fill: #1DB954;
+}
