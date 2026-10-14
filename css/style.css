@@ -592,10 +592,13 @@ header.amz-header {
 }
 
 /* Álbuns retráteis (discografia) */
+.album-block {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--border);
 }
+.album-block:last-child { border-bottom: none; padding-bottom: 0; }
+.album-block .album-header {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -606,9 +609,11 @@ header.amz-header {
   background: transparent;
   border: 1px solid transparent;
 }
+.album-block .album-header:hover {
   background: rgba(212, 175, 55, 0.04);
   border-color: rgba(212, 175, 55, 0.2);
 }
+.album-block.expanded .album-header {
   background: rgba(212, 175, 55, 0.06);
   border-color: rgba(212, 175, 55, 0.3);
   margin-bottom: 1rem;
@@ -659,13 +664,16 @@ header.amz-header {
 }
 .album-toggle { margin-left: auto; }
 .album-actions { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
+.album-block.expanded .album-toggle {
   transform: rotate(180deg);
   background: var(--accent);
   color: var(--bg);
 }
 .album-tracks { display: none; padding-top: 0.5rem; }
+.album-block.expanded .album-tracks { display: block; }
 
 /* Faixas da discografia */
+.discography-scroll {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1751,495 +1759,6 @@ section[aria-labelledby="destaqueTitle"] {
   display: none !important;
 }
 
-/* Força discografia em grade — transformação por CSS */
-#discographyContainer {
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
-  gap: 1.5rem 1.25rem !important;
-}
-
-  margin: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.6rem !important;
-}
-
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.6rem !important;
-  padding: 0 !important;
-  background: transparent !important;
-  border: none !important;
-  cursor: pointer !important;
-}
-
-  width: 100% !important;
-  aspect-ratio: 1 !important;
-  height: auto !important;
-  border-radius: 6px !important;
-  background-size: cover !important;
-  background-position: center !important;
-  font-size: 0 !important;
-}
-
-  display: block !important;
-}
-
-  font-size: 0.95rem !important;
-  font-family: var(--font-sans) !important;
-  font-weight: 600 !important;
-  color: #fff !important;
-  margin: 0 0 0.25rem !important;
-  line-height: 1.2 !important;
-}
-
-  font-size: 0.8rem !important;
-  color: rgba(255,255,255,0.65) !important;
-}
-
-  display: none !important;
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   DISCOGRAFIA — GRADE DE CARDS (estilo Amazon Music)
-   ═══════════════════════════════════════════════════════════════════ */
-
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 1.75rem 1.25rem;
-}
-
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  cursor: pointer;
-  transition: transform 0.2s;
-}
-
-  position: relative;
-  width: 100%;
-  aspect-ratio: 1;
-  border-radius: 6px;
-  overflow: hidden;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  transition: transform 0.4s ease;
-}
-  transform: scale(1.06);
-}
-  font-family: var(--font-serif);
-  font-size: 3rem;
-  font-weight: 900;
-  color: rgba(212, 175, 55, 0.35);
-}
-
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 0;
-  background: var(--amz-cyan);
-  color: #000;
-  font-size: 1rem;
-  font-weight: 700;
-  cursor: pointer;
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 0.25s, transform 0.25s, background 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-  opacity: 1;
-  transform: translateY(0);
-}
-  background: #fff;
-  color: #000;
-}
-
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: #fff;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  margin: 0;
-}
-
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
-  line-height: 1.3;
-}
-
-/* ── Modal do álbum ────────────────────────────────────────────── */
-#albumModal .album-modal__header {
-  display: flex;
-  gap: 1.25rem;
-  align-items: flex-end;
-  padding-bottom: 1.5rem;
-  margin-bottom: 1.5rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-#albumModal .album-modal__cover {
-  width: 140px;
-  height: 140px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  background-size: cover;
-  background-position: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-serif);
-  font-size: 3rem;
-  font-weight: 900;
-  color: rgba(212, 175, 55, 0.4);
-  flex-shrink: 0;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-}
-#albumModal .album-modal__info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  min-width: 0;
-}
-#albumModal .album-modal__type {
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.15em;
-  color: var(--amz-cyan);
-  text-transform: uppercase;
-}
-#albumModal .album-modal__title {
-  font-size: 1.8rem;
-  font-weight: 800;
-  line-height: 1.1;
-  color: #fff;
-  margin: 0;
-  font-family: var(--font-sans);
-}
-#albumModal .album-modal__meta {
-  font-size: 0.9rem;
-  color: rgba(255, 255, 255, 0.65);
-}
-#albumModal .album-modal__tracks {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 50vh;
-  overflow-y: auto;
-  padding-right: 0.5rem;
-}
-
-/* Responsivo */
-@media (max-width: 900px) {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 1rem 0.85rem;
-  }
-  #albumModal .album-modal__cover { width: 100px; height: 100px; }
-  #albumModal .album-modal__title { font-size: 1.4rem; }
-}
-@media (max-width: 600px) {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.85rem 0.65rem;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   DISCOGRAFIA = LANÇAMENTOS — mesmo visual exato
-   ═══════════════════════════════════════════════════════════════════ */
-
-/* Grid: 8 colunas como Lançamentos */
-  display: grid !important;
-  grid-template-columns: repeat(8, minmax(0, 1fr)) !important;
-  gap: 1.5rem 1rem !important;
-  align-items: start !important;
-}
-
-/* Card: mesmo tamanho dos cards de Lançamentos */
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.5rem !important;
-  cursor: pointer !important;
-  min-width: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  padding: 0 !important;
-  position: relative !important;
-}
-
-/* Capa: quadrada, 100% */
-  position: relative !important;
-  width: 100% !important;
-  aspect-ratio: 1 / 1 !important;
-  height: auto !important;
-  border-radius: 6px !important;
-  overflow: hidden !important;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
-  margin: 0 !important;
-}
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  display: block !important;
-}
-
-/* Título: uma linha, igual Lançamentos */
-  font-size: 0.9rem !important;
-  font-weight: 600 !important;
-  color: #fff !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  display: -webkit-box !important;
-  -webkit-line-clamp: 1 !important;
-  -webkit-box-orient: vertical !important;
-  white-space: normal !important;
-  font-family: var(--font-sans) !important;
-}
-
-/* Meta: uma linha "Álbum • 2026" */
-  font-size: 0.78rem !important;
-  color: rgba(255, 255, 255, 0.55) !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-}
-
-/* Play button: esconder totalmente (Lançamentos não mostra) */
-  display: none !important;
-}
-
-  display: none !important;
-}
-
-/* ── Responsivo: 8 → 6 → 4 → 2 colunas ── */
-@media (max-width: 1400px) {
-    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
-  }
-}
-@media (max-width: 1200px) {
-    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
-  }
-}
-@media (max-width: 1000px) {
-    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
-  }
-}
-@media (max-width: 800px) {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
-  }
-}
-@media (max-width: 600px) {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 1rem 0.75rem !important;
-  }
-}
-@media (max-width: 400px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   DISCOGRAFIA — FORÇA grade de cards igual Lançamentos
-   ═══════════════════════════════════════════════════════════════════ */
-
-  display: none !important;
-}
-
-/* Forçar o grid */
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
-  gap: 1.5rem 1rem !important;
-  align-items: start !important;
-}
-
-/* Card individual */
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.5rem !important;
-  cursor: pointer !important;
-  min-width: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  padding: 0 !important;
-  max-width: 100% !important;
-}
-
-/* Capa: forçar quadrado 1:1 e limitar tamanho */
-  position: relative !important;
-  width: 100% !important;
-  max-width: 100% !important;
-  aspect-ratio: 1 / 1 !important;
-  height: auto !important;
-  max-height: 200px !important;
-  border-radius: 6px !important;
-  overflow: hidden !important;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
-  margin: 0 !important;
-  padding: 0 !important;
-}
-
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
-  object-fit: cover !important;
-  display: block !important;
-}
-
-/* Título: 1 linha, pequeno */
-  font-size: 0.9rem !important;
-  font-weight: 600 !important;
-  color: #fff !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  display: -webkit-box !important;
-  -webkit-line-clamp: 1 !important;
-  -webkit-box-orient: vertical !important;
-  white-space: normal !important;
-  word-break: break-word !important;
-}
-
-/* Meta: 1 linha, pequeno */
-  font-size: 0.78rem !important;
-  color: rgba(255, 255, 255, 0.55) !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-}
-
-/* Esconder play button */
-#discographyContainer .card-play {
-  display: none !important;
-}
-
-/* ── Anular o CSS antigo da discografia ── */
-#discographyContainer .discography-track-card {
-  all: unset !important;
-  display: none !important;
-}
-
-/* Responsivo */
-@media (max-width: 900px) {
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important;
-    gap: 1rem 0.75rem !important;
-  }
-}
-@media (max-width: 600px) {
-    grid-template-columns: repeat(3, 1fr) !important;
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════
-   DISCOGRAFIA — força grade igual Lançamentos
-   ═══════════════════════════════════════════════════════════════════ */
-
-  display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
-  gap: 1.5rem 1rem !important;
-  align-items: start !important;
-}
-
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 0.5rem !important;
-  cursor: pointer !important;
-  min-width: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  padding: 0 !important;
-}
-
-  position: relative !important;
-  width: 100% !important;
-  aspect-ratio: 1 / 1 !important;
-  height: auto !important;
-  border-radius: 6px !important;
-  overflow: hidden !important;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
-}
-
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  display: block !important;
-}
-
-  font-size: 0.9rem !important;
-  font-weight: 600 !important;
-  color: #fff !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  display: -webkit-box !important;
-  -webkit-line-clamp: 1 !important;
-  -webkit-box-orient: vertical !important;
-}
-
-  font-size: 0.78rem !important;
-  color: rgba(255, 255, 255, 0.55) !important;
-  line-height: 1.3 !important;
-  margin: 0 !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-}
-
-/* Esconder qualquer resquício da lista antiga */
-  display: none !important;
-}
-
 /* ═══════════════════════════════════════════════════════════════════
    DISCOGRAFIA — grade idêntica a Lançamentos
    ═══════════════════════════════════════════════════════════════════ */
@@ -2305,6 +1824,7 @@ section[aria-labelledby="destaqueTitle"] {
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
+  line-clamp: 1;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 }
@@ -2506,6 +2026,7 @@ section[aria-labelledby="destaqueTitle"] {
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
+  line-clamp: 1;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 }
@@ -2631,6 +2152,7 @@ section[aria-labelledby="destaqueTitle"] {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   display: -webkit-box !important;
+  line-clamp: 1 !important;
   -webkit-line-clamp: 1 !important;
   -webkit-box-orient: vertical !important;
 }
@@ -2794,6 +2316,7 @@ section[aria-labelledby="destaqueTitle"] {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   display: -webkit-box !important;
+  line-clamp: 1 !important;
   -webkit-line-clamp: 1 !important;
   -webkit-box-orient: vertical !important;
 }
@@ -3298,6 +2821,7 @@ section[aria-labelledby="destaqueTitle"] {
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
+  line-clamp: 1;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 }
@@ -3402,4 +2926,117 @@ section[aria-labelledby="destaqueTitle"] {
 }
 .track-action-icon.like.liked:hover {
   color: #ff4d5e;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   BOTÕES DE AÇÃO NAS FAIXAS — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+.track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.track-action-btn {
+  background: transparent;
+  border: none;
+  padding: 0.4rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  opacity: 0.7;
+}
+
+.track-action-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+/* ─── Curtir (coração) ─────────────────────────────────── */
+.track-action-btn.like svg {
+  fill: transparent;
+  stroke: #b3b3b3;
+  stroke-width: 2;
+  transition: fill 0.15s ease, stroke 0.15s ease, transform 0.15s ease;
+}
+
+.track-action-btn.like:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+.track-action-btn.like:hover svg {
+  stroke: #ffffff;
+}
+
+.track-action-btn.like.liked svg {
+  fill: #1DB954;       /* verde Spotify */
+  stroke: #1DB954;
+}
+
+.track-action-btn.like.liked:hover {
+  opacity: 1;
+}
+
+.track-action-btn.like.liked:hover svg {
+  fill: #1ed760;       /* verde Spotify hover */
+  stroke: #1ed760;
+}
+
+/* ─── Compartilhar ─────────────────────────────────────── */
+.track-action-btn.share svg {
+  fill: #b3b3b3;
+  stroke: none;
+}
+
+.track-action-btn.share:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+.track-action-btn.share:hover svg {
+  fill: #ffffff;
+}
+
+/* ─── Estado / aluguel mantidos discretos ──────────────── */
+.track-action-btn.buy {
+  font-size: 0.95rem;
+  opacity: 0.8;
+}
+
+.track-action-btn.buy:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+
+/* ─── Ajuste no layout da faixa ────────────────────────── */
+.discography-track-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.discography-track-card .track-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.discography-track-card.playing .track-action-btn.like svg {
+  /* nada extra — só garante que o like não some quando tocando */
+}
+
+#albumModal .discography-track-card {
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+#albumModal .discography-track-card:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
