@@ -1,63 +1,35 @@
-/* ============================================================
+/* ═══════════════════════════════════════════════════════════════════
    JOSEPH MATTHOS — style.css
-   ------------------------------------------------------------
+   ---------------------------------------------------------------
    ÍNDICE
-   ------------------------------------------------------------
+   ---------------------------------------------------------------
    01. Reset + variáveis
    02. Acessibilidade e scrollbar
    03. Layout base
-   04. Header + navegação
+   04. Header Amazon (60px) — cabeçalho
    05. Botões
-   06. Hero
-   07. Seções
-   08. Discografia — filter bar
-   09. Discografia — álbuns retráteis
-   10. Discografia — lista compacta (estilo fila)
-   11. Discografia — modo lista (legado)
-   12. Modais gerais
-   13. Formulários
-   14. Sobre / Filosofia / Contato
-   15. Footer + links legais
-   16. Player fixo (oculto)
-   17. Player expandido (grid 2 colunas / mobile Spotify)
-   18. Toast global
-   19. Carrinho (modal + nav)
-   20. Checkout
-   21. Minhas compras
-   22. Redes sociais (ícones)
-   23. Modal de planos
-   24. Modal de aluguel
-   25. ADMIN — base (layout, sidebar, cards, tabelas)
-   26. ADMIN — botão salvar (dirty)
-   27. ADMIN — estados (loading, error, empty, truncation)
-   28. ADMIN — badges
-   29. ADMIN — backup grid
-   30. ADMIN — modal de plano
-   31. ADMIN — tabelas (ações + grupos)
-   32. ADMIN — upload no modal
-   33. ADMIN — editores de lista
-   34. ADMIN — redes sociais (editor)
-   35. ADMIN — toast
-   36. ADMIN — modal (larguras)
-   37. ADMIN — editor de planos
-   38. ADMIN — acessibilidade
-   39. Z-index dos modais públicos
-   40. RESPONSIVO — site público
-   41. RESPONSIVO — admin
-   42. PLAYER — botão tela cheia + fullscreen
-   43. CORREÇÃO — capa do álbum (mobile + fullscreen)
-   44. ADMIN — MODAL GENÉRICO (#adminModal)
-   45. ADMIN — Drag & drop de faixas
-   46. MODAL DE GERENCIAMENTO DE ASSINATURA
-   47. RÁDIO — botão no header
-   48. RÁDIO — modal
-   49. GLOBAL — Fonte unificada Segoe UI (forçada em tudo)
-   ============================================================ */
+   06. Hero compacto (artista)
+   07. Tabs do artista
+   08. Seções — Lançamentos / Em Destaques / Álbuns mais ouvidos
+   09. Discografia — filtros + álbuns retráteis + faixas
+   10. Playlists
+   11. Sobre / Filosofia / Contato
+   12. Footer + links legais
+   13. Modais gerais
+   14. Formulários
+   15. Player fixo (oculto)
+   16. Player expandido (grid 2 colunas / mobile)
+   17. Toast global
+   18. Modal de planos
+   19. Modal de aluguel
+   20. ADMIN — base (layout, sidebar, cards, tabelas)
+   21. ADMIN — login
+   22. ADMIN — modal genérico
+   23. RESPONSIVO — site público
+   24. RESPONSIVO — admin
+   ═══════════════════════════════════════════════════════════════════ */
 
-
-/* ============================================================
-   01. RESET + VARIÁVEIS
-   ============================================================ */
+/* ── 01. RESET E VARIÁVEIS ────────────────────────────────────── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
@@ -69,53 +41,37 @@
   --accent: #d4af37;
   --accent-dark: #8b6f2c;
   --accent-glow: rgba(212, 175, 55, 0.25);
+  --amz-cyan: #25d1da;
   --border: #2b272f;
   --success: #4ade80;
   --danger: #f87171;
   --info: #60a5fa;
   --warning: #f0a100;
-  --font-serif: 'Playfair Display', serif;
-  --font-sans: 'Inter', sans-serif;
+  --font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
   --player-h: 92px;
 }
 
+html, body, *, *::before, *::after,
+button, input, textarea, select, optgroup, option {
+  font-family: var(--font-sans);
+}
 
-/* ============================================================
-   02. ACESSIBILIDADE E SCROLLBAR
-   ============================================================ */
+/* ── 02. SCROLLBAR ────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-dark); }
 * { scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
 
-*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-button:focus:not(:focus-visible),
-a:focus:not(:focus-visible) { outline: none; }
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
-
-/* ============================================================
-   03. LAYOUT BASE
-   ============================================================ */
+/* ── 03. BASE ─────────────────────────────────────────────────── */
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-sans);
   line-height: 1.5;
-  scroll-behavior: smooth;
   overflow-x: hidden;
   padding-bottom: 0;
 }
-
 body::before {
   content: "";
   position: fixed;
@@ -125,142 +81,10 @@ body::before {
   z-index: 1000;
   opacity: 0.6;
 }
-
 body.modal-open { overflow: hidden; }
-
 .container { width: min(1200px, 90%); margin: 0 auto; }
 
-
-/* ============================================================
-   04. HEADER + NAVEGAÇÃO
-   ============================================================ */
-header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  padding: 1rem 0;
-  background: rgba(11, 10, 12, 0.9);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid rgba(212, 175, 55, 0.15);
-  z-index: 100;
-}
-.header-inner { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-
-.logo {
-  font-family: var(--font-serif);
-  font-size: 1.7rem;
-  font-weight: 700;
-  color: var(--text);
-  text-decoration: none;
-  line-height: 1;
-  white-space: nowrap;
-}
-.logo span { color: var(--accent); font-style: italic; }
-
-nav { display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap; }
-nav a {
-  color: var(--text-dim);
-  text-decoration: none;
-  font-size: 0.78rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  transition: 0.2s;
-  font-weight: 500;
-}
-nav a:hover { color: var(--accent); }
-
-.auth-area { display: flex; align-items: center; gap: 0.8rem; }
-.user-chip {
-  display: none;
-  align-items: center;
-  gap: 0.6rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  padding: 0.4rem 0.9rem 0.4rem 0.4rem;
-  border-radius: 40px;
-  cursor: pointer;
-  transition: 0.2s;
-}
-.user-chip:hover { border-color: var(--accent); }
-.user-chip.visible { display: inline-flex; }
-.user-avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 0.85rem;
-  color: var(--bg);
-}
-.user-info-mini { line-height: 1.1; }
-.user-name-mini { font-size: 0.8rem; font-weight: 600; }
-.user-plan-mini {
-  font-size: 0.65rem;
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-nav .nav-cart {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.45rem 0.75rem;
-  margin-left: 0.25rem;
-  border-radius: 30px;
-  color: var(--text-dim);
-  font-size: 1rem;
-  text-transform: none;
-  letter-spacing: 0;
-  line-height: 1;
-  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
-}
-nav .nav-cart:hover {
-  color: var(--accent);
-  background: rgba(212, 175, 55, 0.08);
-  box-shadow: 0 0 15px var(--accent-glow);
-}
-nav .nav-cart i { font-size: 1rem; pointer-events: none; }
-
-.nav-cart-badge {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  background: var(--danger);
-  color: #fff;
-  font-size: 0.62rem;
-  font-weight: 700;
-  font-family: var(--font-sans);
-  line-height: 18px;
-  text-align: center;
-  border-radius: 10px;
-  border: 2px solid var(--bg);
-  letter-spacing: 0;
-  text-transform: none;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-}
-.nav-cart-badge.hidden { display: none; }
-
-@keyframes navCartPop {
-  0%   { transform: scale(1); }
-  45%  { transform: scale(1.35); }
-  100% { transform: scale(1); }
-}
-nav .nav-cart.pop { animation: navCartPop 0.35s ease; }
-
-
-/* ============================================================
-   05. BOTÕES
-   ============================================================ */
+/* ── 04. BOTÕES ───────────────────────────────────────────────── */
 .btn {
   display: inline-block;
   padding: 0.75rem 1.6rem;
@@ -270,166 +94,471 @@ nav .nav-cart.pop { animation: navCartPop 0.35s ease; }
   text-transform: uppercase;
   text-decoration: none;
   border-radius: 40px;
-  transition: background 0.3s, color 0.3s, border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+  transition: background 0.3s, color 0.3s, border-color 0.3s, box-shadow 0.3s;
   border: 1px solid transparent;
   cursor: pointer;
-  font-family: var(--font-sans);
 }
 .btn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .btn-primary:hover { background: transparent; color: var(--accent); box-shadow: 0 0 25px var(--accent-glow); }
-.btn-outline { background: transparent; color: var(--text); border-color: rgba(255, 255, 255, 0.2); }
+.btn-outline { background: transparent; color: var(--text); border-color: rgba(255,255,255,0.2); }
 .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-ghost { background: transparent; color: var(--text-dim); border: none; padding: 0.5rem 1rem; }
 .btn-ghost:hover { color: var(--accent); }
 .btn-sm { padding: 0.5rem 1.1rem; font-size: 0.75rem; }
 .btn-block { width: 100%; text-align: center; }
-.btn-danger { background: var(--danger); color: white; border-color: var(--danger); }
-.btn-danger:hover { background: transparent; color: var(--danger); }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-
-/* ============================================================
-   06. HERO
-   ============================================================ */
-.hero {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  padding: 7rem 0 4rem;
-  position: relative;
-  background:
-    radial-gradient(circle at 70% 30%, rgba(212, 175, 55, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 20% 80%, rgba(212, 175, 55, 0.04) 0%, transparent 40%);
-  background-size: cover;
-  background-position: center;
-}
-.hero.has-bg-image::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(11, 10, 12, 0.72);
-  z-index: 0;
-}
-.hero .container {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3rem;
-  align-items: center;
-}
-.hero-content h1 {
-  font-family: var(--font-serif);
-  font-size: clamp(2.5rem, 7vw, 5rem);
-  font-weight: 900;
-  line-height: 1.05;
-  letter-spacing: -0.03em;
-  margin-bottom: 1rem;
-}
-.hero-content h1 .gold { color: var(--accent); display: block; font-style: italic; }
-.hero-sub {
-  font-size: 1.15rem;
-  color: var(--text-dim);
-  margin-bottom: 2rem;
-  max-width: 500px;
-  font-weight: 300;
-  border-left: 3px solid var(--accent);
-  padding-left: 1.5rem;
-}
-.hero-cta { display: flex; gap: 1rem; flex-wrap: wrap; }
-.hero-visual { display: flex; justify-content: center; align-items: center; }
-
-.vinyl-container {
-  position: relative;
+/* ── 05. HEADER AMAZON (60px) ─────────────────────────────────── */
+header.amz-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
   width: 100%;
-  max-width: 380px;
-  aspect-ratio: 1/1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #2a252e, #0d0b0e);
-  box-shadow:
-    0 30px 50px rgba(0, 0, 0, 0.7),
-    0 0 0 2px rgba(212, 175, 55, 0.2),
-    0 0 40px rgba(212, 175, 55, 0.15);
+  height: 60px;
+  background: rgba(11, 10, 12, 0.98);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+.amz-header-inner {
   display: flex;
-  justify-content: center;
   align-items: center;
-  animation: float 6s ease-in-out infinite;
-  overflow: hidden;
+  gap: 1.25rem;
+  max-width: 1600px;
+  height: 60px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
 }
-.vinyl-container.has-cover::after { display: none; }
-.vinyl-container .cover-img {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center;
+.amz-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  text-decoration: none;
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.amz-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: var(--amz-cyan);
   border-radius: 50%;
+  color: #000;
+  font-size: 1rem;
+  font-weight: 700;
+  flex-shrink: 0;
 }
-.vinyl-container.spinning { animation: spin 8s linear infinite; }
-.vinyl-container:not(.has-cover)::after {
-  content: "";
-  position: absolute;
-  width: 30%;
-  height: 30%;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 40%, #d4af37, #8b6f2c);
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+.amz-logo-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: #fff;
 }
-.vinyl-container .lyric {
+.amz-logo-text em {
+  font-style: normal;
+  font-weight: 400;
+  color: #fff;
+  margin-left: 2px;
+}
+.amz-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-left: 0.5rem;
+}
+.amz-nav-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.3rem 0;
+  transition: color 0.15s;
+}
+.amz-nav-item:hover { color: #fff; }
+.amz-nav-item--active { color: #fff; }
+.amz-nav-item--active::after {
+  content: '';
   position: absolute;
-  bottom: -60px;
   left: 0;
   right: 0;
-  text-align: center;
-  font-family: var(--font-serif);
-  font-style: italic;
-  color: var(--accent);
-  font-size: 1.1rem;
-  opacity: 0.8;
-  z-index: 2;
+  bottom: -1.35rem;
+  height: 2px;
+  background: var(--amz-cyan);
 }
-@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-15px); } }
-@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.amz-nav-item i { font-size: 0.85rem; }
 
-
-/* ============================================================
-   07. SEÇÕES
-   ============================================================ */
-section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
-.section-title {
-  font-family: var(--font-serif);
-  font-size: 2.5rem;
+.amz-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+.amz-search-wrap {
+  display: flex;
+  align-items: center;
+  width: 220px;
+  height: 34px;
+  background: #ffffff;
+  border-radius: 17px;
+  overflow: hidden;
+  padding: 0 0.5rem 0 0.85rem;
+}
+.amz-search {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: #111;
+  font-size: 0.82rem;
+  outline: none;
+  height: 100%;
+}
+.amz-search::placeholder { color: #666; }
+.amz-search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: #111;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.amz-upgrade {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  padding: 0.4rem 0.85rem;
+  border-radius: 20px;
+  font-size: 0.68rem;
   font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: border-color 0.15s;
+  white-space: nowrap;
+}
+.amz-upgrade:hover { border-color: var(--amz-cyan); }
+
+.amz-header .auth-area {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.amz-header .auth-area .btn-sm {
+  font-size: 0.7rem;
+  padding: 0.4rem 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 6px;
+}
+.amz-header .auth-area .btn-outline {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+.amz-header .auth-area .btn-outline:hover {
+  border-color: var(--amz-cyan);
+  color: #fff;
+  box-shadow: none;
+}
+.amz-header .auth-area .btn-primary {
+  background: var(--amz-cyan);
+  color: #000;
+  border: 0;
+  font-weight: 700;
+}
+.amz-header .auth-area .btn-primary:hover {
+  background: #1fbfc7;
+  color: #000;
+  box-shadow: none;
+}
+.amz-header .user-chip {
+  display: none;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 30px;
+  padding: 0.25rem 0.75rem 0.25rem 0.25rem;
+  cursor: pointer;
+}
+.amz-header .user-chip.visible { display: inline-flex; }
+.amz-header .user-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  color: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.amz-header .user-info-mini { line-height: 1.1; }
+.amz-header .user-name-mini { font-size: 0.75rem; font-weight: 600; color: #fff; }
+.amz-header .user-plan-mini {
+  font-size: 0.6rem;
+  color: var(--amz-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── 06. MAIN ─────────────────────────────────────────────────── */
+.amz-main {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem 4rem;
+}
+
+/* ── 07. HERO COMPACTO ────────────────────────────────────────── */
+.artist-spotify {
+  padding: 2.5rem 0 0;
+  margin: 0;
+}
+.artist-banner {
+  background: transparent;
+  min-height: auto;
+  padding: 0;
+  position: relative;
+}
+.artist-banner-overlay,
+.artist-hero-right,
+.artist-avatar-wrap,
+.artist-crown,
+.artist-quote-block,
+.artist-badge-row,
+.artist-meta-line,
+.artist-stats-row { display: none !important; }
+.artist-banner-content {
+  display: block;
+  padding: 0;
+  max-width: 100%;
+}
+.artist-hero-left { text-align: left; max-width: 720px; }
+
+.artist-eyebrow {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amz-cyan);
   margin-bottom: 0.5rem;
-  letter-spacing: -0.02em;
 }
-.section-title .gold { color: var(--accent); }
-.section-sub {
-  color: var(--text-dim);
-  font-size: 1.05rem;
-  margin-bottom: 2.5rem;
-  font-weight: 300;
-  max-width: 700px;
+.artist-spotify-name {
+  font-family: var(--font-sans);
+  font-size: clamp(2.5rem, 6vw, 4.25rem);
+  font-weight: 800;
+  line-height: 1.05;
+  margin: 0 0 0.5rem;
+  color: #fff;
+  letter-spacing: -0.025em;
+  font-style: normal;
+}
+.artist-tagline {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.65);
+  margin: 0 0 1.75rem;
+}
+.artist-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+.btn-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: var(--amz-cyan);
+  color: #000;
+  border: 0;
+  padding: 0.75rem 1.5rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0;
+  text-transform: none;
+  transition: filter 0.15s;
+}
+.btn-follow:hover { background: #1fbfc7; }
+.btn-icon-round {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: color 0.15s;
+}
+.btn-icon-round:hover { color: var(--amz-cyan); }
+
+.artist-tabs-bar {
+  margin-top: 2.5rem;
+  border-top: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: transparent;
+  position: static;
+}
+.artist-tabs {
+  display: flex;
+  gap: 2rem;
+  padding: 0;
+  justify-content: flex-start;
+}
+.artist-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.92rem;
+  font-weight: 500;
+  padding: 0.75rem 0;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.artist-tab:hover { color: #fff; }
+.artist-tab.active {
+  color: #fff;
+  border-bottom-color: var(--amz-cyan);
 }
 
+/* ── 08. SEÇÕES ───────────────────────────────────────────────── */
+.section-amz { padding: 2.5rem 0 1.5rem; }
+.section-spotify-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+.section-spotify-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+  letter-spacing: -0.01em;
+  font-style: normal;
+}
+.section-amz-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.amz-arrow {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.amz-arrow:hover { background: rgba(255, 255, 255, 0.08); }
+.section-spotify-link {
+  display: inline-flex;
+  align-items: center;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: 0.45rem 0.9rem;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 0.15s;
+}
+.section-spotify-link:hover { background: rgba(255, 255, 255, 0.15); }
 
-/* ============================================================
-   08. DISCOGRAFIA — FILTER BAR
-   ============================================================ */
+.amz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 1.5rem 1.25rem;
+}
+.amz-grid > * {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+.amz-grid .cover-img,
+.amz-grid img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+  transition: transform 0.2s;
+}
+.amz-grid .cover-img:hover,
+.amz-grid img:hover {
+  transform: scale(1.02);
+}
+
+.amz-feature-card {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.amz-feature-card img,
+.amz-feature-card .cover-img {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+/* ── 09. DISCOGRAFIA ──────────────────────────────────────────── */
+.section-amz-discografia {
+  padding: 2.5rem 0 3rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 1rem;
+}
 .filter-bar {
-  display: flex !important;
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-bottom: 2.5rem;
-  padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 2rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 .filter-bar-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 .filter-btn {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.65);
   padding: 0.5rem 1.1rem;
   border-radius: 30px;
   font-size: 0.75rem;
@@ -438,52 +567,37 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   font-weight: 600;
   cursor: pointer;
   transition: 0.2s;
-  font-family: var(--font-sans);
 }
-.filter-btn:hover { border-color: var(--accent); color: var(--accent); }
-.filter-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-.filter-bar .shop-search-wrap { flex: 0 1 260px; min-width: 200px; }
+.filter-btn:hover { border-color: var(--amz-cyan); color: var(--amz-cyan); }
+.filter-btn.active {
+  background: var(--amz-cyan);
+  color: #000;
+  border-color: var(--amz-cyan);
+}
+.shop-search-wrap { flex: 0 1 260px; min-width: 200px; }
 .shop-search {
   width: 100%;
   padding: 0.65rem 1.1rem;
-  background: var(--card);
-  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 30px;
-  color: var(--text);
-  font-family: var(--font-sans);
+  color: #fff;
   font-size: 0.9rem;
   outline: none;
   transition: 0.2s;
 }
-.shop-search:focus { border-color: var(--accent); box-shadow: 0 0 15px var(--accent-glow); }
-
-.view-mode-buttons { display: flex; gap: 0.35rem; margin-left: auto; }
-.view-mode-btn {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  color: var(--text-dim);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
+.shop-search:focus {
+  border-color: var(--amz-cyan);
+  box-shadow: 0 0 15px rgba(37, 209, 218, 0.15);
 }
-.view-mode-btn.active,
-.view-mode-btn:hover { color: var(--accent); border-color: var(--accent); }
 
-
-/* ============================================================
-   09. DISCOGRAFIA — ÁLBUNS RETRÁTEIS
-   ============================================================ */
+/* Álbuns retráteis (discografia) */
 .album-block {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--border);
-  transition: 0.3s;
 }
-.album-block:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
-
+.album-block:last-child { border-bottom: none; padding-bottom: 0; }
 .album-block .album-header {
   display: flex;
   align-items: center;
@@ -494,8 +608,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   transition: 0.3s;
   background: transparent;
   border: 1px solid transparent;
-  flex-wrap: nowrap;
-  position: relative;
 }
 .album-block .album-header:hover {
   background: rgba(212, 175, 55, 0.04);
@@ -505,9 +617,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   background: rgba(212, 175, 55, 0.06);
   border-color: rgba(212, 175, 55, 0.3);
   margin-bottom: 1rem;
-  padding-bottom: 1rem;
 }
-
 .album-cover {
   width: 72px;
   height: 72px;
@@ -532,25 +642,10 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   font-size: 1.4rem;
   font-weight: 700;
   line-height: 1.2;
+  color: #fff;
 }
 .album-meta { color: var(--text-dim); font-size: 0.82rem; margin-top: 0.2rem; }
 .album-meta .gold { color: var(--accent); }
-
-.album-badge {
-  font-size: 0.65rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 0.2rem 0.7rem;
-  border-radius: 20px;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-weight: 700;
-  margin-left: 0.5rem;
-  vertical-align: middle;
-  display: inline-block;
-}
-.album-badge.premium { background: var(--accent); color: var(--bg); }
-
 .album-toggle,
 .album-play {
   display: inline-flex;
@@ -569,48 +664,26 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 }
 .album-toggle { margin-left: auto; }
 .album-actions { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
-.album-block .album-header:hover .album-toggle,
-.album-block .album-header:hover .album-play {
-  background: var(--accent);
-  color: var(--bg);
-}
 .album-block.expanded .album-toggle {
   transform: rotate(180deg);
   background: var(--accent);
   color: var(--bg);
 }
-
 .album-tracks { display: none; padding-top: 0.5rem; }
-.album-block.expanded .album-tracks {
-  display: block;
-  animation: slideDown 0.3s ease;
-}
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+.album-block.expanded .album-tracks { display: block; }
 
-
-/* ============================================================
-   10. DISCOGRAFIA — LISTA COMPACTA (ESTILO FILA)
-   ============================================================ */
+/* Faixas da discografia */
 .discography-scroll {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  overflow: visible;
-  padding: 0;
-  margin: 0;
 }
-
 .discography-track-card {
   display: grid;
   grid-template-columns: 40px 56px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
   padding: 10px 14px;
-  width: 100%;
-  box-sizing: border-box;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -625,19 +698,12 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   background: rgba(212, 175, 55, 0.14);
   border-color: rgba(212, 175, 55, 0.35);
 }
-
 .discography-track-card .track-index {
   font-size: 0.85rem;
   color: rgba(212, 175, 55, 0.55);
   text-align: center;
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-sans);
 }
-.discography-track-card.playing .track-index {
-  color: #f0d98f;
-  font-weight: 700;
-}
-
 .discography-track-card .track-cover {
   width: 56px;
   height: 56px;
@@ -655,15 +721,12 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   flex-shrink: 0;
   overflow: hidden;
 }
-
 .discography-track-card .track-info {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
   gap: 4px;
   min-width: 0;
-  text-align: left;
 }
 .discography-track-card .track-title {
   font-size: 0.95rem;
@@ -671,39 +734,19 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: var(--font-sans);
   font-weight: 500;
   line-height: 1.2;
-  text-align: left;
-  width: 100%;
 }
-.discography-track-card.playing .track-title {
-  font-weight: 700;
-  color: #f0d98f;
-}
+.discography-track-card.playing .track-title { font-weight: 700; color: #f0d98f; }
 .discography-track-card .track-duration {
   font-size: 0.78rem;
   color: rgba(212, 175, 55, 0.65);
-  font-family: var(--font-sans);
-  line-height: 1.2;
-  text-align: left;
 }
-
 .discography-track-card .track-right {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex-shrink: 0;
-  justify-self: end;
 }
-.discography-track-card .track-state {
-  font-size: 0.75rem;
-  color: rgba(212, 175, 55, 0.6);
-  font-family: var(--font-sans);
-  white-space: nowrap;
-}
-.discography-track-card.playing .track-state { color: #f0d98f; }
-
 .discography-track-card .track-action-icon {
   width: 32px;
   height: 32px;
@@ -713,48 +756,162 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   place-items: center;
   border: 1px solid rgba(212, 175, 55, 0.3);
   background: rgba(212, 175, 55, 0.06);
-  color: #d4af37;
+  color: var(--accent);
   cursor: pointer;
   transition: all 0.15s;
-  padding: 0;
 }
 .discography-track-card .track-action-icon:hover {
   background: rgba(212, 175, 55, 0.18);
-  border-color: #d4af37;
+  border-color: var(--accent);
   transform: scale(1.08);
 }
-.discography-track-card .track-action-icon::after { display: none; }
 
-
-/* ============================================================
-   11. DISCOGRAFIA — MODO LISTA (LEGADO)
-   ============================================================ */
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-scroll,
-#discographyContainer.view-list .album-block.expanded .discography-scroll {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 2px !important;
-  padding: 0 !important;
-  overflow: visible !important;
+/* Playlists */
+.playlists-panel { margin-top: 3rem; }
+.playlists-heading h3 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.5rem; }
+.playlists-heading p { color: var(--text-dim); font-size: 0.9rem; }
+.playlists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
 }
 
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-card,
-#discographyContainer.view-list .album-block.expanded .discography-track-card {
-  grid-template-columns: 40px 56px minmax(0, 1fr) auto !important;
-  padding: 10px 14px !important;
+/* ── 10. SEÇÕES DO MEIO ───────────────────────────────────────── */
+#sobre, #filosofia, #contato {
+  padding: 3rem 0;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.section-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+}
+.section-title .gold { color: var(--accent); }
+.section-sub {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.95rem;
+  margin-bottom: 2rem;
+  font-weight: 300;
+  max-width: 700px;
 }
 
-#discographyContainer[data-view-mode="list"] .album-block.expanded .discography-track-btn,
-#discographyContainer.view-list .album-block.expanded .discography-track-btn {
-  width: auto !important;
-  padding: 0.4rem 0.9rem !important;
-  white-space: nowrap !important;
+.sobre-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 2.5rem;
+  align-items: center;
+}
+.sobre-img {
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #1e1b22, #0f0e11);
+  border: 1px solid var(--border);
+  background-size: cover;
+  background-position: center top;
+}
+.sobre-text p { color: var(--text-dim); margin-bottom: 1.2rem; font-weight: 300; font-size: 1rem; }
+
+.frases-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.frases-grid > *, .frase-card {
+  padding: 1.2rem 1.4rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 3px solid var(--accent);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
+.contato-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: start;
+}
+.contato-info h3 { font-size: 1.4rem; margin-bottom: 0.5rem; font-weight: 700; }
+.contato-info p { font-size: 0.9rem; color: rgba(255, 255, 255, 0.65); margin-bottom: 1.5rem; }
+.social-links { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+.social-links a, .ad-social-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 1rem;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.social-links a:hover, .ad-social-icon:hover {
+  background: var(--accent);
+  color: #000;
+}
 
-/* ============================================================
-   12. MODAIS GERAIS
-   ============================================================ */
+.newsletter-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.newsletter-form input {
+  height: 46px;
+  padding: 0 1rem;
+  font-size: 0.9rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  outline: none;
+}
+.newsletter-form input::placeholder { color: rgba(255, 255, 255, 0.4); }
+.newsletter-form button {
+  height: 46px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.newsletter-form button:hover { background: #e5c14a; }
+
+/* ── 11. FOOTER ───────────────────────────────────────────────── */
+footer {
+  padding: 2rem 0;
+  text-align: center;
+  font-size: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+}
+footer .gold { color: var(--accent); }
+footer .footer-nav {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+footer .footer-nav a {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: color 0.2s;
+}
+footer .footer-nav a:hover { color: var(--accent); }
+footer .footer-nav span { color: var(--border); user-select: none; }
+
+/* ── 12. MODAIS ───────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -771,7 +928,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   transition: 0.3s;
 }
 .modal-overlay.open { opacity: 1; pointer-events: auto; }
-
 .modal {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -788,9 +944,8 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .modal-overlay.open .modal { transform: translateY(0); }
 .modal.modal-wide { width: min(600px, 100%); }
 .modal.modal-xl { width: min(1100px, 96%); }
-.modal h2 { font-family: var(--font-serif); font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; }
+.modal h2 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.3rem; }
 .modal .sub { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 1.5rem; }
-
 .modal-close {
   position: absolute;
   top: 1rem;
@@ -800,7 +955,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   color: var(--text-dim);
   font-size: 1.5rem;
   cursor: pointer;
-  transition: 0.2s;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -809,7 +963,6 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   justify-content: center;
 }
 .modal-close:hover { color: var(--accent); background: rgba(212, 175, 55, 0.1); }
-
 .modal-switch {
   text-align: center;
   margin-top: 1.2rem;
@@ -819,10 +972,7 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
 .modal-switch a { color: var(--accent); cursor: pointer; text-decoration: none; font-weight: 600; }
 .modal-switch a:hover { text-decoration: underline; }
 
-
-/* ============================================================
-   13. FORMULÁRIOS
-   ============================================================ */
+/* ── 13. FORMULÁRIOS ──────────────────────────────────────────── */
 .form-group { margin-bottom: 1rem; }
 .form-group label {
   display: block;
@@ -842,12 +992,10 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
-  font-family: var(--font-sans);
   font-size: 0.95rem;
   outline: none;
   transition: 0.2s;
 }
-.form-group textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
 .form-group input:focus,
 .form-group textarea:focus,
 .form-group select:focus {
@@ -855,151 +1003,19 @@ section { padding: 6rem 0; border-bottom: 1px solid var(--border); }
   box-shadow: 0 0 15px var(--accent-glow);
 }
 .form-error { color: var(--danger); font-size: 0.8rem; margin-top: 0.3rem; min-height: 1em; }
-.form-hint { font-size: 0.7rem; color: var(--text-dim); margin-top: 0.3rem; font-style: italic; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-.form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
 
-
-/* ============================================================
-   14. SOBRE / FILOSOFIA / CONTATO
-   ============================================================ */
-.sobre-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 4rem; align-items: center; }
-.sobre-img {
-  width: 100%;
-  aspect-ratio: 3/4;
-  background: linear-gradient(145deg, #1e1b22, #0f0e11);
-  border-radius: 12px;
-  position: relative;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-size: cover;
-  background-position: center top;
-}
-.sobre-img:not(.has-img)::before {
-  content: "JM";
-  font-family: var(--font-serif);
-  font-size: 6rem;
-  color: rgba(212, 175, 55, 0.15);
-  font-weight: 900;
-  letter-spacing: 0.1em;
-}
-.sobre-img::after {
-  content: "";
-  position: absolute;
-  inset: 20px;
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  border-radius: 8px;
-  pointer-events: none;
-}
-.sobre-text p { color: var(--text-dim); margin-bottom: 1.2rem; font-weight: 300; font-size: 1.05rem; }
-.sobre-text p strong { color: var(--accent); font-weight: 500; }
-.quote {
-  font-family: var(--font-serif);
-  font-style: italic;
-  font-size: 1.4rem;
-  color: var(--text);
-  margin-top: 2rem;
-  padding-left: 1.5rem;
-  border-left: 4px solid var(--accent);
-  line-height: 1.4;
-}
-.frases-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 1.5rem;
-}
-.frase-card {
-  background: var(--bg-elev);
-  border-left: 3px solid var(--accent);
-  padding: 2rem 1.8rem;
-  border-radius: 0 12px 12px 0;
-  transition: 0.3s;
-}
-.frase-card:hover { background: #1c1a21; transform: translateX(5px); }
-.frase-card p { font-family: var(--font-serif); font-style: italic; font-size: 1.1rem; line-height: 1.5; }
-.frase-card .author {
-  display: block;
-  margin-top: 1rem;
-  font-family: var(--font-sans);
-  font-style: normal;
-  font-size: 0.8rem;
-  color: var(--accent);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-.contato-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4rem; align-items: start; }
-.contato-info h3 { font-family: var(--font-serif); font-size: 2rem; margin-bottom: 1.5rem; }
-.contato-info p { color: var(--text-dim); margin-bottom: 2rem; font-weight: 300; }
-.newsletter-form { display: flex; flex-direction: column; gap: 1rem; }
-.newsletter-form input {
-  padding: 1rem 1.5rem;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 40px;
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 1rem;
-  outline: none;
-  transition: 0.3s;
-}
-.newsletter-form input:focus { border-color: var(--accent); box-shadow: 0 0 20px var(--accent-glow); }
-.newsletter-form button { align-self: flex-start; }
-
-
-/* ============================================================
-   15. FOOTER + LINKS LEGAIS
-   ============================================================ */
-footer {
-  padding: 3rem 0;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 0.85rem;
-  border-top: 1px solid var(--border);
-}
-footer .gold { color: var(--accent); }
-
-footer .footer-nav {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 0.75rem;
-  margin-top: 1rem;
-  flex-wrap: wrap;
-}
-footer .footer-nav a {
-  color: var(--text-dim);
-  text-decoration: none;
-  font-size: 0.8rem;
-  letter-spacing: 0.05em;
-  transition: color 0.2s;
-}
-footer .footer-nav a:hover { color: var(--accent); }
-footer .footer-nav span { color: var(--border); user-select: none; }
-
-
-/* ============================================================
-   16. PLAYER FIXO (OCULTO)
-   ============================================================ */
+/* ── 14. PLAYER FIXO (OCULTO) ─────────────────────────────────── */
 .player { display: none !important; }
 
-
-/* ============================================================
-   17. PLAYER EXPANDIDO — GRID 2 COLUNAS / MOBILE SPOTIFY
-   ============================================================ */
+/* ── 15. PLAYER EXPANDIDO ─────────────────────────────────────── */
 .player-modal-overlay {
   z-index: 700;
   padding: 1rem;
-  background:
-    linear-gradient(135deg, rgba(20, 18, 16, 0.92) 0%, rgba(11, 10, 12, 0.96) 100%);
+  background: linear-gradient(135deg, rgba(20, 18, 16, 0.92) 0%, rgba(11, 10, 12, 0.96) 100%);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
-
 .music-player {
   position: relative;
   width: 100%;
@@ -1009,13 +1025,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border: 1px solid rgba(212, 175, 55, 0.18);
   border-radius: 20px;
   box-shadow: 0 25px 70px rgba(0, 0, 0, 0.7);
-  font-family: 'Georgia', serif;
-  color: #d4af37;
+  color: var(--accent);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-
 .music-player::before {
   content: "";
   position: absolute;
@@ -1027,16 +1041,9 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   pointer-events: none;
   z-index: 0;
   border-radius: 20px;
-  transition: opacity 0.5s ease, background-image 0.5s ease;
 }
-
-.music-player:not([data-has-bg="1"])::before {
-  opacity: 0;
-}
-.music-player > * {
-  position: relative;
-  z-index: 1;
-}
+.music-player:not([data-has-bg="1"])::before { opacity: 0; }
+.music-player > * { position: relative; z-index: 1; }
 
 .player-close {
   position: absolute;
@@ -1052,7 +1059,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  color: #d4af37;
+  color: var(--accent);
   transition: all 0.2s;
 }
 .player-close:hover { background: rgba(212, 175, 55, 0.2); transform: scale(1.08); }
@@ -1065,7 +1072,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   min-height: 0;
   overflow: hidden;
 }
-
 .player-col {
   padding: 3rem 2rem 2rem;
   display: flex;
@@ -1073,29 +1079,14 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow-y: auto;
   border-right: 1px solid rgba(212, 175, 55, 0.15);
   min-height: 0;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
 }
-.player-col::-webkit-scrollbar { width: 6px; }
-.player-col::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
-  border-radius: 3px;
-}
-
-.player-watermark-area {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-}
+.player-watermark-area { display: flex; flex-direction: column; flex: 1; }
 
 .music-player .album-cover {
   width: 100%;
   max-width: 320px;
-  aspect-ratio: 1 / 1;
-  height: auto;
-  min-height: 0;
+  aspect-ratio: 1/1;
   margin: 0 auto 1.5rem;
-  padding: 0;
   border-radius: 12px;
   background: linear-gradient(145deg, #2a252e, #0d0b0e);
   display: flex;
@@ -1116,24 +1107,18 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center;
   display: block;
   border-radius: inherit;
 }
 .music-player .album-cover::before,
-.music-player .album-cover::after {
-  display: none !important;
-  content: none !important;
-}
+.music-player .album-cover::after { display: none; content: none; }
 
 .track-info { text-align: center; margin-bottom: 0.8rem; }
 .track-title {
-  font-family: 'Georgia', serif;
   font-size: 1.5rem;
   font-weight: 700;
   color: #f0d98f;
   margin-bottom: 0.3rem;
-  text-shadow: 0 2px 10px rgba(212, 175, 55, 0.25);
   word-break: break-word;
   line-height: 1.2;
 }
@@ -1142,7 +1127,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: rgba(212, 175, 55, 0.7);
   font-style: italic;
 }
-
 .preview-badge {
   display: none;
   text-align: center;
@@ -1150,7 +1134,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   letter-spacing: 0.12em;
   font-weight: 700;
   text-transform: uppercase;
-  color: #d4af37;
+  color: var(--accent);
   background: rgba(212, 175, 55, 0.1);
   border: 1px solid rgba(212, 175, 55, 0.35);
   border-radius: 999px;
@@ -1166,13 +1150,11 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: rgba(212, 175, 55, 0.18);
   border-radius: 2px;
   cursor: pointer;
-  position: relative;
   overflow: hidden;
 }
 .progress-container .progress {
   height: 100%;
   background: linear-gradient(90deg, #d4af37, #f0d98f);
-  border-radius: 2px;
   width: 0;
   transition: width 0.1s linear;
 }
@@ -1182,7 +1164,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-size: 0.75rem;
   color: rgba(212, 175, 55, 0.7);
   margin-top: 0.5rem;
-  font-variant-numeric: tabular-nums;
 }
 
 .controls {
@@ -1191,7 +1172,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   justify-content: center;
   gap: 1rem;
   margin-bottom: 1rem;
-  flex-wrap: nowrap;
 }
 .control-btn {
   width: 44px;
@@ -1200,13 +1180,12 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #d4af37;
+  color: var(--accent);
   opacity: 0.75;
   transition: all 0.25s;
   background: none;
   border: none;
   cursor: pointer;
-  flex-shrink: 0;
 }
 .control-btn:hover {
   color: #f0d98f;
@@ -1215,7 +1194,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   transform: scale(1.08);
 }
 .control-btn svg { width: 22px; height: 22px; fill: currentColor; }
-
 .control-btn.play-btn {
   width: 60px;
   height: 60px;
@@ -1227,69 +1205,18 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 .control-btn.play-btn:hover {
   background: linear-gradient(135deg, #f0d98f, #d4af37);
   transform: scale(1.06);
-  box-shadow: 0 10px 30px rgba(212, 175, 55, 0.55);
 }
-.control-btn.play-btn svg {
-  width: 26px;
-  height: 26px;
-  fill: #1a1a1a;
-}
-
-.control-btn-mute {
-  width: 40px;
-  height: 40px;
-  opacity: 0.6;
-}
+.control-btn.play-btn svg { width: 26px; height: 26px; fill: #1a1a1a; }
+.control-btn-mute { width: 40px; height: 40px; opacity: 0.6; }
 .control-btn-mute:hover { opacity: 1; }
 .control-btn-mute svg { width: 20px; height: 20px; fill: currentColor; }
-
-.control-btn-shuffle {
-  opacity: 0.45;
-  position: relative;
-}
+.control-btn-shuffle { opacity: 0.45; position: relative; }
 .control-btn-shuffle.active {
   opacity: 1;
   color: #f0d98f;
   background: rgba(212, 175, 55, 0.15);
 }
-.control-btn-shuffle.active::after {
-  content: "";
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #f0d98f;
-}
-.control-btn-shuffle[hidden] {
-  display: none !important;
-}
-
-.extra-controls {
-  display: none;
-}
-.extra-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #d4af37;
-  opacity: 0.6;
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition: all 0.25s;
-}
-.extra-btn:hover {
-  opacity: 1;
-  transform: translateY(-2px);
-  background: rgba(212, 175, 55, 0.08);
-}
-.extra-btn svg { width: 20px; height: 20px; fill: currentColor; }
+.control-btn-shuffle[hidden] { display: none; }
 
 .player-actions {
   display: flex;
@@ -1299,8 +1226,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-top: auto;
   padding-top: 1rem;
   border-top: 1px solid rgba(212, 175, 55, 0.15);
-  position: relative;
-  z-index: 5;
 }
 .player-actions:empty { display: none; }
 .player-actions .btn {
@@ -1308,24 +1233,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   min-width: 130px;
   padding: 0.7rem 1.1rem;
   font-size: 0.82rem;
-  position: relative;
-  z-index: 6;
-  pointer-events: auto;
-  cursor: pointer;
-}
-.player-actions .btn:disabled,
-.player-actions .btn.btn-disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-.expanded-access {
-  color: #d4af37;
-  font-size: 0.9rem;
-  font-style: italic;
-  width: 100%;
-  text-align: center;
-  padding: 0.5rem;
 }
 
 .player-queue {
@@ -1334,44 +1241,26 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-top: 1px solid rgba(212, 175, 55, 0.18);
 }
 .player-queue[hidden] { display: none; }
-
 .player-queue-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
   margin-bottom: 0.8rem;
-  padding: 0 0.4rem;
 }
 .player-queue-label {
-  font-family: 'Georgia', serif;
   font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: #d4af37;
+  color: var(--accent);
 }
-.player-queue-count {
-  font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.6);
-  font-variant-numeric: tabular-nums;
-}
-
+.player-queue-count { font-size: 0.72rem; color: rgba(212, 175, 55, 0.6); }
 .player-queue-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
   max-height: 280px;
   overflow-y: auto;
-  padding-right: 4px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
 }
-.player-queue-list::-webkit-scrollbar { width: 6px; }
-.player-queue-list::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
-  border-radius: 3px;
-}
-
 .queue-track {
   display: grid;
   grid-template-columns: 24px 40px 1fr auto;
@@ -1382,23 +1271,13 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background 0.18s;
   text-align: left;
   color: inherit;
-  font: inherit;
   width: 100%;
 }
 .queue-track:hover { background: rgba(212, 175, 55, 0.08); }
 .queue-track.playing { background: rgba(212, 175, 55, 0.14); }
-
-.queue-track-index {
-  font-size: 0.8rem;
-  color: rgba(212, 175, 55, 0.5);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.queue-track.playing .queue-track-index { color: #f0d98f; font-weight: 700; }
-
+.queue-track-index { font-size: 0.8rem; color: rgba(212, 175, 55, 0.5); text-align: center; }
 .queue-track-cover {
   width: 40px;
   height: 40px;
@@ -1409,36 +1288,17 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: 'Georgia', serif;
-  font-size: 0.8rem;
   color: rgba(212, 175, 55, 0.45);
   font-weight: 700;
-  flex-shrink: 0;
 }
-
-.queue-track-info { min-width: 0; }
 .queue-track-title {
   font-size: 0.9rem;
   color: #eee9e0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 2px;
-  display: block;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
 }
-.queue-track.playing .queue-track-title { font-weight: 700; color: #f0d98f; }
-.queue-track-duration {
-  font-size: 0.72rem;
-  color: rgba(212, 175, 55, 0.55);
-  display: block;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
-}
-.queue-track-lock {
-  font-size: 0.85rem;
-  color: rgba(212, 175, 55, 0.5);
-}
-.queue-track.playing .queue-track-lock { color: #d4af37; }
+.queue-track-duration { font-size: 0.72rem; color: rgba(212, 175, 55, 0.55); }
 
 .lyrics-col {
   display: flex;
@@ -1454,31 +1314,19 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-bottom: 1px solid rgba(212, 175, 55, 0.18);
 }
 .lyrics-header h3 {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
   font-size: 0.85rem;
   font-weight: 600;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #d4af37;
+  color: var(--accent);
 }
 .lyrics-scroll {
   flex: 1;
   overflow-y: auto;
-  padding-right: 8px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(212, 175, 55, 0.3) transparent;
   text-align: center;
-  font-family: 'Georgia', serif;
   font-size: 1.15rem;
   line-height: 1.9;
   color: rgba(240, 217, 143, 0.72);
-  scroll-behavior: smooth;
-}
-.lyrics-scroll::-webkit-scrollbar { width: 6px; }
-.lyrics-scroll::-webkit-scrollbar-thumb {
-  background: rgba(212, 175, 55, 0.3);
-  border-radius: 3px;
 }
 .lyrics-scroll .lyric-line {
   display: block;
@@ -1491,33 +1339,18 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 0.35rem 0.5rem;
   cursor: pointer;
   border-radius: 6px;
-  transition: color 0.25s, background 0.25s, transform 0.25s, opacity 0.25s;
   opacity: 0.55;
 }
-.lyrics-scroll .lyric-line:hover {
-  background: rgba(212, 175, 55, 0.08);
-  color: #f0d98f;
-  opacity: 1;
-}
+.lyrics-scroll .lyric-line:hover { background: rgba(212, 175, 55, 0.08); color: #f0d98f; opacity: 1; }
 .lyrics-scroll .lyric-line.active {
   color: #f0d98f;
   font-weight: 700;
   opacity: 1;
-  text-shadow: 0 0 14px rgba(212, 175, 55, 0.5);
-  transform: scale(1.03);
 }
-.lyrics-scroll .lyrics-empty {
-  color: rgba(212, 175, 55, 0.5);
-  font-style: italic;
-  padding: 2rem 0;
-}
-
+.lyrics-scroll .lyrics-empty { color: rgba(212, 175, 55, 0.5); font-style: italic; padding: 2rem 0; }
 .mobile-tabs { display: none; }
 
-
-/* ============================================================
-   18. TOAST GLOBAL
-   ============================================================ */
+/* ── 16. TOAST ────────────────────────────────────────────────── */
 .toast {
   position: fixed;
   bottom: 1rem;
@@ -1534,249 +1367,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   pointer-events: none;
   transition: 0.3s;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  max-width: 90vw;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-.toast .icon { color: var(--accent); font-size: 1.1rem; }
 
-
-/* ============================================================
-   19. CARRINHO (MODAL + NAV)
-   ============================================================ */
-.cart-item {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0.9rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.cart-item:last-child { border-bottom: none; }
-.cart-item-cover {
-  width: 50px;
-  height: 50px;
-  border-radius: 6px;
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
-  background-size: cover;
-  background-position: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-serif);
-  font-size: 1rem;
-  color: rgba(212, 175, 55, 0.4);
-  font-weight: 900;
-  flex-shrink: 0;
-}
-.cart-item-info { flex: 1; min-width: 0; }
-.cart-item-title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.cart-item-album {
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.cart-item-price {
-  font-family: var(--font-serif);
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: var(--accent);
-  white-space: nowrap;
-}
-.cart-item-remove {
-  background: none;
-  border: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  font-size: 1rem;
-  padding: 0.3rem;
-  border-radius: 50%;
-  transition: 0.2s;
-}
-.cart-item-remove:hover { color: var(--danger); background: rgba(248, 113, 113, 0.1); }
-
-.cart-totals {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 2px solid var(--border);
-}
-.cart-total-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.4rem 0;
-  font-size: 0.9rem;
-  color: var(--text-dim);
-}
-.cart-total-row strong { color: var(--text); font-weight: 600; }
-.cart-total-final {
-  margin-top: 0.5rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--border);
-  font-size: 1.1rem !important;
-}
-.cart-total-final strong {
-  font-family: var(--font-serif);
-  font-size: 1.5rem;
-  color: var(--accent);
-  font-weight: 900;
-}
-.cart-empty { text-align: center; padding: 2rem 1rem; color: var(--text-dim); }
-
-
-/* ============================================================
-   20. CHECKOUT
-   ============================================================ */
-.checkout-summary {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem 1.2rem;
-  margin-bottom: 1.2rem;
-  max-height: 200px;
-  overflow-y: auto;
-}
-.checkout-summary-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 0.4rem 0;
-  font-size: 0.85rem;
-}
-.checkout-summary-item span { color: var(--text-dim); }
-.checkout-summary-item strong { color: var(--text); }
-.checkout-summary-total {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 0.8rem;
-  margin-top: 0.5rem;
-  border-top: 1px solid var(--border);
-  font-family: var(--font-serif);
-  font-size: 1.3rem;
-  font-weight: 900;
-  color: var(--accent);
-}
-
-
-/* ============================================================
-   21. MINHAS COMPRAS
-   ============================================================ */
-.purchase-item {
-  display: flex;
-  align-items: center;
-  gap: 0.9rem;
-  padding: 0.9rem 0;
-  border-bottom: 1px solid var(--border);
-}
-.purchase-item:last-child { border-bottom: none; }
-.purchase-info { flex: 1; min-width: 0; }
-.purchase-title { font-size: 0.95rem; font-weight: 600; }
-.purchase-date { font-size: 0.7rem; color: var(--text-dim); }
-.purchase-actions { display: flex; gap: 0.4rem; }
-
-
-/* ============================================================
-   22. REDES SOCIAIS (ÍCONES)
-   ============================================================ */
-.social-links { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
-
-.ad-social-icon {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 43px;
-  height: 43px;
-  border-radius: 50%;
-  background: var(--card);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  text-decoration: none;
-  font-size: 1.2rem;
-  transition: transform 0.25s ease, color 0.25s ease, background 0.25s ease,
-              border-color 0.25s ease, box-shadow 0.25s ease;
-}
-.ad-social-icon i,
-.ad-social-icon svg { transition: transform 0.25s ease; line-height: 1; }
-.ad-social-icon:hover { transform: translateY(-4px); color: #ffffff; border-color: transparent; }
-.ad-social-icon:hover i,
-.ad-social-icon:hover svg { transform: scale(1.15); }
-.ad-social-icon::before {
-  content: attr(data-label);
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
-  background: var(--bg-elev);
-  color: var(--text);
-  font-family: var(--font-sans);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  padding: 0.4rem 0.75rem;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-.ad-social-icon::after {
-  content: "";
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%) translateY(6px);
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid var(--border);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 10;
-}
-.ad-social-icon:hover::before,
-.ad-social-icon:hover::after {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-}
-
-.ad-social-icon.spotify:hover  { background: #1DB954; box-shadow: 0 6px 20px rgba(29, 185, 84, 0.5); }
-.ad-social-icon.youtube:hover  { background: #FF0000; box-shadow: 0 6px 20px rgba(255, 0, 0, 0.5); }
-.ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 6px 20px rgba(255, 153, 0, 0.5); }
-.ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 6px 20px rgba(24, 119, 242, 0.5); }
-.ad-social-icon.tiktok:hover   { background: #010101; border-color: #00f2ea; box-shadow: 0 6px 20px rgba(0, 242, 234, 0.4); }
-.ad-social-icon.apple:hover    { background: linear-gradient(135deg, #FA243C 0%, #FF5E7D 100%); box-shadow: 0 6px 20px rgba(250, 36, 60, 0.5); }
-.ad-social-icon.audiomack:hover{ background: #FFA200; box-shadow: 0 6px 20px rgba(255, 162, 0, 0.5); }
-.ad-social-icon.itunes:hover   { background: linear-gradient(135deg, #FC3C44 0%, #FF6B7A 100%); box-shadow: 0 6px 20px rgba(252, 60, 68, 0.5); }
-.ad-social-icon svg { width: 1em; height: 1em; fill: currentColor; display: block; }
-.ad-social-icon i[class*="fa-"] {
-  font-size: 1.15em;
-  line-height: 1;
-  width: 1.15em;
-  height: 1.15em;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  vertical-align: middle;
-}
-.ad-social-icon i,
-.ad-social-icon svg { color: inherit; }
-
-/* ============================================================
-   23. MODAL DE PLANOS
-   ============================================================ */
+/* ── 17. MODAL DE PLANOS ──────────────────────────────────────── */
 .plans-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1795,67 +1389,21 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .plan-card:hover { transform: translateY(-5px); border-color: rgba(212, 175, 55, 0.4); }
 .plan-card.featured { border-color: var(--accent); box-shadow: 0 0 40px var(--accent-glow); }
-.plan-badge {
-  position: absolute;
-  top: -12px;
-  right: 1.5rem;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 0.65rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  font-weight: 700;
-  padding: 0.3rem 0.8rem;
-  border-radius: 20px;
-}
-.plan-name { font-family: var(--font-serif); font-size: 1.5rem; font-weight: 700; margin-bottom: 0.3rem; }
+.plan-name { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.3rem; }
 .plan-price {
-  font-family: var(--font-serif);
   font-size: 2.5rem;
   font-weight: 900;
   color: var(--accent);
   margin: 0.8rem 0 0.3rem;
   line-height: 1;
 }
-.plan-price small {
-  font-size: 0.9rem;
-  color: var(--text-dim);
-  font-weight: 400;
-  font-family: var(--font-sans);
-}
+.plan-price small { font-size: 0.9rem; color: var(--text-dim); font-weight: 400; }
 .plan-desc { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 1.5rem; }
-.plan-features {
-  list-style: none;
-  margin-bottom: 1.8rem;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-}
-.plan-features li {
-  font-size: 0.9rem;
-  color: var(--text-dim);
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-}
-.plan-features li::before { content: "✓"; color: var(--accent); font-weight: 700; flex-shrink: 0; }
-.plan-features li.no { opacity: 0.5; }
-.plan-features li.no::before { content: "✕"; color: var(--text-dim); }
+.plan-features { list-style: none; margin-bottom: 1.8rem; flex: 1; display: flex; flex-direction: column; gap: 0.7rem; }
+.plan-features li { font-size: 0.9rem; color: var(--text-dim); display: flex; gap: 0.6rem; }
+.plan-features li::before { content: "✓"; color: var(--accent); font-weight: 700; }
 
-.modal.modal-xl { width: min(1100px, 96%); padding: 2.5rem 2rem; }
-.modal.modal-xl h2 { font-size: 2.2rem; text-align: center; margin-bottom: 0.3rem; }
-.modal.modal-xl .sub { text-align: center; margin-bottom: 2rem; }
-.modal.modal-xl .plans-grid {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 1.5rem;
-  margin-top: 0;
-}
-
-
-/* ============================================================
-   24. MODAL DE ALUGUEL
-   ============================================================ */
+/* ── 18. MODAL DE ALUGUEL ─────────────────────────────────────── */
 #rentModal .rent-track-info {
   display: flex;
   align-items: center;
@@ -1876,39 +1424,13 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: var(--font-serif);
-  font-size: 1rem;
   color: rgba(212, 175, 55, 0.4);
   font-weight: 900;
   flex-shrink: 0;
-  overflow: hidden;
 }
-#rentModal .rent-track-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: inherit;
-}
-#rentModal .rent-track-meta { min-width: 0; }
-#rentModal .rent-track-title {
-  font-size: 0.98rem;
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#rentModal .rent-track-album {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  margin-top: 2px;
-}
-#rentModal .rent-options {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-}
+#rentModal .rent-track-title { font-size: 0.98rem; font-weight: 600; }
+#rentModal .rent-track-album { font-size: 0.75rem; color: var(--text-dim); }
+#rentModal .rent-options { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
 #rentModal .rent-option {
   display: grid;
   grid-template-columns: 20px 1fr auto;
@@ -1919,61 +1441,15 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-radius: 12px;
   background: var(--card);
   cursor: pointer;
-  transition: all 0.18s;
-  position: relative;
-}
-#rentModal .rent-option:hover {
-  border-color: rgba(212, 175, 55, 0.4);
-  background: rgba(212, 175, 55, 0.04);
 }
 #rentModal .rent-option.selected {
   border-color: var(--accent);
   background: rgba(212, 175, 55, 0.08);
-  box-shadow: 0 0 0 1px var(--accent) inset;
 }
-#rentModal .rent-option input[type="radio"] {
-  accent-color: var(--accent);
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-}
-#rentModal .rent-option-label {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text);
-}
-#rentModal .rent-option-sub {
-  display: block;
-  font-size: 0.72rem;
-  color: var(--text-dim);
-  margin-top: 2px;
-  font-weight: 400;
-}
-#rentModal .rent-option-price {
-  font-family: var(--font-serif);
-  font-size: 1.15rem;
-  font-weight: 900;
-  color: var(--accent);
-  white-space: nowrap;
-}
-#rentModal .rent-option .popular-tag {
-  position: absolute;
-  top: -8px;
-  right: 12px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-  padding: 0.2rem 0.6rem;
-  border-radius: 20px;
-}
+#rentModal .rent-option-label { font-size: 0.95rem; font-weight: 600; }
+#rentModal .rent-option-price { font-size: 1.15rem; font-weight: 900; color: var(--accent); }
 
-
-/* ============================================================
-   25. ADMIN — BASE
-   ============================================================ */
+/* ── 19. ADMIN ────────────────────────────────────────────────── */
 .admin-layout { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
 .admin-sidebar {
   background: var(--bg-elev);
@@ -1989,13 +1465,12 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border-bottom: 1px solid var(--border);
   margin-bottom: 1rem;
 }
-.admin-sidebar .brand h2 { font-family: var(--font-serif); font-size: 1.3rem; font-weight: 700; }
+.admin-sidebar .brand h2 { font-size: 1.3rem; font-weight: 700; }
 .admin-sidebar .brand p {
   color: var(--accent);
   font-size: 0.7rem;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  font-weight: 600;
   margin-top: 0.2rem;
 }
 .admin-nav { display: flex; flex-direction: column; }
@@ -2006,10 +1481,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: var(--text-dim);
   padding: 0.85rem 1.5rem;
   font-size: 0.85rem;
-  font-family: var(--font-sans);
-  font-weight: 500;
   cursor: pointer;
-  transition: 0.2s;
   display: flex;
   align-items: center;
   gap: 0.7rem;
@@ -2021,8 +1493,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   color: var(--accent);
   border-left-color: var(--accent);
 }
-.admin-nav button .ico { font-size: 1rem; width: 18px; text-align: center; }
-
 .admin-main { padding: 2rem; max-width: 1100px; }
 .admin-topbar {
   display: flex;
@@ -2034,11 +1504,10 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   flex-wrap: wrap;
   gap: 1rem;
 }
-.admin-topbar h1 { font-family: var(--font-serif); font-size: 1.8rem; font-weight: 700; }
+.admin-topbar h1 { font-size: 1.8rem; font-weight: 700; }
 .admin-topbar .actions { display: flex; gap: 0.7rem; flex-wrap: wrap; }
 .admin-section { display: none; }
 .admin-section.active { display: block; }
-
 .admin-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -2047,7 +1516,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   margin-bottom: 1.5rem;
 }
 .admin-card h3 {
-  font-family: var(--font-serif);
   font-size: 1.2rem;
   font-weight: 700;
   margin-bottom: 1rem;
@@ -2058,14 +1526,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   align-items: center;
   gap: 1rem;
 }
-.admin-card h3 .hint {
-  font-family: var(--font-sans);
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  font-weight: 400;
-  letter-spacing: 0.05em;
-}
-
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2077,9 +1537,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 1.3rem;
-  transition: 0.2s;
 }
-.stat-card:hover { border-color: rgba(212, 175, 55, 0.4); }
 .stat-card .label {
   font-size: 0.7rem;
   letter-spacing: 0.1em;
@@ -2088,23 +1546,18 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 600;
 }
 .stat-card .value {
-  font-family: var(--font-serif);
   font-size: 2rem;
   font-weight: 900;
   color: var(--accent);
   margin-top: 0.4rem;
   line-height: 1;
 }
-.stat-card .hint { font-size: 0.75rem; color: var(--text-dim); margin-top: 0.4rem; }
-
 .admin-table { width: 100%; border-collapse: collapse; }
-.admin-table th,
-.admin-table td {
+.admin-table th, .admin-table td {
   text-align: left;
   padding: 0.75rem 0.5rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
-  vertical-align: middle;
 }
 .admin-table th {
   color: var(--text-dim);
@@ -2114,7 +1567,6 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   font-weight: 600;
 }
 .admin-table tr:hover td { background: rgba(212, 175, 55, 0.03); }
-
 .admin-img-preview {
   width: 100%;
   max-width: 260px;
@@ -2137,48 +1589,35 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   padding: 1.2rem;
   text-align: center;
   cursor: pointer;
-  transition: 0.2s;
   font-size: 0.85rem;
   color: var(--text-dim);
 }
 .upload-zone:hover { border-color: var(--accent); color: var(--accent); }
-.track-editor {
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
-  margin-bottom: 0.8rem;
-}
-.track-editor .track-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.8rem;
-  gap: 0.5rem;
-}
-.track-editor .track-head strong { font-size: 0.9rem; color: var(--accent); }
 
-.audio-chip {
-  display: inline-flex;
+.admin-login-wrap {
+  min-height: 100vh;
+  display: flex;
   align-items: center;
-  gap: 0.4rem;
+  justify-content: center;
+  padding: 2rem;
+  background: radial-gradient(circle at 50% 30%, rgba(212, 175, 55, 0.1), transparent 60%);
+}
+.admin-login-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2.5rem 2rem;
+  width: min(400px, 100%);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7);
+}
+.admin-login-card .brand { text-align: center; margin-bottom: 2rem; }
+.admin-login-card .brand h1 { font-size: 1.6rem; font-weight: 700; }
+.admin-login-card .brand p {
+  color: var(--accent);
   font-size: 0.7rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 20px;
-  background: rgba(74, 222, 128, 0.12);
-  color: var(--success);
-  border: 1px solid rgba(74, 222, 128, 0.35);
-  font-weight: 600;
-}
-.audio-chip.remote {
-  background: rgba(96, 165, 250, 0.12);
-  color: var(--info);
-  border-color: rgba(96, 165, 250, 0.35);
-}
-.audio-chip.none {
-  background: rgba(248, 113, 113, 0.10);
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.3);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-top: 0.3rem;
 }
 
 .admin-modal-overlay {
@@ -2207,422 +1646,27 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow-y: auto;
   position: relative;
 }
-.admin-modal h3 { font-family: var(--font-serif); font-size: 1.4rem; margin-bottom: 1rem; }
+.admin-modal h3 { font-size: 1.4rem; margin-bottom: 1rem; }
 
-.admin-login-wrap {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  background: radial-gradient(circle at 50% 30%, rgba(212, 175, 55, 0.1), transparent 60%);
+/* ── 20. RESPONSIVO ───────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .amz-search-wrap { width: 180px; }
+  .amz-nav { gap: 1rem; }
 }
-.admin-login-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 2.5rem 2rem;
-  width: min(400px, 100%);
-  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7);
-}
-.admin-login-card .brand { text-align: center; margin-bottom: 2rem; }
-.admin-login-card .brand h1 { font-family: var(--font-serif); font-size: 1.6rem; font-weight: 700; }
-.admin-login-card .brand p {
-  color: var(--accent);
-  font-size: 0.7rem;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  font-weight: 600;
-  margin-top: 0.3rem;
-}
-.security-banner {
-  background: rgba(212, 175, 55, 0.1);
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  color: var(--text-dim);
-  padding: 0.8rem 1rem;
-  border-radius: 8px;
-  font-size: 0.75rem;
-  margin-bottom: 1.2rem;
-  line-height: 1.5;
-}
-.security-banner strong { color: var(--accent); }
-
-
-/* ============================================================
-   26. ADMIN — BOTÃO SALVAR (DIRTY)
-   ============================================================ */
-#adminSaveBtn.is-dirty {
-  background: linear-gradient(135deg, var(--accent), #f0c95c);
-  color: var(--bg);
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow), 0 6px 20px rgba(212, 175, 55, 0.25);
-  animation: savePulse 2s ease-in-out infinite;
-}
-@keyframes savePulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--accent-glow), 0 6px 20px rgba(212, 175, 55, 0.25); }
-  50%      { box-shadow: 0 0 0 4px var(--accent-glow), 0 6px 24px rgba(212, 175, 55, 0.4); }
-}
-@media (prefers-reduced-motion: reduce) {
-  #adminSaveBtn.is-dirty { animation: none; }
-}
-
-
-/* ============================================================
-   27. ADMIN — ESTADOS
-   ============================================================ */
-.admin-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 2.5rem 1rem;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  font-style: italic;
-}
-.admin-loading::before {
-  content: "";
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: adminSpin 0.8s linear infinite;
-}
-@keyframes adminSpin { to { transform: rotate(360deg); } }
-
-.admin-error-box {
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.3);
-  border-radius: 10px;
-  padding: 1.25rem 1.5rem;
-  text-align: center;
-  margin: 1rem 0;
-}
-.admin-error-box p { color: #f0a5a5; font-size: 0.9rem; margin-bottom: 0.9rem; }
-
-.admin-empty {
-  padding: 2.5rem 1rem;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  font-style: italic;
-}
-
-.admin-truncation-warning {
-  background: rgba(240, 161, 0, 0.08);
-  border: 1px solid rgba(240, 161, 0, 0.3);
-  border-radius: 8px;
-  padding: 0.65rem 1rem;
-  color: #f0b95c;
-  font-size: 0.8rem;
-  margin-bottom: 1rem;
-}
-
-
-/* ============================================================
-   28. ADMIN — BADGES
-   ============================================================ */
-.badge-mini {
-  display: inline-block;
-  font-size: 0.65rem;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  padding: 0.2rem 0.6rem;
-  border-radius: 20px;
-  font-weight: 700;
-}
-.badge-free { background: rgba(176, 169, 160, 0.15); color: var(--text-dim); }
-.badge-premium { background: var(--accent); color: var(--bg); }
-.badge-banned { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
-.badge-mini.badge-anual {
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  color: var(--bg);
-}
-.badge-mini.badge-pending { background: rgba(96, 165, 250, 0.15); color: var(--info); }
-.badge-mini.badge-canceled,
-.badge-mini.badge-cancelled { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
-.badge-mini.badge-paused { background: rgba(176, 169, 160, 0.15); color: var(--text-dim); }
-
-
-/* ============================================================
-   29. ADMIN — BACKUP GRID
-   ============================================================ */
-.backup-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.9rem;
-  margin: 1rem 0 1.5rem;
-}
-.backup-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
-  transition: 0.2s;
-}
-.backup-card:hover { border-color: rgba(212, 175, 55, 0.4); }
-.backup-card .label {
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-}
-.backup-card .value {
-  font-family: var(--font-serif);
-  font-size: 1.4rem;
-  font-weight: 900;
-  color: var(--accent);
-  margin-top: 0.35rem;
-  line-height: 1.1;
-  word-break: break-word;
-}
-
-
-/* ============================================================
-   30. ADMIN — MODAL DE PLANO
-   ============================================================ */
-.plan-change-header {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.9rem 1.1rem;
-  margin-bottom: 1.2rem;
-}
-.plan-change-header strong { display: block; color: var(--text); font-size: 0.95rem; margin-bottom: 0.2rem; }
-.plan-change-header span { color: var(--text-dim); font-size: 0.85rem; }
-.plan-change-hint {
-  color: var(--text-dim);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  padding: 0.7rem 0.9rem;
-  background: rgba(212, 175, 55, 0.05);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 6px 6px 0;
-  margin-top: 0.9rem;
-}
-.plan-change-hint code {
-  background: rgba(0, 0, 0, 0.3);
-  padding: 0.05rem 0.35rem;
-  border-radius: 3px;
-  font-size: 0.75rem;
-  color: var(--accent);
-}
-
-
-/* ============================================================
-   31. ADMIN — TABELAS
-   ============================================================ */
-.admin-table .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
-.admin-table td .badge-mini { vertical-align: middle; }
-.admin-table td:last-child { text-align: right; white-space: nowrap; }
-.admin-table tr.is-loading td { opacity: 0.5; pointer-events: none; }
-
-.sales-group-title {
-  font-family: var(--font-serif);
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--accent);
-  margin: 1.5rem 0 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-.sales-group-title:first-child { margin-top: 0; }
-
-
-/* ============================================================
-   32. ADMIN — UPLOAD NO MODAL
-   ============================================================ */
-.admin-modal .upload-zone { padding: 0.9rem; font-size: 0.8rem; margin-top: 0.5rem; }
-.admin-modal .upload-zone:hover { background: rgba(212, 175, 55, 0.05); }
-.admin-modal .admin-img-preview { max-width: 100%; height: 180px; margin-top: 0.75rem; }
-.audio-chip-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: 0.4rem;
-}
-.audio-remove-btn {
-  background: transparent;
-  color: var(--danger);
-  border: 1px solid rgba(248, 113, 113, 0.35);
-  padding: 0.35rem 0.75rem;
-  font-size: 0.7rem;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: 0.2s;
-}
-.audio-remove-btn:hover { background: rgba(248, 113, 113, 0.1); }
-
-
-/* ============================================================
-   33. ADMIN — EDITORES DE LISTA
-   ============================================================ */
-.playlist-track-row .btn-ghost {
-  padding: 0.25rem 0.45rem;
-  font-size: 0.75rem;
-  line-height: 1;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-}
-.playlist-track-row .btn-ghost:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: rgba(212, 175, 55, 0.06);
-}
-.playlist-track-row span:last-child { display: flex; gap: 0.3rem; flex-shrink: 0; }
-.track-editor:focus-within {
-  border-color: rgba(212, 175, 55, 0.35);
-  background: rgba(212, 175, 55, 0.02);
-}
-
-
-/* ============================================================
-   34. ADMIN — REDES SOCIAIS (EDITOR)
-   ============================================================ */
-#socialEditor { display: flex; flex-direction: column; gap: 0.75rem; }
-#socialEditor .track-editor { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
-#socialEditor .form-row { grid-template-columns: 1fr 1fr; gap: 1rem; }
-
-.social-editor-item {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-  align-items: start;
-}
-@media (max-width: 600px) {
-  .social-editor-item { grid-template-columns: 1fr; }
-}
-
-
-/* ============================================================
-   35. ADMIN — TOAST
-   ============================================================ */
-.admin-toast {
-  position: fixed;
-  right: 1rem;
-  bottom: 1rem;
-  z-index: 9999;
-  max-width: min(360px, calc(100vw - 2rem));
-  padding: 0.85rem 1.15rem;
-  background: var(--bg-elev);
-  border: 1px solid var(--accent);
-  color: var(--text);
-  border-radius: 10px;
-  font-size: 0.88rem;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  animation: adminToastIn 0.25s ease;
-}
-@keyframes adminToastIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.admin-toast.is-error { border-color: rgba(248, 113, 113, 0.5); }
-.admin-toast.is-success { border-color: rgba(74, 222, 128, 0.5); }
-.admin-toast.is-warning { border-color: rgba(240, 161, 0, 0.5); }
-
-
-/* ============================================================
-   36. ADMIN — MODAL (LARGURAS)
-   ============================================================ */
-.admin-modal.modal-wide { width: min(720px, 100%); }
-.admin-modal.modal-xl { width: min(1100px, 96%); }
-.admin-modal .form-row-3 {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 1rem;
-}
-@media (max-width: 600px) {
-  .admin-modal .form-row,
-  .admin-modal .form-row-3 { grid-template-columns: 1fr; }
-}
-
-
-/* ============================================================
-   37. ADMIN — EDITOR DE PLANOS
-   ============================================================ */
-#pmFeatures { display: flex; flex-direction: column; gap: 0.6rem; }
-#pmFeatures .track-editor { padding: 0.75rem 1rem; }
-#pmFeatures .track-head strong { font-size: 0.8rem; color: var(--text-dim); font-weight: 500; }
-
-
-/* ============================================================
-   38. ADMIN — ACESSIBILIDADE
-   ============================================================ */
-form[aria-busy="true"] { opacity: 0.75; pointer-events: none; }
-form[aria-busy="true"] button[type="submit"] { cursor: wait; }
-.admin-table .btn:focus-visible,
-.admin-nav button:focus-visible,
-.admin-modal .btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 6px;
-}
-
-
-/* ============================================================
-   39. Z-INDEX DOS MODAIS PÚBLICOS
-   ============================================================ */
-#plansModal,
-#rentModal,
-#loginModal,
-#signupModal,
-#accountModal {
-  z-index: 800;
-}
-#expandedPlayerModal.open ~ #plansModal.open,
-#expandedPlayerModal.open ~ #rentModal.open,
-#expandedPlayerModal.open ~ #loginModal.open,
-#expandedPlayerModal.open ~ #signupModal.open,
-#expandedPlayerModal.open ~ #accountModal.open {
-  z-index: 900;
-}
-.player-actions {
-  position: relative;
-  z-index: 5;
-}
-.player-actions .btn {
-  position: relative;
-  z-index: 6;
-  pointer-events: auto;
-  cursor: pointer;
-}
-.player-actions .btn:disabled {
-  pointer-events: none;
-  cursor: not-allowed;
-}
-
-
-/* ============================================================
-   40. RESPONSIVO — SITE PÚBLICO
-   ============================================================ */
 @media (max-width: 900px) {
-  .hero .container { grid-template-columns: 1fr; text-align: center; }
-  .hero-sub { margin: 0 auto; }
-  .hero-cta { justify-content: center; }
-  .hero-visual { order: -1; }
-  .vinyl-container { max-width: 280px; }
+  .amz-nav { display: none; }
+  .amz-search-wrap { width: 160px; }
+  .artist-spotify { padding-top: 1.75rem; }
+  .amz-main { padding: 0 1.25rem 3rem; }
+  .amz-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1rem; }
+  .artist-spotify-name { font-size: 2.25rem; }
   .sobre-grid { grid-template-columns: 1fr; gap: 2rem; }
   .contato-grid { grid-template-columns: 1fr; gap: 3rem; }
-  nav { gap: 1rem; }
-  nav a { font-size: 0.7rem; }
-  .form-row,
-  .form-row-3 { grid-template-columns: 1fr; }
   .filter-bar { flex-direction: column; align-items: stretch; }
-  .filter-bar .shop-search-wrap { flex: 1 1 auto; max-width: 100%; }
-}
+  .shop-search-wrap { flex: 1 1 auto; max-width: 100%; }
 
-@media (max-width: 768px) {
   .player-modal-overlay {
     padding: 0;
-    align-items: stretch;
-    justify-content: stretch;
     background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
   }
   .music-player {
@@ -2632,32 +1676,18 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-radius: 0;
     background: linear-gradient(180deg, #2d2420 0%, #1a1a1a 40%, #0b0a0c 100%);
     border: none;
-    box-shadow: none;
   }
-  .music-player::before { border-radius: 0; }
   .player-grid {
     grid-template-columns: 1fr;
     overflow-y: auto;
     padding-top: 16px;
   }
-  .player-col {
-    padding: 16px 20px 24px;
-    border-right: none;
-    border-bottom: none;
-    overflow-y: visible;
-  }
+  .player-col { padding: 16px 20px 24px; border-right: none; }
   .music-player .album-cover {
-    width: min(70vw, 280px) !important;
-    max-width: min(70vw, 280px) !important;
-    max-height: none !important;
-    aspect-ratio: 1 / 1 !important;
-    margin: 0 auto 20px !important;
-    border-radius: 12px !important;
+    width: min(70vw, 280px);
+    max-width: min(70vw, 280px);
+    margin: 0 auto 20px;
   }
-  .music-player .track-title { font-size: 1.5rem; }
-  .music-player .controls { padding: 0; gap: 8px; }
-  .music-player .play-btn { width: 64px; height: 64px; }
-  .music-player .play-btn svg { width: 28px; height: 28px; }
   .lyrics-col {
     position: absolute;
     inset: 0;
@@ -2665,31 +1695,16 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     background: linear-gradient(180deg, #2d2420 0%, #0b0a0c 60%);
     z-index: 20;
     display: none;
-    flex-direction: column;
-    border: none;
   }
   .music-player.mobile-lyrics .lyrics-col { display: flex; }
   .music-player.mobile-lyrics .player-col { display: none; }
-  .lyrics-scroll {
-    font-size: 1.3rem;
-    line-height: 2;
-    text-align: left;
-    padding-right: 4px;
-  }
-  .lyrics-scroll .lyric-line { text-align: left; opacity: 0.45; }
-  .lyrics-scroll .lyric-line.active { font-size: 1.45rem; opacity: 1; }
   .mobile-tabs {
     display: flex;
     justify-content: center;
     gap: 8px;
     padding: 12px 20px;
-    padding-top: calc(12px + env(safe-area-inset-top, 0px));
     background: rgba(0, 0, 0, 0.4);
     border-bottom: 1px solid rgba(212, 175, 55, 0.15);
-    position: sticky;
-    top: 0;
-    z-index: 25;
-    flex-shrink: 0;
   }
   .mobile-tab {
     flex: 1;
@@ -2698,69 +1713,18 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     background: transparent;
     border: none;
     color: rgba(212, 175, 55, 0.6);
-    font-family: 'Georgia', serif;
     font-size: 0.95rem;
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     cursor: pointer;
     border-bottom: 2px solid transparent;
-    transition: all 0.2s;
   }
   .mobile-tab.active {
-    color: #d4af37;
-    border-bottom-color: #d4af37;
+    color: var(--accent);
+    border-bottom-color: var(--accent);
   }
-  .player-queue-list { max-height: 220px; }
-  .queue-track {
-    grid-template-columns: 20px 36px 1fr auto;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-  .queue-track-cover { width: 36px; height: 36px; }
-  .player-actions .btn {
-    min-width: 110px;
-    font-size: 0.78rem;
-    padding: 0.6rem 0.9rem;
-  }
-  .discography-track-card {
-    grid-template-columns: 30px 44px minmax(0, 1fr) auto;
-    gap: 10px;
-    padding: 8px 10px;
-  }
-  .discography-track-card .track-cover { width: 44px; height: 44px; }
-  .discography-track-card .track-title { font-size: 0.88rem; }
-  .discography-track-card .track-duration { font-size: 0.72rem; }
-  .discography-track-card .track-state { display: none; }
-}
 
-@media (max-width: 600px) {
-  .header-inner { flex-wrap: wrap; }
-  .logo { font-size: 1.4rem; }
-  nav { order: 3; width: 100%; justify-content: center; }
-  .hero { padding-top: 9rem; }
-  .hero-content h1 { font-size: 2.3rem; }
-  .section-title { font-size: 1.8rem; }
-  .vinyl-container .lyric { bottom: -45px; font-size: 0.9rem; }
-  .album-header { gap: 0.8rem; }
-  .album-cover { width: 56px; height: 56px; font-size: 1.2rem; }
-  .album-title { font-size: 1.1rem; }
-  .modal { padding: 1.5rem; }
-  .modal h2 { font-size: 1.5rem; }
-  .modal.modal-xl { padding: 1.5rem 1rem; }
-  .modal.modal-xl h2 { font-size: 1.6rem; }
-  .modal.modal-xl .plans-grid { grid-template-columns: 1fr; }
-  .ad-social-icon { width: 42px; height: 42px; font-size: 1.1rem; }
-  .ad-social-icon::before { font-size: 0.65rem; padding: 0.35rem 0.65rem; }
-  .social-links { gap: 0.6rem; }
-  footer .footer-nav { gap: 0.5rem; font-size: 0.75rem; }
-}
-
-
-/* ============================================================
-   41. RESPONSIVO — ADMIN
-   ============================================================ */
-@media (max-width: 900px) {
   .admin-layout { grid-template-columns: 1fr; }
   .admin-sidebar { position: static; height: auto; }
   .admin-nav { flex-direction: row; overflow-x: auto; padding-bottom: 0.5rem; }
@@ -2770,828 +1734,1997 @@ form[aria-busy="true"] button[type="submit"] { cursor: wait; }
     border-bottom: 3px solid transparent;
   }
   .admin-nav button.active { border-left: none; border-bottom-color: var(--accent); }
-  .admin-table {
-    display: block;
-    overflow-x: auto;
-    white-space: nowrap;
-    -webkit-overflow-scrolling: touch;
-  }
-  .admin-main { padding: 1.25rem 1rem; }
-  .admin-topbar h1 { font-size: 1.4rem; }
-  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-  .social-editor-item { grid-template-columns: 1fr; }
 }
-
 @media (max-width: 600px) {
-  .admin-main { padding: 1rem; }
-  .admin-sidebar .brand h2 { font-size: 1.1rem; }
-  .admin-nav button { padding: 0.7rem 1rem; font-size: 0.8rem; }
-  .backup-grid { grid-template-columns: 1fr; }
-  .stat-card .value { font-size: 1.6rem; }
+  .amz-search-wrap { display: none; }
+  .amz-upgrade { display: none; }
+  .amz-header-inner { padding: 0 1rem; gap: 0.75rem; }
+  .amz-logo-text { display: none; }
+  .artist-actions { flex-wrap: wrap; }
+  .btn-follow { font-size: 0.8rem; padding: 0.65rem 1.2rem; }
+  .form-row { grid-template-columns: 1fr; }
+  .modal { padding: 1.5rem; }
+  .modal h2 { font-size: 1.5rem; }
+  .modal.modal-xl { padding: 1.5rem 1rem; }
+  .modal.modal-xl .plans-grid { grid-template-columns: 1fr; }
+  footer .footer-nav { gap: 0.5rem; font-size: 0.75rem; }
 }
 
+/* Esconde a seção "Em Destaques" */
+section[aria-labelledby="destaqueTitle"] {
+  display: none !important;
+}
+/* Esconde "Em Destaques" — reverter removendo este bloco */
+section[aria-labelledby="destaqueTitle"] {
+  display: none !important;
+}
 
-/* ============================================================
-   42. PLAYER — BOTÃO TELA CHEIA + FULLSCREEN
-   ============================================================ */
-.player-fullscreen {
-  position: absolute;
-  top: 16px;
-  right: 64px;
-  z-index: 11;
-  background: rgba(0, 0, 0, 0.5);
-  border: none;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  display: none;
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — grade idêntica a Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+#discographyContainer {
+  padding: 0;
+}
+
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1.5rem 1rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
-  color: #d4af37;
-  transition: all 0.2s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
-.player-fullscreen:hover {
-  background: rgba(212, 175, 55, 0.2);
-  transform: scale(1.08);
-}
-.player-fullscreen svg {
-  width: 22px;
-  height: 22px;
-  fill: currentColor;
+
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
-.player-fullscreen .icon-exit { display: none; }
-.music-player:fullscreen .player-fullscreen .icon-enter { display: none; }
-.music-player:fullscreen .player-fullscreen .icon-exit { display: block; }
-.music-player:-webkit-full-screen .player-fullscreen .icon-enter { display: none; }
-.music-player:-webkit-full-screen .player-fullscreen .icon-exit { display: block; }
-.music-player:-moz-full-screen .player-fullscreen .icon-enter { display: none; }
-.music-player:-moz-full-screen .player-fullscreen .icon-exit { display: block; }
 
-@media (min-width: 769px) {
-  .player-fullscreen { display: flex; }
+#discographyContainer .album-card__cover .card-initials {
+  font-family: var(--font-serif);
+  font-size: 3rem;
+  font-weight: 900;
+  color: rgba(212, 175, 55, 0.35);
 }
 
-.music-player:fullscreen,
-.music-player:-webkit-full-screen {
-  width: 100vw;
-  height: 100vh;
-  max-width: none;
-  max-height: none;
-  border-radius: 0;
-  border: none;
-  background: linear-gradient(135deg, #1a1a1a 0%, #2d2420 50%, #1a1a1a 100%);
+#discographyContainer .album-card__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  line-clamp: 1;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
 }
-.music-player:fullscreen .player-grid,
-.music-player:-webkit-full-screen .player-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  height: 100vh;
+
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.music-player:fullscreen .player-col,
-.music-player:-webkit-full-screen .player-col {
-  padding: 48px 40px;
-  justify-content: center;
+
+/* Esconder qualquer resquício de .album-block se ainda estiver no DOM */
+#discographyContainer .album-block {
+  display: none !important;
 }
-.music-player:fullscreen .album-cover,
-.music-player:-webkit-full-screen .album-cover {
-  max-width: min(100%, 480px) !important;
-  max-height: 55vh !important;
-  width: min(100%, 480px) !important;
-  aspect-ratio: 1 !important;
-  margin: 0 auto 32px !important;
-  border-radius: 18px !important;
+
+/* Responsivo */
+@media (max-width: 900px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem 0.75rem;
+  }
+  #discographyContainer .album-card__title { font-size: 0.82rem; }
+  #discographyContainer .album-card__meta { font-size: 0.7rem; }
 }
-.music-player:fullscreen .track-title,
-.music-player:-webkit-full-screen .track-title {
-  font-size: 2.2rem;
+@media (max-width: 600px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
-.music-player:fullscreen .lyrics-col,
-.music-player:-webkit-full-screen .lyrics-col {
-  padding: 48px 48px 48px 24px;
+
+/* Filtros da discografia — compactos */
+#filterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
-.music-player:fullscreen .lyrics-scroll,
-.music-player:-webkit-full-screen .lyrics-scroll {
+#filterBar .filter-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+#filterBar .filter-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.65);
+  padding: 0.4rem 0.9rem;
+  border-radius: 30px;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da;
+  color: #000;
+  border-color: #25d1da;
+}
+#filterBar .shop-search {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 30px;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  min-width: 200px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — largura total, igual Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+.amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* Título igual Lançamentos */
+#discografia .section-spotify-title {
   font-size: 1.35rem;
-  line-height: 2;
-}
-.music-player:fullscreen .lyrics-scroll .lyric-line.active,
-.music-player:-webkit-full-screen .lyrics-scroll .lyric-line.active {
-  font-size: 1.5rem;
-}
-.music-player:fullscreen .player-close,
-.music-player:-webkit-full-screen .player-close {
-  top: 20px;
-  right: 20px;
-  width: 48px;
-  height: 48px;
-}
-.music-player:fullscreen .player-close svg,
-.music-player:-webkit-full-screen .player-close svg {
-  width: 26px;
-  height: 26px;
-}
-.music-player:fullscreen .player-fullscreen,
-.music-player:-webkit-full-screen .player-fullscreen {
-  top: 20px;
-  right: 80px;
-  width: 48px;
-  height: 48px;
-}
-.music-player:fullscreen .player-fullscreen svg,
-.music-player:-webkit-full-screen .player-fullscreen svg {
-  width: 26px;
-  height: 26px;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.3rem;
+  letter-spacing: -0.01em;
 }
 
+#discografia .section-sub {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0 0 1.5rem;
+  max-width: 700px;
+}
 
-/* ============================================================
-   43. CORREÇÃO — CAPA DO ÁLBUM NO PLAYER (mobile + fullscreen)
-   ============================================================ */
-.music-player .album-cover img {
-  position: absolute !important;
-  margin-top: 32px !important;
-  top: 0 !important;
-  left: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  object-position: center !important;
+/* Filtros compactos */
+#filterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+#filterBar .filter-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+#filterBar .filter-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.65);
+  padding: 0.4rem 0.9rem;
+  border-radius: 30px;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.15s;
+}
+#filterBar .filter-btn:hover {
+  border-color: #25d1da;
+  color: #25d1da;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da;
+  color: #000;
+  border-color: #25d1da;
+}
+#filterBar .shop-search {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 30px;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  min-width: 200px;
+}
+
+/* Grid de cards — MESMA largura dos Lançamentos */
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1.5rem 1rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#discographyContainer .album-card__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  line-clamp: 1;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Esconder resquícios da lista antiga */
+#discographyContainer .album-block {
+  display: none !important;
+}
+
+/* Playlists na mesma largura */
+#discografia .playlists-panel {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  .amz-discografia-wrap { padding: 0 1.25rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem 0.75rem;
+  }
+}
+@media (max-width: 600px) {
+  .amz-discografia-wrap { padding: 0 1rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — FORÇA TOTAL (v2)
+   Remove interferência de CSS antigo com !important
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Wrapper — força bloco */
+#discografia .amz-discografia-wrap {
   display: block !important;
-  border-radius: inherit !important;
+  max-width: 1600px !important;
+  margin: 0 auto !important;
+  padding: 0 2rem !important;
+}
+
+/* Container do JS — força grid */
+#discographyContainer {
+  display: block !important;
+  width: 100% !important;
+}
+
+/* Grid — força 8 colunas */
+#discographyContainer > .album-grid,
+#discographyContainer .album-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 1.5rem 1rem !important;
+  align-items: start !important;
+  width: 100% !important;
+}
+
+/* Card — força flex column */
+#discographyContainer .album-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  cursor: pointer !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Capa */
+#discographyContainer .album-card__cover {
+  position: relative !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  max-height: none !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   margin: 0 !important;
   padding: 0 !important;
 }
 
-
-/* ============================================================
-   44. ADMIN — MODAL GENÉRICO (#adminModal)
-   ------------------------------------------------------------
-   Bloco dedicado ao modal genérico usado por openAdminModal().
-   Complementa a seção 25 (que já tinha .admin-modal-overlay),
-   garantindo scroll interno, fechamento e espaçamento.
-   ============================================================ */
-#adminModal {
-  z-index: 1000;
+#discographyContainer .album-card__cover img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-#adminModal .admin-modal {
+/* Título */
+#discographyContainer .album-card__title {
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  line-clamp: 1 !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+}
+
+/* Meta */
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Anular QUALQUER CSS antigo que sobrou */
+#discographyContainer .album-block,
+#discographyContainer .album-block *,
+#discographyContainer .discography-scroll,
+#discographyContainer .discography-scroll * {
+  all: unset !important;
+  display: none !important;
+}
+
+/* ── Forçar 8 colunas em telas grandes ── */
+@media (min-width: 1400px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 1200px) and (max-width: 1399px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 1000px) and (max-width: 1199px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 800px) and (max-width: 999px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 600px) and (max-width: 799px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 599px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 1rem 0.75rem !important;
+  }
+}
+
+/* ── Filtros compactos ── */
+#filterBar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 1rem !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 1.5rem !important;
+  padding-bottom: 1rem !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+#filterBar .filter-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: rgba(255, 255, 255, 0.65) !important;
+  padding: 0.4rem 0.9rem !important;
+  border-radius: 30px !important;
+  font-size: 0.7rem !important;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da !important;
+  color: #000 !important;
+  border-color: #25d1da !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARROSSEL — Lançamentos e Álbuns mais ouvidos (v2 - CORRIGIDO)
+   ═══════════════════════════════════════════════════════════════════ */
+
+.amz-carousel {
+  position: relative;
+  width: 100%;
+}
+
+/* Track horizontal */
+.amz-carousel-track {
   display: flex;
-  flex-direction: column;
-  max-height: 90vh;
-  overflow: hidden;
-  padding: 0;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;      /* ← CORREÇÃO: não estica verticalmente */
+  gap: 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  padding: 0.25rem 0 1rem;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.amz-carousel-track::-webkit-scrollbar {
+  display: none;
 }
 
-#adminModal .admin-modal > #adminModalContent {
-  padding: 2rem;
-  overflow-y: auto;
-  flex: 1;
+/* Cada card: largura fixa, altura automática */
+.amz-carousel-track > * {
+  flex: 0 0 auto !important;
+  width: 160px !important;
+  max-width: 160px !important;
+  min-width: 160px !important;
+  height: auto !important;         /* ← CORREÇÃO: altura automática */
+  max-height: none !important;
+  scroll-snap-align: start;
 }
 
-#adminModal .admin-modal::-webkit-scrollbar,
-#adminModal #adminModalContent::-webkit-scrollbar { width: 8px; }
-#adminModal .admin-modal::-webkit-scrollbar-thumb,
-#adminModal #adminModalContent::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
-}
-#adminModal .admin-modal::-webkit-scrollbar-thumb:hover,
-#adminModal #adminModalContent::-webkit-scrollbar-thumb:hover {
-  background: var(--accent-dark);
-}
-
-#adminModal h3 {
-  font-family: var(--font-serif);
-  font-size: 1.4rem;
-  font-weight: 700;
-  color: var(--text);
-  margin: 0 0 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--border);
+/* Capa do card: forçar quadrado 1:1 */
+.amz-carousel-track .spotify-card-cover,
+.amz-carousel-track .album-card__cover {
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  max-height: 160px !important;    /* ← CORREÇÃO: no máximo a largura do card */
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  position: relative !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: block !important;
 }
 
-#adminModal [data-close] {
+/* Imagem dentro: cobrir o quadrado */
+.amz-carousel-track .spotify-card-cover img,
+.amz-carousel-track .album-card__cover img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* Texto abaixo do card: sem esticar */
+.amz-carousel-track .spotify-card-title,
+.amz-carousel-track .album-card__title {
+  font-size: 0.88rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0.6rem 0 0.15rem !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  line-clamp: 1 !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+}
+
+.amz-carousel-track .spotify-card-sub,
+.amz-carousel-track .album-card__meta {
+  font-size: 0.75rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Remover altura mínima herdada do .spotify-card */
+.amz-carousel-track .spotify-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+}
+
+/* Setas */
+.amz-arrow {
+  transition: opacity 0.2s, background 0.2s;
+}
+.amz-arrow:disabled,
+.amz-arrow.is-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Botão "Ver tudo" */
+.section-spotify-link {
   cursor: pointer;
 }
 
-@media (max-width: 600px) {
-  #adminModal .admin-modal {
-    width: 100%;
-    max-height: 100vh;
-    border-radius: 0;
-  }
-  #adminModal .admin-modal > #adminModalContent {
-    padding: 1.25rem;
-  }
+/* ═══════════════════════════════════════════════════════════════════
+   CONECTE-SE — redesign
+   ═══════════════════════════════════════════════════════════════════ */
+
+#contato {
+  padding: 4rem 0 5rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: 3rem;
 }
 
-
-/* ============================================================
-   45. ADMIN — Drag & drop de faixas
-   ============================================================ */
-.track-drag-cell {
-  width: 32px;
-  padding: 0 !important;
-  text-align: center;
+#contato .amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
 }
 
-.track-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  cursor: grab;
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  letter-spacing: -2px;
-  line-height: 1;
-  user-select: none;
-  transition: background 0.15s, color 0.15s;
+/* Título e subtítulo alinhados com o resto */
+#contato .section-spotify-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+  font-family: var(--font-sans);
 }
 
-.track-drag-handle:hover {
-  background: rgba(212, 175, 55, 0.12);
+#contato .section-spotify-title .gold {
   color: var(--accent);
 }
 
-.track-drag-handle:active {
-  cursor: grabbing;
+#contato .section-sub {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 2.5rem;
+  max-width: 640px;
+  line-height: 1.5;
 }
 
-tr.track-row.dragging {
-  opacity: 0.4;
-  background: rgba(212, 175, 55, 0.08);
+/* Grid principal: info à esquerda, form à direita */
+#contato .contato-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  align-items: start;
 }
 
-tr.track-row.drag-over-top {
-  border-top: 2px solid var(--accent);
-  box-shadow: 0 -1px 0 var(--accent);
+/* Info à esquerda */
+#contato .contato-info h3 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.75rem;
+  letter-spacing: -0.01em;
+  font-family: var(--font-sans);
 }
 
-tr.track-row.drag-over-bottom {
-  border-bottom: 2px solid var(--accent);
-  box-shadow: 0 1px 0 var(--accent);
+#contato .contato-info p {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.6;
+  margin: 0 0 2rem;
+  max-width: 480px;
 }
 
-tr.track-row {
-  transition: background 0.15s;
+/* Ícones — cards maiores, com fundo */
+#contato .social-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
 }
 
-tr.track-row:hover {
-  background: rgba(212, 175, 55, 0.03);
-}
-
-@media (max-width: 600px) {
-  .track-drag-cell {
-    display: none;
-  }
-
-  tr.track-row {
-    cursor: default;
-  }
-}
-
-
-/* ============================================================
-   46. MODAL DE GERENCIAMENTO DE ASSINATURA
-   ============================================================ */
-#manageSubscriptionModal .modal {
-  width: min(480px, 100%);
-}
-
-#manageSubscriptionModal .admin-card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-
-#manageSubscriptionModal .modal-close {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
-}
-
-.plan-card.is-current {
-  border-color: var(--success);
-  box-shadow: 0 0 20px rgba(74, 222, 128, 0.15);
-}
-
-.plan-card.is-current .plan-badge {
-  background: var(--success);
-}
-
-
-/* ============================================================
-   47. RÁDIO — botão no header
-   ============================================================ */
-.nav-radio {
+#contato .social-links a,
+#contato .ad-social-icon {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid rgba(212, 175, 55, 0.35);
-  border-radius: 30px;
-  background: rgba(212, 175, 55, 0.06);
-  color: var(--accent) !important;
-  font-size: 0.75rem !important;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 1.4rem;
+  text-decoration: none;
+  transition: transform 0.25s ease, background 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  cursor: pointer;
+}
+
+#contato .social-links a:hover,
+#contato .ad-social-icon:hover {
+  transform: translateY(-4px);
+  color: #000;
+  border-color: transparent;
+}
+
+/* Cores por rede */
+#contato .ad-social-icon.spotify:hover  { background: #1DB954; box-shadow: 0 8px 24px rgba(29,185,84,0.4); }
+#contato .ad-social-icon.youtube:hover  { background: #FF0000; box-shadow: 0 8px 24px rgba(255,0,0,0.4); }
+#contato .ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 8px 24px rgba(255,153,0,0.4); }
+#contato .ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 8px 24px rgba(24,119,242,0.4); }
+#contato .ad-social-icon.tiktok:hover   { background: #000; box-shadow: 0 8px 24px rgba(0,242,234,0.4); border-color: #00f2ea; }
+#contato .ad-social-icon.apple:hover    { background: linear-gradient(135deg, #FA243C, #FF5E7D); box-shadow: 0 8px 24px rgba(250,36,60,0.4); }
+#contato .ad-social-icon.x:hover        { background: #000; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+#contato .ad-social-icon.instagram:hover{ background: linear-gradient(135deg, #833AB4, #FD1D1D, #FCB045); box-shadow: 0 8px 24px rgba(253,29,29,0.4); }
+#contato .ad-social-icon.whatsapp:hover { background: #25D366; box-shadow: 0 8px 24px rgba(37,211,102,0.4); }
+#contato .ad-social-icon.link:hover,
+#contato .social-links a:not([class*="ad-social-icon"]):hover {
+  background: var(--accent);
+  box-shadow: 0 8px 24px rgba(212,175,55,0.4);
+  color: #0b0a0c;
+}
+
+/* Tooltip do label */
+#contato .ad-social-icon::before {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #131216;
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
   font-weight: 600;
-  transition: background 0.2s, border-color 0.2s, transform 0.2s;
+  letter-spacing: 0.03em;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
 }
 
-.nav-radio:hover {
-  background: rgba(212, 175, 55, 0.18);
-  border-color: var(--accent);
-  transform: translateY(-1px);
+#contato .ad-social-icon:hover::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
-.nav-radio-icon {
-  font-size: 0.9rem;
-  line-height: 1;
-  display: inline-block;
-  animation: radioPulse 2.4s ease-in-out infinite;
-}
-
-@keyframes radioPulse {
-  0%, 100% { opacity: 0.85; transform: scale(1); }
-  50%      { opacity: 1;    transform: scale(1.1); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .nav-radio-icon { animation: none; }
-}
-
-@media (max-width: 768px) {
-  .nav-radio-text { display: none; }
-  .nav-radio { padding: 0.4rem 0.55rem; }
-}
-
-
-/* ============================================================
-   48. RÁDIO — modal
-   ============================================================ */
-#radioModal .modal-wide {
-  width: min(560px, 100%);
-  padding: 2.5rem 2rem;
-  text-align: center;
-}
-
-.radio-header { margin-bottom: 1.5rem; }
-
-.radio-icon {
-  font-size: 3.2rem;
-  line-height: 1;
-  margin-bottom: 0.75rem;
-  display: inline-block;
-  animation: radioPulse 2.4s ease-in-out infinite;
-}
-
-#radioModal h2 {
-  font-family: var(--font-serif);
-  font-size: 1.9rem;
-  margin-bottom: 0.4rem;
-}
-
-#radioModal .sub {
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  margin-bottom: 1.5rem;
-}
-
-.radio-status {
+/* Formulário à direita */
+#contato .newsletter-form {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1.5rem 1rem;
-  background: rgba(212, 175, 55, 0.06);
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: 12px;
-  margin-bottom: 1.2rem;
+  gap: 0.85rem;
+  padding: 2rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
 }
 
-.radio-status-label {
-  font-size: 0.7rem;
+#contato .newsletter-form::before {
+  content: "Receba novidades";
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--accent);
-  font-weight: 700;
+  margin-bottom: 0.5rem;
 }
 
-.radio-status-track {
-  font-family: var(--font-serif);
-  font-size: 1.35rem;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1.2;
+#contato .newsletter-form input {
+  width: 100%;
+  height: 48px;
+  padding: 0 1.1rem;
+  font-size: 0.95rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
 }
 
-.radio-status-album {
+#contato .newsletter-form input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+#contato .newsletter-form input:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.15);
+}
+
+#contato .newsletter-form button {
+  width: 100%;
+  height: 48px;
   font-size: 0.85rem;
-  color: var(--text-dim);
-  font-style: italic;
-}
-
-.radio-stats {
-  display: flex;
-  justify-content: center;
-  gap: 1.5rem;
-  margin-bottom: 1.2rem;
-  font-size: 0.78rem;
-  color: var(--text-dim);
-}
-
-.radio-stats strong {
-  color: var(--accent);
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--accent);
+  color: #0b0a0c;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
 }
 
-.radio-actions {
+#contato .newsletter-form button:hover {
+  background: #e5c14a;
+  transform: translateY(-1px);
+}
+
+/* ── Responsivo ── */
+@media (max-width: 900px) {
+  #contato .amz-discografia-wrap { padding: 0 1.25rem; }
+  #contato .contato-grid {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+  #contato .social-links a,
+  #contato .ad-social-icon {
+    width: 46px;
+    height: 46px;
+    font-size: 1.2rem;
+  }
+}
+
+@media (max-width: 600px) {
+  #contato { padding: 3rem 0 4rem; }
+  #contato .section-spotify-title { font-size: 1.4rem; }
+  #contato .contato-info h3 { font-size: 1.25rem; }
+  #contato .newsletter-form { padding: 1.5rem; }
+  #contato .social-links a,
+  #contato .ad-social-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 1.1rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CONECTE-SE — ícones circulares com fundo escuro (v2)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Container dos ícones */
+#contato .social-links {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 0.85rem !important;
+  align-items: center !important;
+}
+
+/* Cada ícone: círculo cinza-escuro sólido */
+#contato .social-links a,
+#contato .ad-social-icon,
+#socialLinks a {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 52px !important;
+  height: 52px !important;
+  border-radius: 50% !important;
+  background: #2a2a2a !important;
+  background-color: #2a2a2a !important;
+  border: 0 !important;
+  color: #ffffff !important;
+  font-size: 1.4rem !important;
+  text-decoration: none !important;
+  transition: transform 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  opacity: 1 !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+}
+
+/* SVG / ícone dentro do círculo */
+#contato .social-links a svg,
+#contato .ad-social-icon svg,
+#socialLinks a svg {
+  width: 22px !important;
+  height: 22px !important;
+  fill: #ffffff !important;
+  color: #ffffff !important;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#contato .social-links a i,
+#contato .ad-social-icon i,
+#socialLinks a i {
+  font-size: 1.35rem !important;
+  line-height: 1 !important;
+  color: #ffffff !important;
+  display: block !important;
+}
+
+/* Hover: mantém o fundo (muda só a cor) */
+#contato .social-links a:hover,
+#contato .ad-social-icon:hover,
+#socialLinks a:hover {
+  transform: translateY(-4px) !important;
+  background: #3a3a3a !important;
+  background-color: #3a3a3a !important;
+  border: 0 !important;
+}
+
+/* Cores específicas por rede no hover */
+#contato .ad-social-icon.spotify:hover,
+#socialLinks a.spotify:hover {
+  background-color: #1DB954 !important;
+  box-shadow: 0 8px 24px rgba(29, 185, 84, 0.4) !important;
+}
+#contato .ad-social-icon.youtube:hover,
+#socialLinks a.youtube:hover {
+  background-color: #FF0000 !important;
+  box-shadow: 0 8px 24px rgba(255, 0, 0, 0.4) !important;
+}
+#contato .ad-social-icon.amazon:hover,
+#socialLinks a.amazon:hover {
+  background-color: #FF9900 !important;
+  box-shadow: 0 8px 24px rgba(255, 153, 0, 0.4) !important;
+}
+#contato .ad-social-icon.facebook:hover,
+#socialLinks a.facebook:hover {
+  background-color: #1877F2 !important;
+  box-shadow: 0 8px 24px rgba(24, 119, 242, 0.4) !important;
+}
+#contato .ad-social-icon.tiktok:hover,
+#socialLinks a.tiktok:hover {
+  background-color: #000000 !important;
+  box-shadow: 0 8px 24px rgba(0, 242, 234, 0.4) !important;
+}
+#contato .ad-social-icon.apple:hover,
+#socialLinks a.apple:hover {
+  background-color: #FA243C !important;
+  box-shadow: 0 8px 24px rgba(250, 36, 60, 0.4) !important;
+}
+#contato .ad-social-icon.x:hover,
+#socialLinks a.x:hover {
+  background-color: #000000 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+}
+#contato .ad-social-icon.instagram:hover,
+#socialLinks a.instagram:hover {
+  background-color: #E1306C !important;
+  box-shadow: 0 8px 24px rgba(225, 48, 108, 0.4) !important;
+}
+#contato .ad-social-icon.whatsapp:hover,
+#socialLinks a.whatsapp:hover {
+  background-color: #25D366 !important;
+  box-shadow: 0 8px 24px rgba(37, 211, 102, 0.4) !important;
+}
+#contato .ad-social-icon.link:hover,
+#socialLinks a.link:hover {
+  background-color: #d4af37 !important;
+  box-shadow: 0 8px 24px rgba(212, 175, 55, 0.4) !important;
+}
+
+/* Remover tooltip ::before/::after se estiver poluindo */
+#contato .ad-social-icon::before,
+#contato .ad-social-icon::after,
+#socialLinks a::before,
+#socialLinks a::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* ── Responsivo ── */
+@media (max-width: 900px) {
+  #contato .social-links a,
+  #contato .ad-social-icon,
+  #socialLinks a {
+    width: 46px !important;
+    height: 46px !important;
+    font-size: 1.2rem !important;
+  }
+  #contato .social-links a svg,
+  #socialLinks a svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+}
+
+@media (max-width: 600px) {
+  #contato .social-links a,
+  #contato .ad-social-icon,
+  #socialLinks a {
+    width: 42px !important;
+    height: 42px !important;
+    font-size: 1.1rem !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — GRADE (sem carrossel)
+   ═══════════════════════════════════════════════════════════════════ */
+
+#discografia .amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+#discographyContainer {
+  display: block;
+  width: 100%;
+}
+
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 2rem 1.25rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  margin-top: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+  transition: transform 0.2s;
+}
+#discographyContainer .album-card:hover {
+  transform: translateY(-3px);
 }
 
-.radio-locked {
-  padding: 1.5rem 1rem;
-  background: rgba(212, 175, 55, 0.05);
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: 12px;
-  margin-bottom: 1.2rem;
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
-
-.radio-locked-icon {
-  font-size: 2.4rem;
-  margin-bottom: 0.6rem;
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
+  transition: transform 0.4s ease;
+}
+#discographyContainer .album-card:hover .album-card__cover img {
+  transform: scale(1.04);
+}
+
+#discographyContainer .album-card__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  line-clamp: 1;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+#discographyContainer .album-card__meta {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Se o JS ainda gerar .amz-carousel na Discografia, anula */
+#discografia .amz-carousel-track {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)) !important;
+  gap: 2rem 1.25rem !important;
+  overflow: visible !important;
+  flex-wrap: wrap !important;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  #discografia .amz-discografia-wrap { padding: 0 1.25rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 1.25rem 0.9rem;
+  }
+  #discographyContainer .album-card__title { font-size: 0.85rem; }
+  #discographyContainer .album-card__meta { font-size: 0.72rem; }
+}
+
+@media (max-width: 600px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem 0.75rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BANNER DO ARTISTA — sem imagem de fundo
+   ═══════════════════════════════════════════════════════════════════ */
+
+#artistBanner,
+.artist-banner {
+  background-image: transparent !important;
+  background: transparent !important;
+}
+
+/* Opcional: remove o gradiente escuro se não quiser */
+#artistBanner.artist-banner-overlay,
+.artist-banner-overlay {
+  display: none !important;
+}
+
+/* Botões de curtir / compartilhar nas faixas */
+.track-action-icon.like,
+.track-action-icon.share {
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  transition: color 0.15s, transform 0.15s;
+}
+.track-action-icon.like:hover,
+.track-action-icon.share:hover {
+  color: var(--accent, #d4af37);
+  transform: scale(1.1);
+}
+.track-action-icon.like.liked {
+  color: #e63946;
+}
+.track-action-icon.like.liked:hover {
+  color: #ff4d5e;
+}
+
+/* Botões de curtir / compartilhar nas faixas */
+.track-action-icon.like,
+.track-action-icon.share {
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  transition: color 0.15s, transform 0.15s;
+  line-height: 1;
+  position: relative;
+  z-index: 2;
+}
+.track-action-icon.like:hover,
+.track-action-icon.share:hover {
+  color: var(--accent, #d4af37);
+  transform: scale(1.15);
+}
+.track-action-icon.like.liked {
+  color: #e63946;
+}
+.track-action-icon.like.liked:hover {
+  color: #ff4d5e;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   BOTÕES DE AÇÃO NAS FAIXAS — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+.track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.track-action-btn {
+  background: transparent;
+  border: none;
+  padding: 0.4rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: transform 0.15s ease, opacity 0.15s ease;
   opacity: 0.7;
 }
 
-.radio-locked h3 {
-  font-family: var(--font-serif);
-  font-size: 1.2rem;
-  margin-bottom: 0.5rem;
-  color: var(--accent);
+.track-action-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  transition: fill 0.15s ease, stroke 0.15s ease;
 }
 
-.radio-locked p {
-  color: var(--text-dim);
-  font-size: 0.88rem;
-  line-height: 1.5;
-  margin-bottom: 0.5rem;
+/* ─── Curtir (coração) ─────────────────────────────────── */
+.track-action-btn.like svg {
+  fill: transparent;
+  stroke: #b3b3b3;
+  stroke-width: 2;
+  transition: fill 0.15s ease, stroke 0.15s ease, transform 0.15s ease;
 }
 
-#radioModal .btn { width: 100%; }
-
-/* ============================================================
-   RÁDIO — capa do álbum + controles no "Tocando agora"
-   ============================================================ */
-
-.radio-now-playing {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-  padding: 1.25rem 1rem 1.5rem;
-  background: rgba(212, 175, 55, 0.06);
-  border: 1px solid rgba(212, 175, 55, 0.25);
-  border-radius: 16px;
-  margin-bottom: 1.2rem;
+.track-action-btn.like:hover {
+  opacity: 1;
+  transform: scale(1.08);
 }
 
-/* Capa do álbum */
-.radio-cover {
-  width: 140px;
-  height: 140px;
-  border-radius: 12px;
-  background-size: cover;
-  background-position: center;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  flex-shrink: 0;
-  transition: transform 0.3s;
+.track-action-btn.like:hover svg {
+  stroke: #ffffff;
 }
 
-.radio-cover:hover {
-  transform: scale(1.03);
+.track-action-btn.like.liked svg {
+  fill: #1DB954;       /* verde Spotify */
+  stroke: #1DB954;
 }
 
-.radio-cover--initials {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-serif);
-  font-size: 3rem;
-  font-weight: 900;
-  color: rgba(212, 175, 55, 0.5);
-  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+.track-action-btn.like.liked:hover {
+  opacity: 1;
 }
 
-/* Info */
-.radio-now-info {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.35rem;
-  text-align: center;
-  min-width: 0;
-  width: 100%;
+.track-action-btn.like.liked:hover svg {
+  fill: #1ed760;       /* verde Spotify hover */
+  stroke: #1ed760;
 }
 
-.radio-now-info .radio-status-label {
-  font-size: 0.68rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 700;
+/* ─── Compartilhar ─────────────────────────────────────── */
+.track-action-btn.share svg {
+  fill: #b3b3b3;
+  stroke: none;
 }
 
-.radio-now-info .radio-status-track {
-  font-family: var(--font-serif);
-  font-size: 1.25rem;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1.2;
-  word-break: break-word;
-  max-width: 100%;
+.track-action-btn.share:hover {
+  opacity: 1;
+  transform: scale(1.08);
 }
 
-.radio-now-info .radio-status-album {
-  font-size: 0.82rem;
-  color: var(--text-dim);
-  font-style: italic;
+.track-action-btn.share:hover svg {
+  fill: #ffffff;
 }
 
-/* Controles */
-.radio-controls {
-  display: flex;
-  gap: 0.6rem;
-  justify-content: center;
-  flex-wrap: wrap;
-  width: 100%;
-  margin-top: 0.25rem;
+/* ─── Estado / aluguel mantidos discretos ──────────────── */
+.track-action-btn.buy {
+  font-size: 0.95rem;
+  opacity: 0.8;
 }
 
-.radio-ctrl-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.7rem 1.2rem;
-  background: rgba(212, 175, 55, 0.1);
-  border: 1px solid rgba(212, 175, 55, 0.35);
-  border-radius: 40px;
-  color: var(--accent);
-  font-family: var(--font-sans);
-  font-size: 0.82rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, transform 0.2s;
-  min-width: 120px;
+.track-action-btn.buy:hover {
+  opacity: 1;
+  transform: scale(1.08);
 }
 
-.radio-ctrl-btn:hover:not(:disabled) {
-  background: rgba(212, 175, 55, 0.22);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-
-.radio-ctrl-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.radio-ctrl-icon {
-  font-size: 1rem;
-  line-height: 1;
-  display: inline-block;
-}
-
-.radio-ctrl-text {
-  font-size: 0.82rem;
-}
-
-/* Mobile — capa menor */
-@media (max-width: 600px) {
-  .radio-cover {
-    width: 110px;
-    height: 110px;
-  }
-
-  .radio-cover--initials {
-    font-size: 2.4rem;
-  }
-
-  .radio-now-info .radio-status-track {
-    font-size: 1.1rem;
-  }
-
-  .radio-ctrl-btn {
-    flex: 1 1 auto;
-    min-width: 0;
-    padding: 0.65rem 0.9rem;
-  }
-}
-
-/* ============================================================
-   ADMIN — Downloads
-   ============================================================ */
-.downloads-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  flex-wrap: wrap;
-  padding: 0.9rem 1rem;
-  background: rgba(212, 175, 55, 0.05);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 8px 8px 0;
-  margin-bottom: 1.25rem;
-}
-
-.downloads-log {
-  background: #0b0a0c;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
-  max-height: 220px;
-  overflow-y: auto;
-  font-family: 'Courier New', monospace;
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  margin-bottom: 1rem;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-
-.downloads-log::-webkit-scrollbar { width: 6px; }
-.downloads-log::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-.downloads-log-line {
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.downloads-log-line:first-child { color: var(--accent); }
-
-.downloads-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.downloads-album {
-  background: rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  transition: border-color 0.2s;
-  overflow: hidden;
-}
-
-.downloads-album:hover { border-color: rgba(212, 175, 55, 0.3); }
-
-.downloads-album.expanded {
-  border-color: rgba(212, 175, 55, 0.4);
-  background: rgba(212, 175, 55, 0.03);
-}
-
-.downloads-album-header {
+/* ─── Ajuste no layout da faixa ────────────────────────── */
+.discography-track-card {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.75rem 1rem;
 }
 
-.downloads-toggle {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  width: 30px;
-  height: 30px;
-  cursor: pointer;
-  color: var(--accent);
-  font-size: 0.75rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: 0.2s;
-}
-
-.downloads-toggle:hover {
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
-
-.downloads-album.expanded .downloads-toggle {
-  transform: rotate(180deg);
-  background: var(--accent);
-  color: var(--bg);
-  border-color: var(--accent);
-}
-
-.downloads-album-info {
+.discography-track-card .track-info {
   flex: 1;
   min-width: 0;
+}
+
+.discography-track-card.playing .track-action-btn.like svg {
+  /* nada extra — só garante que o like não some quando tocando */
+}
+
+#albumModal .discography-track-card {
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+#albumModal .discography-track-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ═════════════════════════════════════════════════════════════
+   AÇÕES NOS CARDS DE LANÇAMENTOS / MAIS OUVIDOS — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+
+/* Wrapper das ações no canto inferior direito da capa */
+.spotify-card-cover {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotify-card-actions {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  align-items: center;
+  gap: 0.25rem;
+  z-index: 3;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
-.downloads-album-info strong {
-  font-size: 0.95rem;
-  color: var(--text);
+/* Aparecem ao passar o mouse no card (ou quando o like está ativo) */
+.spotify-card:hover .spotify-card-actions,
+.spotify-card-actions:has(.like.liked) {
+  opacity: 1;
+  transform: translateY(0);
 }
 
-.downloads-album-info .hint {
-  font-size: 0.72rem;
-  color: var(--text-dim);
-}
-
-.downloads-tracks {
-  border-top: 1px solid var(--border);
-  padding: 0.75rem 1rem 1rem;
-}
-
-.downloads-tracks .admin-table {
-  margin: 0;
-}
-
-@media (max-width: 768px) {
-  .downloads-album-header {
-    flex-wrap: wrap;
-  }
-  .downloads-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+/* Em mobile, sempre visível */
+@media (hover: none) {
+  .spotify-card-actions {
+    opacity: 1;
+    transform: none;
   }
 }
 
-/* ============================================================
-   ADMIN — Botões de download (dentro da discografia)
-   ============================================================ */
-[data-album-download],
-[data-track-download] {
-  color: var(--accent);
+/* Botão base */
+.spotify-card-action {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease, transform 0.15s ease;
 }
 
-[data-album-download]:hover,
-[data-track-download]:hover {
-  background: rgba(212, 175, 55, 0.12);
-  color: #f0d98f;
+.spotify-card-action svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
-[data-track-download]:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  color: var(--text-dim);
+.spotify-card-action:hover {
+  background: rgba(0, 0, 0, 0.85);
+  transform: scale(1.08);
 }
 
-[data-track-download]:disabled:hover {
+/* ─── Like (coração) ─────────────────────────────────── */
+.spotify-card-action.like svg {
+  fill: transparent;
+  stroke: #ffffff;
+  stroke-width: 2;
+  transition: fill 0.15s ease, stroke 0.15s ease;
+}
+
+.spotify-card-action.like:hover svg {
+  stroke: #ffffff;
+}
+
+.spotify-card-action.like.liked svg {
+  fill: #1DB954;
+  stroke: #1DB954;
+}
+
+.spotify-card-action.like.liked:hover svg {
+  fill: #1ed760;
+  stroke: #1ed760;
+}
+
+/* ─── Share ──────────────────────────────────────────── */
+.spotify-card-action.share svg {
+  fill: #ffffff;
+  stroke: none;
+}
+
+.spotify-card-action.share:hover svg {
+  fill: #1DB954;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   ESTILO SPOTIFY — Header + Hero + Acentos globais
+   ═════════════════════════════════════════════════════════════ */
+
+/* ─── Variáveis globais (override do tema) ─────────────── */
+:root {
+  --accent: #1DB954;
+  --accent-hover: #1ed760;
+  --accent-dark: #158a3f;
+  --bg: #000000;
+  --bg-elevated: #121212;
+  --card: #181818;
+  --border: #282828;
+  --text: #ffffff;
+  --text-dim: #b3b3b3;
+  --text-muted: #6a6a6a;
+}
+
+/* ─── Fundo geral ─────────────────────────────────────── */
+body {
+  background-color: #000000;
+}
+
+/* ─── HEADER ──────────────────────────────────────────── */
+.amz-header {
+  background: #000000;
+  border-bottom: 1px solid #181818;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.amz-header-inner {
   background: transparent;
 }
 
-/* ============================================================
-   49. GLOBAL — Fonte unificada Segoe UI
-   ------------------------------------------------------------
-   Substitui TODAS as fontes do site por Segoe UI + fallbacks.
-   - Windows       → Segoe UI
-   - macOS         → San Francisco (-apple-system)
-   - Android       → Roboto
-   - Outros        → Helvetica Neue / Arial / sans-serif
-   ============================================================ */
-
-:root {
-  --font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
-               'Helvetica Neue', Arial, sans-serif;
-  --font-serif: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
-                'Helvetica Neue', Arial, sans-serif;
-  --player-font: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
-                 'Helvetica Neue', Arial, sans-serif;
+/* Logo */
+.amz-logo-text {
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.amz-logo-text em {
+  color: #ffffff;
+  font-style: normal;
+  font-weight: 800;
+}
+.amz-logo-mark {
+  color: #1DB954;
 }
 
-/* Força Segoe UI em TODOS os elementos, incluindo os que
-   declararam fontes literais ('Georgia', 'Courier New', etc.) */
-html, body, *,
-*::before, *::after,
-button, input, textarea, select, optgroup, option {
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto,
-               'Helvetica Neue', Arial, sans-serif !important;
+/* Links da navegação */
+.amz-nav-item {
+  color: #b3b3b3;
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+  transition: color 0.15s ease, transform 0.15s ease;
+  position: relative;
+  padding: 0.5rem 0;
 }
 
-/* Mantém o monospace apenas onde faz sentido (log de downloads) */
-.downloads-log,
-.downloads-log-line {
-  font-family: 'Consolas', 'Courier New', monospace !important;
+.amz-nav-item i,
+.amz-nav-item svg {
+  color: inherit;
+}
+
+.amz-nav-item:hover {
+  color: #ffffff;
+  transform: scale(1.04);
+}
+
+.amz-nav-item--active {
+  color: #ffffff;
+}
+
+/* Remove a linha ciano embaixo do item ativo */
+.amz-nav-item--active::after,
+.amz-nav-item::after {
+  display: none !important;
+}
+
+/* Busca */
+.amz-search {
+  background: #242424;
+  border: 1px solid transparent;
+  color: #ffffff;
+  border-radius: 500px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.amz-search::placeholder {
+  color: #a7a7a7;
+}
+
+.amz-search:hover {
+  background: #2a2a2a;
+  border-color: #3a3a3a;
+}
+
+.amz-search:focus {
+  background: #2a2a2a;
+  border-color: #ffffff;
+  outline: none;
+}
+
+.amz-search-btn {
+  color: #b3b3b3;
+  background: transparent;
+}
+.amz-search-btn:hover {
+  color: #ffffff;
+}
+
+/* Botão "Faça Upgrade" (outline) */
+.amz-upgrade,
+.btn-outline {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid #727272;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  padding: 0.55rem 1.2rem;
+  transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.amz-upgrade:hover,
+.btn-outline:hover {
+  border-color: #ffffff;
+  background: transparent;
+  transform: scale(1.04);
+}
+
+/* Botão primário (Criar conta, SIGA, etc) */
+.btn-primary,
+#signupBtn,
+#followBtn {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  padding: 0.55rem 1.2rem;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.btn-primary:hover,
+#signupBtn:hover,
+#followBtn:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+/* Botão "Entrar" — pill outline */
+#loginBtn {
+  border-radius: 500px;
+  border: 1px solid #727272;
+  background: transparent;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.55rem 1.2rem;
+}
+
+#loginBtn:hover {
+  border-color: #ffffff;
+  transform: scale(1.04);
+}
+
+/* User chip */
+.user-chip {
+  background: #000000;
+  border: 1px solid #282828;
+  border-radius: 500px;
+  padding: 0.3rem 0.5rem;
+}
+.user-chip:hover {
+  background: #181818;
+}
+.user-avatar {
+  background: #1DB954;
+  color: #000000;
+  font-weight: 800;
+}
+
+/* ─── HERO ────────────────────────────────────────────── */
+.artist-spotify {
+  background: transparent;
+}
+
+.artist-banner {
+  background: transparent !important;
+  padding: 2.5rem 0 1.5rem;
+}
+
+.artist-eyebrow {
+  color: #b3b3b3;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+
+.artist-spotify-name {
+  color: #ffffff;
+  font-weight: 900;
+  font-size: clamp(2.8rem, 7vw, 5.5rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  margin: 0.4rem 0 1rem;
+  font-family: var(--font-serif, 'Playfair Display', serif);
+}
+
+.artist-tagline {
+  color: #b3b3b3;
+  font-size: 0.95rem;
+  margin-bottom: 1.5rem;
+  max-width: 640px;
+}
+
+/* Ações do hero */
+.artist-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Botão "SIGA" / "SEGUINDO" */
+#followBtn {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  padding: 0.7rem 1.6rem;
+  text-transform: uppercase;
+}
+
+#followBtn.following {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid #727272;
+}
+
+#followBtn.following:hover {
+  border-color: #ffffff;
+}
+
+#followBtn:hover {
+  transform: scale(1.04);
+}
+
+/* Botões redondos ao lado do SIGA */
+.btn-icon-round {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #727272;
+  color: #b3b3b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.btn-icon-round:hover {
+  border-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1.06);
+}
+
+/* Botão "Reproduzir Músicas Semelhantes" (se ainda existir) */
+.btn-follow {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  padding: 0.7rem 1.4rem;
+}
+.btn-follow:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+/* Avatar do artista (canto direito do hero) */
+.artist-avatar {
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+}
+
+/* ─── ABAS DO ARTISTA ─────────────────────────────────── */
+.artist-tabs-bar {
+  background: transparent;
+  border-bottom: 1px solid #181818;
+}
+
+.artist-tab {
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  padding: 0.9rem 1.1rem;
+  position: relative;
+  transition: color 0.15s ease;
+  text-transform: uppercase;
+}
+
+.artist-tab:hover {
+  color: #ffffff;
+}
+
+.artist-tab.active,
+.artist-tab[aria-selected="true"] {
+  color: #ffffff;
+}
+
+.artist-tab.active::after,
+.artist-tab[aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  left: 1.1rem;
+  right: 1.1rem;
+  bottom: 0;
+  height: 2px;
+  background: #1DB954;
+  border-radius: 2px;
+}
+
+/* ─── SEÇÕES (títulos de seção) ───────────────────────── */
+.section-spotify-title {
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.section-spotify-link {
+  color: #b3b3b3;
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 0.15s ease;
+}
+
+.section-spotify-link:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* ─── SELO "ARTISTA" / badges de ciano → verde ────────── */
+.gold,
+[style*="color:var(--accent)"] {
+  color: #1DB954;
+}
+
+/* Remove ciano residual em qualquer lugar */
+a,
+button {
+  accent-color: #1DB954;
+}
+
+/* ─── MOBILE ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .artist-spotify-name {
+    font-size: 2.6rem;
+  }
+  .artist-actions {
+    gap: 0.5rem;
+  }
+  #followBtn {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.8rem;
+  }
+  .btn-icon-round {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════
+   CORREÇÃO — Botões redondos do hero (❤️ e ✈️)
+   ═════════════════════════════════════════════════════════════ */
+
+/* Botões redondos */
+.artist-actions .btn-icon-round {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #727272;
+  color: #b3b3b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.1s ease, background 0.15s ease;
+  /* NÃO usar font-size: 0 aqui — o ícone precisa herdar */
+}
+
+/* Ícone dentro do botão redondo */
+.artist-actions .btn-icon-round i,
+.artist-actions .btn-icon-round .fa,
+.artist-actions .btn-icon-round .fa-solid,
+.artist-actions .btn-icon-round .fa-regular,
+.artist-actions .btn-icon-round .fa-brands {
+  font-size: 1.1rem !important;
+  line-height: 1 !important;
+  color: currentColor;
+  display: inline-block;
+}
+
+/* Hover do botão */
+.artist-actions .btn-icon-round:hover {
+  border-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1.06);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Coração fica verde no hover (toque Spotify) */
+.artist-actions .btn-icon-round:hover .fa-heart {
+  color: #1DB954;
+}
+
+/* Coração fixo verde se a pessoa curtir (via JS) */
+.artist-actions .btn-icon-round.liked {
+  border-color: #1DB954;
+  color: #1DB954;
+}
+
+/* Botão "Reproduzir Músicas Semelhantes" — mesmo estilo do SIGA */
+.artist-actions .btn-follow {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  padding: 0.7rem 1.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.artist-actions .btn-follow i {
+  font-size: 1rem;
+  color: #000000;
+}
+
+.artist-actions .btn-follow:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .artist-actions .btn-icon-round {
+    width: 40px;
+    height: 40px;
+  }
+  .artist-actions .btn-icon-round i {
+    font-size: 1rem !important;
+  }
+  .artist-actions .btn-follow {
+    padding: 0.6rem 1.1rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Força bruta — se nada acima funcionar */
+#settingsBtn,
+.artist-actions > .btn-icon-round {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+#settingsBtn i,
+#settingsBtn::before,
+.artist-actions .btn-icon-round i {
+  font-size: 1.1rem !important;
+  font-family: "Font Awesome 6 Free", "Font Awesome 6 Brands", sans-serif !important;
+  font-weight: 900 !important;
+  display: inline-block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  color: #b3b3b3 !important;
+}
+
+#settingsBtn:hover i,
+.artist-actions .btn-icon-round:hover i {
+  color: #ffffff !important;
+}
+
+#settingsBtn:hover i.fa-heart {
+  color: #1DB954 !important;
+}
+
+.artist-actions .btn-icon-round svg {
+  fill: currentColor;
+  stroke: currentColor;
+  display: block;
+}
+.artist-actions .btn-icon-round:hover svg {
+  color: #ffffff;
+}
+.artist-actions .btn-icon-round:hover svg path[fill="none"] {
+  fill: none;
+  stroke: #1DB954;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   ÍCONES DA NAVEGAÇÃO — SVG inline estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+
+.amz-nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #b3b3b3;
+  font-weight: 600;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.amz-nav-icon {
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  flex-shrink: 0;
+  color: currentColor;
+}
+
+.amz-nav-item:hover {
+  color: #ffffff;
+  transform: scale(1.04);
+}
+
+.amz-nav-item:hover .amz-nav-icon {
+  color: #ffffff;
+}
+
+.amz-nav-item--active {
+  color: #ffffff;
+}
+
+.amz-nav-item--active .amz-nav-icon {
+  color: #1DB954;
+}
+
+/* Remove ciano antigo, se houver */
+.amz-nav-item::after {
+  display: none !important;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .amz-nav-icon {
+    width: 16px;
+    height: 16px;
+  }
+  .amz-nav-item {
+    gap: 0.35rem;
+    font-size: 0.78rem;
+  }
 }

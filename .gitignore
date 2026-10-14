@@ -130,3 +130,30 @@ assets/img/*.psd
 assets/img/*.ai
 assets/img/*.tiff
 assets/img/raw/
+.env
+.env.local
+.env
+.env.local
+.env.save
+.env.save
+.env
+.env.*
+!.env.example
+*.bak
+*.swp
+.dev-server.js.swp
+
+# Backups locais
+*.pre-amz
+*.pre-indice
+*.pre-final
+*.pre-b2-fix
+*.backup-*
+.env
+
+# Backups locais
+*.pre-amz
+*.pre-indice
+*.pre-final
+*.pre-b2-fix
+*.backup-*

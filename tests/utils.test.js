@@ -93,7 +93,7 @@ describe('sanitizeHtml', () => {
   });
 
   it('substitui tags fora da whitelist por texto', () => {
-    expect(sanitizeHtml('<script>alert(1)</script>')).toBe('alert(1)');
+    expect(sanitizeHtml('<script>alert(1)</script>')).toBe('');
     expect(sanitizeHtml('<iframe src="x"></iframe>')).toBe('');
     expect(sanitizeHtml('<a href="x">link</a>')).toBe('link');
     expect(sanitizeHtml('<img src="x">')).toBe('');
