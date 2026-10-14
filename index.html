@@ -150,127 +150,104 @@
 
       <div class="artist-tabs-bar">
         <nav class="artist-tabs" role="tablist">
-          <button class="artist-tab active" data-artist-tab="todos" role="tab" aria-selected="true">Todos</button>
-          <button class="artist-tab" data-artist-tab="principais" role="tab" aria-selected="false">Principais Canções</button>
-          <button class="artist-tab" data-artist-tab="albuns" role="tab" aria-selected="false">Álbuns</button>
-          <button class="artist-tab" data-artist-tab="feed" role="tab" aria-selected="false">Feed</button>
+          <button class="artist-tab" data-artist-tab="lancamentos" role="tab" aria-selected="false">Lançamentos</button>
+          <button class="artist-tab" data-artist-tab="mais-ouvidos" role="tab" aria-selected="false">Mais ouvidos</button>
+          <button class="artist-tab" data-artist-tab="discografia" role="tab" aria-selected="false">Discografia</button>
         </nav>
       </div>
     </section>
 
-    <!-- ═══════════ LANÇAMENTOS ═══════════ -->
-    <section class="section-amz" aria-labelledby="lancamentosTitle">
+    <!-- ═══════════ LANÇAMENTOS (carrossel) ═══════════ -->
+    <section class="section-amz" id="secao-lancamentos" aria-labelledby="lancamentosTitle">
       <div class="section-spotify-header">
         <h2 class="section-spotify-title" id="lancamentosTitle">Lançamentos</h2>
         <div class="section-amz-nav">
-          <button class="amz-arrow" aria-label="Anterior">‹</button>
-          <button class="amz-arrow" aria-label="Próximo">›</button>
+          <button class="amz-arrow" type="button" aria-label="Anterior" data-carousel-prev>‹</button>
+          <button class="amz-arrow" type="button" aria-label="Próximo" data-carousel-next>›</button>
           <a href="#discografia" class="section-spotify-link">VER TUDO</a>
         </div>
       </div>
       <div class="amz-grid" id="gridLancamentos"></div>
     </section>
 
-    <!-- ═══════════ EM DESTAQUES ═══════════ -->
-    <section class="section-amz" aria-labelledby="destaqueTitle">
-      <div class="section-spotify-header">
-        <h2 class="section-spotify-title" id="destaqueTitle">Em Destaques</h2>
-      </div>
-      <div id="gridDestaque"></div>
-    </section>
-
-    <!-- ═══════════ ÁLBUNS MAIS OUVIDOS ═══════════ -->
-    <section class="section-amz" aria-labelledby="albunsRecentesTitle">
+    <!-- ═══════════ ÁLBUNS MAIS OUVIDOS (carrossel) ═══════════ -->
+    <section class="section-amz" id="secao-mais-ouvidos" aria-labelledby="albunsRecentesTitle">
       <div class="section-spotify-header">
         <h2 class="section-spotify-title" id="albunsRecentesTitle">Álbuns mais ouvidos</h2>
         <div class="section-amz-nav">
-          <button class="amz-arrow" aria-label="Anterior">‹</button>
-          <button class="amz-arrow" aria-label="Próximo">›</button>
+          <button class="amz-arrow" type="button" aria-label="Anterior" data-carousel-prev>‹</button>
+          <button class="amz-arrow" type="button" aria-label="Próximo" data-carousel-next>›</button>
           <a href="#discografia" class="section-spotify-link">VER TUDO</a>
         </div>
       </div>
       <div class="amz-grid" id="gridAlbunsRecentes"></div>
     </section>
 
-    <!-- ═══════════ PRINCIPAIS MÚSICAS ═══════════ -->
-    <section class="section-amz" aria-labelledby="principaisTitle">
-      <div class="section-spotify-header">
-        <h2 class="section-spotify-title" id="principaisTitle">Principais Músicas</h2>
-        <a href="#discografia" class="section-spotify-link">VER TUDO</a>
-      </div>
-      <div class="amz-grid" id="gridPrincipais"></div>
-    </section>
-
-    <!-- ═══════════ DISCOGRAFIA ═══════════ -->
+    <!-- ═══════════ DISCOGRAFIA (GRADE — sem setas, sem carrossel) ═══════════ -->
     <section id="discografia" aria-labelledby="discoTitle" class="section-amz-discografia">
-      <div class="section-spotify-header">
-        <h2 class="section-spotify-title" id="discoTitle">Discografia</h2>
-      </div>
-      <p class="section-sub" id="discoSub">Clique em um álbum para ver as faixas e ouvir.</p>
-
-      <div class="filter-bar" id="filterBar" aria-label="Filtros de discografia">
-        <div class="filter-bar-buttons">
-          <button class="filter-btn active" data-filter="all" aria-selected="true">Tudo</button>
-          <button class="filter-btn" data-filter="album" aria-selected="false">Álbuns</button>
-          <button class="filter-btn" data-filter="ep" aria-selected="false">EPs</button>
+      <div class="amz-discografia-wrap">
+        <div class="section-spotify-header">
+          <h2 class="section-spotify-title" id="discoTitle">Discografia</h2>
         </div>
-        <div class="shop-search-wrap">
-          <input type="search" id="shopSearchInline" class="shop-search" placeholder="Buscar faixa..." aria-label="Buscar faixa">
-        </div>
-      </div>
+        <p class="section-sub" id="discoSub">Explore os álbuns. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads.</p>
 
-      <div id="discographyContainer"></div>
+        <div id="discographyContainer"></div>
 
-      <div class="playlists-panel" id="playlistsPanel" aria-labelledby="playlistsTitle">
-        <div class="playlists-heading">
-          <div>
-            <h3 id="playlistsTitle">Playlists</h3>
-            <p>Seleções criadas para ouvir em sequência.</p>
-          </div>
+        <!-- Playlists escondidas (JS ainda procura os IDs) -->
+        <div id="playlistsPanel" style="display:none" aria-hidden="true">
+          <div id="playlistsGrid"></div>
         </div>
-        <div class="playlists-grid" id="playlistsGrid"></div>
       </div>
     </section>
+
+    <!-- Principais Músicas: escondido (JS ainda procura #gridPrincipais) -->
+    <div id="gridPrincipais" style="display:none" aria-hidden="true"></div>
 
     <!-- ═══════════ SOBRE ═══════════ -->
     <section id="sobre" aria-labelledby="sobreTitle">
-      <h2 class="section-title" id="sobreTitle">Sobre <span class="gold">Joseph</span></h2>
-      <p class="section-sub" id="sobreSub">Entre a poesia concreta e o rap de reflexão.</p>
-      <div class="sobre-grid">
-        <div class="sobre-img" id="sobreImg" aria-hidden="true"></div>
-        <div class="sobre-text" id="sobreText"></div>
+      <div class="amz-discografia-wrap">
+        <h2 class="section-spotify-title" id="sobreTitle">Sobre <span class="gold">Joseph</span></h2>
+        <p class="section-sub" id="sobreSub">Entre a poesia concreta e o rap de reflexão.</p>
+        <div class="sobre-grid">
+          <div class="sobre-img" id="sobreImg" aria-hidden="true"></div>
+          <div class="sobre-text" id="sobreText"></div>
+        </div>
       </div>
     </section>
 
     <!-- ═══════════ FILOSOFIA ═══════════ -->
     <section id="filosofia" aria-labelledby="filosofiaTitle">
-      <h2 class="section-title" id="filosofiaTitle">Filosofia <span class="gold">em rima</span></h2>
-      <p class="section-sub" id="filosofiaSub">Fragmentos de pensamentos que atravessam as letras de Joseph.</p>
-      <div class="frases-grid" id="frasesGrid"></div>
+      <div class="amz-discografia-wrap">
+        <h2 class="section-spotify-title" id="filosofiaTitle">Filosofia <span class="gold">em rima</span></h2>
+        <p class="section-sub" id="filosofiaSub">Fragmentos de pensamentos que atravessam as letras de Joseph.</p>
+        <div class="frases-grid" id="frasesGrid"></div>
+      </div>
     </section>
 
-    <!-- ═══════════ CONTATO ═══════════ -->
+    <!-- ═══════════ CONECTE-SE ═══════════ -->
     <section id="contato" aria-labelledby="contatoTitle">
-      <h2 class="section-title" id="contatoTitle">Conecte-<span class="gold">se</span></h2>
-      <p class="section-sub" id="contatoSub">Receba letras inéditas, reflexões e datas de shows.</p>
-      <div class="contato-grid">
-        <div class="contato-info">
-          <h3 id="contatoHeading">Vamos trocar ideias.</h3>
-          <p id="contatoDesc">Para convites, parcerias ou apenas para compartilhar um verso.</p>
-          <div class="social-links" id="socialLinks"></div>
+      <div class="amz-discografia-wrap">
+        <h2 class="section-spotify-title" id="contatoTitle">Conecte-<span class="gold">se</span></h2>
+        <p class="section-sub" id="contatoSub">Receba letras inéditas, reflexões e datas de shows.</p>
+        <div class="contato-grid">
+          <div class="contato-info">
+            <h3 id="contatoHeading">Vamos trocar ideias.</h3>
+            <p id="contatoDesc">Para convites, parcerias ou apenas para compartilhar um verso.</p>
+            <div class="social-links" id="socialLinks"></div>
+          </div>
+          <form class="newsletter-form" id="newsletterForm">
+            <input type="text" placeholder="Seu nome" required aria-label="Seu nome">
+            <input type="email" placeholder="Seu melhor e-mail" required aria-label="Seu e-mail">
+            <button type="submit" class="btn btn-primary">Quero receber</button>
+          </form>
         </div>
-        <form class="newsletter-form" id="newsletterForm">
-          <input type="text" placeholder="Seu nome" required aria-label="Seu nome">
-          <input type="email" placeholder="Seu melhor e-mail" required aria-label="Seu e-mail">
-          <button type="submit" class="btn btn-primary">Quero receber</button>
-        </form>
       </div>
     </section>
 
   </main>
 
   <footer>
-    <div class="container">
+    <div class="amz-discografia-wrap">
       <p id="footerText">© 2026 Joseph Matthos. Todos os direitos reservados. <span class="gold">✦</span> Feito com poesia e beat.</p>
       <nav class="footer-nav" aria-label="Links legais">
         <a href="termos-uso.html">Termos de Uso</a>

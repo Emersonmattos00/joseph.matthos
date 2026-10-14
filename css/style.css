@@ -592,13 +592,10 @@ header.amz-header {
 }
 
 /* Álbuns retráteis (discografia) */
-.album-block {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid var(--border);
 }
-.album-block:last-child { border-bottom: none; padding-bottom: 0; }
-.album-block .album-header {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -609,11 +606,9 @@ header.amz-header {
   background: transparent;
   border: 1px solid transparent;
 }
-.album-block .album-header:hover {
   background: rgba(212, 175, 55, 0.04);
   border-color: rgba(212, 175, 55, 0.2);
 }
-.album-block.expanded .album-header {
   background: rgba(212, 175, 55, 0.06);
   border-color: rgba(212, 175, 55, 0.3);
   margin-bottom: 1rem;
@@ -664,16 +659,13 @@ header.amz-header {
 }
 .album-toggle { margin-left: auto; }
 .album-actions { display: flex; align-items: center; gap: 0.35rem; margin-left: auto; }
-.album-block.expanded .album-toggle {
   transform: rotate(180deg);
   background: var(--accent);
   color: var(--bg);
 }
 .album-tracks { display: none; padding-top: 0.5rem; }
-.album-block.expanded .album-tracks { display: block; }
 
 /* Faixas da discografia */
-.discography-scroll {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -844,8 +836,8 @@ header.amz-header {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
@@ -1756,5 +1748,1609 @@ section[aria-labelledby="destaqueTitle"] {
 }
 /* Esconde "Em Destaques" — reverter removendo este bloco */
 section[aria-labelledby="destaqueTitle"] {
+  display: none !important;
+}
+
+/* Força discografia em grade — transformação por CSS */
+#discographyContainer {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)) !important;
+  gap: 1.5rem 1.25rem !important;
+}
+
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.6rem !important;
+}
+
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.6rem !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+}
+
+  width: 100% !important;
+  aspect-ratio: 1 !important;
+  height: auto !important;
+  border-radius: 6px !important;
+  background-size: cover !important;
+  background-position: center !important;
+  font-size: 0 !important;
+}
+
+  display: block !important;
+}
+
+  font-size: 0.95rem !important;
+  font-family: var(--font-sans) !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  margin: 0 0 0.25rem !important;
+  line-height: 1.2 !important;
+}
+
+  font-size: 0.8rem !important;
+  color: rgba(255,255,255,0.65) !important;
+}
+
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — GRADE DE CARDS (estilo Amazon Music)
+   ═══════════════════════════════════════════════════════════════════ */
+
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 1.75rem 1.25rem;
+}
+
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.4s ease;
+}
+  transform: scale(1.06);
+}
+  font-family: var(--font-serif);
+  font-size: 3rem;
+  font-weight: 900;
+  color: rgba(212, 175, 55, 0.35);
+}
+
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--amz-cyan);
+  color: #000;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.25s, transform 0.25s, background 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+  opacity: 1;
+  transform: translateY(0);
+}
+  background: #fff;
+  color: #000;
+}
+
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  margin: 0;
+}
+
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.3;
+}
+
+/* ── Modal do álbum ────────────────────────────────────────────── */
+#albumModal .album-modal__header {
+  display: flex;
+  gap: 1.25rem;
+  align-items: flex-end;
+  padding-bottom: 1.5rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+#albumModal .album-modal__cover {
+  width: 140px;
+  height: 140px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-serif);
+  font-size: 3rem;
+  font-weight: 900;
+  color: rgba(212, 175, 55, 0.4);
+  flex-shrink: 0;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+#albumModal .album-modal__info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+#albumModal .album-modal__type {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--amz-cyan);
+  text-transform: uppercase;
+}
+#albumModal .album-modal__title {
+  font-size: 1.8rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #fff;
+  margin: 0;
+  font-family: var(--font-sans);
+}
+#albumModal .album-modal__meta {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.65);
+}
+#albumModal .album-modal__tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 1rem 0.85rem;
+  }
+  #albumModal .album-modal__cover { width: 100px; height: 100px; }
+  #albumModal .album-modal__title { font-size: 1.4rem; }
+}
+@media (max-width: 600px) {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.85rem 0.65rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA = LANÇAMENTOS — mesmo visual exato
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Grid: 8 colunas como Lançamentos */
+  display: grid !important;
+  grid-template-columns: repeat(8, minmax(0, 1fr)) !important;
+  gap: 1.5rem 1rem !important;
+  align-items: start !important;
+}
+
+/* Card: mesmo tamanho dos cards de Lançamentos */
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  cursor: pointer !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  position: relative !important;
+}
+
+/* Capa: quadrada, 100% */
+  position: relative !important;
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
+  margin: 0 !important;
+}
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* Título: uma linha, igual Lançamentos */
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+  white-space: normal !important;
+  font-family: var(--font-sans) !important;
+}
+
+/* Meta: uma linha "Álbum • 2026" */
+  font-size: 0.78rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Play button: esconder totalmente (Lançamentos não mostra) */
+  display: none !important;
+}
+
+  display: none !important;
+}
+
+/* ── Responsivo: 8 → 6 → 4 → 2 colunas ── */
+@media (max-width: 1400px) {
+    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 1200px) {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 1000px) {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 800px) {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 600px) {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 1rem 0.75rem !important;
+  }
+}
+@media (max-width: 400px) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — FORÇA grade de cards igual Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+  display: none !important;
+}
+
+/* Forçar o grid */
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 1.5rem 1rem !important;
+  align-items: start !important;
+}
+
+/* Card individual */
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  cursor: pointer !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+}
+
+/* Capa: forçar quadrado 1:1 e limitar tamanho */
+  position: relative !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  max-height: 200px !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* Título: 1 linha, pequeno */
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+
+/* Meta: 1 linha, pequeno */
+  font-size: 0.78rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Esconder play button */
+#discographyContainer .card-play {
+  display: none !important;
+}
+
+/* ── Anular o CSS antigo da discografia ── */
+#discographyContainer .discography-track-card {
+  all: unset !important;
+  display: none !important;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important;
+    gap: 1rem 0.75rem !important;
+  }
+}
+@media (max-width: 600px) {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — força grade igual Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 1.5rem 1rem !important;
+  align-items: start !important;
+}
+
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  cursor: pointer !important;
+  min-width: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+
+  position: relative !important;
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
+}
+
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+}
+
+  font-size: 0.78rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Esconder qualquer resquício da lista antiga */
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — grade idêntica a Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+#discographyContainer {
+  padding: 0;
+}
+
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1.5rem 1rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#discographyContainer .album-card__cover .card-initials {
+  font-family: var(--font-serif);
+  font-size: 3rem;
+  font-weight: 900;
+  color: rgba(212, 175, 55, 0.35);
+}
+
+#discographyContainer .album-card__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Esconder qualquer resquício de .album-block se ainda estiver no DOM */
+#discographyContainer .album-block {
+  display: none !important;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem 0.75rem;
+  }
+  #discographyContainer .album-card__title { font-size: 0.82rem; }
+  #discographyContainer .album-card__meta { font-size: 0.7rem; }
+}
+@media (max-width: 600px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Filtros da discografia — compactos */
+#filterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+#filterBar .filter-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+#filterBar .filter-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.65);
+  padding: 0.4rem 0.9rem;
+  border-radius: 30px;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da;
+  color: #000;
+  border-color: #25d1da;
+}
+#filterBar .shop-search {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 30px;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  min-width: 200px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — largura total, igual Lançamentos
+   ═══════════════════════════════════════════════════════════════════ */
+
+.amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* Título igual Lançamentos */
+#discografia .section-spotify-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.3rem;
+  letter-spacing: -0.01em;
+}
+
+#discografia .section-sub {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.55);
+  margin: 0 0 1.5rem;
+  max-width: 700px;
+}
+
+/* Filtros compactos */
+#filterBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+#filterBar .filter-bar-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+#filterBar .filter-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.65);
+  padding: 0.4rem 0.9rem;
+  border-radius: 30px;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.15s;
+}
+#filterBar .filter-btn:hover {
+  border-color: #25d1da;
+  color: #25d1da;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da;
+  color: #000;
+  border-color: #25d1da;
+}
+#filterBar .shop-search {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 30px;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  outline: none;
+  min-width: 200px;
+}
+
+/* Grid de cards — MESMA largura dos Lançamentos */
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1.5rem 1rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#discographyContainer .album-card__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Esconder resquícios da lista antiga */
+#discographyContainer .album-block {
+  display: none !important;
+}
+
+/* Playlists na mesma largura */
+#discografia .playlists-panel {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  .amz-discografia-wrap { padding: 0 1.25rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 1rem 0.75rem;
+  }
+}
+@media (max-width: 600px) {
+  .amz-discografia-wrap { padding: 0 1rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — FORÇA TOTAL (v2)
+   Remove interferência de CSS antigo com !important
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Wrapper — força bloco */
+#discografia .amz-discografia-wrap {
+  display: block !important;
+  max-width: 1600px !important;
+  margin: 0 auto !important;
+  padding: 0 2rem !important;
+}
+
+/* Container do JS — força grid */
+#discographyContainer {
+  display: block !important;
+  width: 100% !important;
+}
+
+/* Grid — força 8 colunas */
+#discographyContainer > .album-grid,
+#discographyContainer .album-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 1.5rem 1rem !important;
+  align-items: start !important;
+  width: 100% !important;
+}
+
+/* Card — força flex column */
+#discographyContainer .album-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+  cursor: pointer !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Capa */
+#discographyContainer .album-card__cover {
+  position: relative !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  max-height: none !important;
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#discographyContainer .album-card__cover img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Título */
+#discographyContainer .album-card__title {
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+}
+
+/* Meta */
+#discographyContainer .album-card__meta {
+  font-size: 0.78rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Anular QUALQUER CSS antigo que sobrou */
+#discographyContainer .album-block,
+#discographyContainer .album-block *,
+#discographyContainer .discography-scroll,
+#discographyContainer .discography-scroll * {
+  all: unset !important;
+  display: none !important;
+}
+
+/* ── Forçar 8 colunas em telas grandes ── */
+@media (min-width: 1400px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 1200px) and (max-width: 1399px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 1000px) and (max-width: 1199px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 800px) and (max-width: 999px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  }
+}
+@media (min-width: 600px) and (max-width: 799px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 599px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 1rem 0.75rem !important;
+  }
+}
+
+/* ── Filtros compactos ── */
+#filterBar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 1rem !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 1.5rem !important;
+  padding-bottom: 1rem !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+#filterBar .filter-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: rgba(255, 255, 255, 0.65) !important;
+  padding: 0.4rem 0.9rem !important;
+  border-radius: 30px !important;
+  font-size: 0.7rem !important;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+#filterBar .filter-btn.active {
+  background: #25d1da !important;
+  color: #000 !important;
+  border-color: #25d1da !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARROSSEL — Lançamentos e Álbuns mais ouvidos (v2 - CORRIGIDO)
+   ═══════════════════════════════════════════════════════════════════ */
+
+.amz-carousel {
+  position: relative;
+  width: 100%;
+}
+
+/* Track horizontal */
+.amz-carousel-track {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;      /* ← CORREÇÃO: não estica verticalmente */
+  gap: 1rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  scroll-snap-type: x proximity;
+  padding: 0.25rem 0 1rem;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.amz-carousel-track::-webkit-scrollbar {
+  display: none;
+}
+
+/* Cada card: largura fixa, altura automática */
+.amz-carousel-track > * {
+  flex: 0 0 auto !important;
+  width: 160px !important;
+  max-width: 160px !important;
+  min-width: 160px !important;
+  height: auto !important;         /* ← CORREÇÃO: altura automática */
+  max-height: none !important;
+  scroll-snap-align: start;
+}
+
+/* Capa do card: forçar quadrado 1:1 */
+.amz-carousel-track .spotify-card-cover,
+.amz-carousel-track .album-card__cover {
+  width: 100% !important;
+  aspect-ratio: 1 / 1 !important;
+  height: auto !important;
+  max-height: 160px !important;    /* ← CORREÇÃO: no máximo a largura do card */
+  border-radius: 6px !important;
+  overflow: hidden !important;
+  position: relative !important;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  display: block !important;
+}
+
+/* Imagem dentro: cobrir o quadrado */
+.amz-carousel-track .spotify-card-cover img,
+.amz-carousel-track .album-card__cover img {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block !important;
+}
+
+/* Texto abaixo do card: sem esticar */
+.amz-carousel-track .spotify-card-title,
+.amz-carousel-track .album-card__title {
+  font-size: 0.88rem !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  line-height: 1.3 !important;
+  margin: 0.6rem 0 0.15rem !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 1 !important;
+  -webkit-box-orient: vertical !important;
+}
+
+.amz-carousel-track .spotify-card-sub,
+.amz-carousel-track .album-card__meta {
+  font-size: 0.75rem !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.3 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* Remover altura mínima herdada do .spotify-card */
+.amz-carousel-track .spotify-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  height: auto !important;
+  max-height: none !important;
+}
+
+/* Setas */
+.amz-arrow {
+  transition: opacity 0.2s, background 0.2s;
+}
+.amz-arrow:disabled,
+.amz-arrow.is-disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Botão "Ver tudo" */
+.section-spotify-link {
+  cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CONECTE-SE — redesign
+   ═══════════════════════════════════════════════════════════════════ */
+
+#contato {
+  padding: 4rem 0 5rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: 3rem;
+}
+
+#contato .amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* Título e subtítulo alinhados com o resto */
+#contato .section-spotify-title {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+  font-family: var(--font-sans);
+}
+
+#contato .section-spotify-title .gold {
+  color: var(--accent);
+}
+
+#contato .section-sub {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin: 0 0 2.5rem;
+  max-width: 640px;
+  line-height: 1.5;
+}
+
+/* Grid principal: info à esquerda, form à direita */
+#contato .contato-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  align-items: start;
+}
+
+/* Info à esquerda */
+#contato .contato-info h3 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.75rem;
+  letter-spacing: -0.01em;
+  font-family: var(--font-sans);
+}
+
+#contato .contato-info p {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.65);
+  line-height: 1.6;
+  margin: 0 0 2rem;
+  max-width: 480px;
+}
+
+/* Ícones — cards maiores, com fundo */
+#contato .social-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+}
+
+#contato .social-links a,
+#contato .ad-social-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 1.4rem;
+  text-decoration: none;
+  transition: transform 0.25s ease, background 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  cursor: pointer;
+}
+
+#contato .social-links a:hover,
+#contato .ad-social-icon:hover {
+  transform: translateY(-4px);
+  color: #000;
+  border-color: transparent;
+}
+
+/* Cores por rede */
+#contato .ad-social-icon.spotify:hover  { background: #1DB954; box-shadow: 0 8px 24px rgba(29,185,84,0.4); }
+#contato .ad-social-icon.youtube:hover  { background: #FF0000; box-shadow: 0 8px 24px rgba(255,0,0,0.4); }
+#contato .ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 8px 24px rgba(255,153,0,0.4); }
+#contato .ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 8px 24px rgba(24,119,242,0.4); }
+#contato .ad-social-icon.tiktok:hover   { background: #000; box-shadow: 0 8px 24px rgba(0,242,234,0.4); border-color: #00f2ea; }
+#contato .ad-social-icon.apple:hover    { background: linear-gradient(135deg, #FA243C, #FF5E7D); box-shadow: 0 8px 24px rgba(250,36,60,0.4); }
+#contato .ad-social-icon.x:hover        { background: #000; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
+#contato .ad-social-icon.instagram:hover{ background: linear-gradient(135deg, #833AB4, #FD1D1D, #FCB045); box-shadow: 0 8px 24px rgba(253,29,29,0.4); }
+#contato .ad-social-icon.whatsapp:hover { background: #25D366; box-shadow: 0 8px 24px rgba(37,211,102,0.4); }
+#contato .ad-social-icon.link:hover,
+#contato .social-links a:not([class*="ad-social-icon"]):hover {
+  background: var(--accent);
+  box-shadow: 0 8px 24px rgba(212,175,55,0.4);
+  color: #0b0a0c;
+}
+
+/* Tooltip do label */
+#contato .ad-social-icon::before {
+  content: attr(data-label);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #131216;
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+}
+
+#contato .ad-social-icon:hover::before {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Formulário à direita */
+#contato .newsletter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 2rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+}
+
+#contato .newsletter-form::before {
+  content: "Receba novidades";
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+}
+
+#contato .newsletter-form input {
+  width: 100%;
+  height: 48px;
+  padding: 0 1.1rem;
+  font-size: 0.95rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+#contato .newsletter-form input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+#contato .newsletter-form input:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.15);
+}
+
+#contato .newsletter-form button {
+  width: 100%;
+  height: 48px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--accent);
+  color: #0b0a0c;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+}
+
+#contato .newsletter-form button:hover {
+  background: #e5c14a;
+  transform: translateY(-1px);
+}
+
+/* ── Responsivo ── */
+@media (max-width: 900px) {
+  #contato .amz-discografia-wrap { padding: 0 1.25rem; }
+  #contato .contato-grid {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+  #contato .social-links a,
+  #contato .ad-social-icon {
+    width: 46px;
+    height: 46px;
+    font-size: 1.2rem;
+  }
+}
+
+@media (max-width: 600px) {
+  #contato { padding: 3rem 0 4rem; }
+  #contato .section-spotify-title { font-size: 1.4rem; }
+  #contato .contato-info h3 { font-size: 1.25rem; }
+  #contato .newsletter-form { padding: 1.5rem; }
+  #contato .social-links a,
+  #contato .ad-social-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 1.1rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   CONECTE-SE — ícones circulares com fundo escuro (v2)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Container dos ícones */
+#contato .social-links {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 0.85rem !important;
+  align-items: center !important;
+}
+
+/* Cada ícone: círculo cinza-escuro sólido */
+#contato .social-links a,
+#contato .ad-social-icon,
+#socialLinks a {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 52px !important;
+  height: 52px !important;
+  border-radius: 50% !important;
+  background: #2a2a2a !important;
+  background-color: #2a2a2a !important;
+  border: 0 !important;
+  color: #ffffff !important;
+  font-size: 1.4rem !important;
+  text-decoration: none !important;
+  transition: transform 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease !important;
+  cursor: pointer !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  opacity: 1 !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+}
+
+/* SVG / ícone dentro do círculo */
+#contato .social-links a svg,
+#contato .ad-social-icon svg,
+#socialLinks a svg {
+  width: 22px !important;
+  height: 22px !important;
+  fill: #ffffff !important;
+  color: #ffffff !important;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#contato .social-links a i,
+#contato .ad-social-icon i,
+#socialLinks a i {
+  font-size: 1.35rem !important;
+  line-height: 1 !important;
+  color: #ffffff !important;
+  display: block !important;
+}
+
+/* Hover: mantém o fundo (muda só a cor) */
+#contato .social-links a:hover,
+#contato .ad-social-icon:hover,
+#socialLinks a:hover {
+  transform: translateY(-4px) !important;
+  background: #3a3a3a !important;
+  background-color: #3a3a3a !important;
+  border: 0 !important;
+}
+
+/* Cores específicas por rede no hover */
+#contato .ad-social-icon.spotify:hover,
+#socialLinks a.spotify:hover {
+  background-color: #1DB954 !important;
+  box-shadow: 0 8px 24px rgba(29, 185, 84, 0.4) !important;
+}
+#contato .ad-social-icon.youtube:hover,
+#socialLinks a.youtube:hover {
+  background-color: #FF0000 !important;
+  box-shadow: 0 8px 24px rgba(255, 0, 0, 0.4) !important;
+}
+#contato .ad-social-icon.amazon:hover,
+#socialLinks a.amazon:hover {
+  background-color: #FF9900 !important;
+  box-shadow: 0 8px 24px rgba(255, 153, 0, 0.4) !important;
+}
+#contato .ad-social-icon.facebook:hover,
+#socialLinks a.facebook:hover {
+  background-color: #1877F2 !important;
+  box-shadow: 0 8px 24px rgba(24, 119, 242, 0.4) !important;
+}
+#contato .ad-social-icon.tiktok:hover,
+#socialLinks a.tiktok:hover {
+  background-color: #000000 !important;
+  box-shadow: 0 8px 24px rgba(0, 242, 234, 0.4) !important;
+}
+#contato .ad-social-icon.apple:hover,
+#socialLinks a.apple:hover {
+  background-color: #FA243C !important;
+  box-shadow: 0 8px 24px rgba(250, 36, 60, 0.4) !important;
+}
+#contato .ad-social-icon.x:hover,
+#socialLinks a.x:hover {
+  background-color: #000000 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+}
+#contato .ad-social-icon.instagram:hover,
+#socialLinks a.instagram:hover {
+  background-color: #E1306C !important;
+  box-shadow: 0 8px 24px rgba(225, 48, 108, 0.4) !important;
+}
+#contato .ad-social-icon.whatsapp:hover,
+#socialLinks a.whatsapp:hover {
+  background-color: #25D366 !important;
+  box-shadow: 0 8px 24px rgba(37, 211, 102, 0.4) !important;
+}
+#contato .ad-social-icon.link:hover,
+#socialLinks a.link:hover {
+  background-color: #d4af37 !important;
+  box-shadow: 0 8px 24px rgba(212, 175, 55, 0.4) !important;
+}
+
+/* Remover tooltip ::before/::after se estiver poluindo */
+#contato .ad-social-icon::before,
+#contato .ad-social-icon::after,
+#socialLinks a::before,
+#socialLinks a::after {
+  display: none !important;
+  content: none !important;
+}
+
+/* ── Responsivo ── */
+@media (max-width: 900px) {
+  #contato .social-links a,
+  #contato .ad-social-icon,
+  #socialLinks a {
+    width: 46px !important;
+    height: 46px !important;
+    font-size: 1.2rem !important;
+  }
+  #contato .social-links a svg,
+  #socialLinks a svg {
+    width: 20px !important;
+    height: 20px !important;
+  }
+}
+
+@media (max-width: 600px) {
+  #contato .social-links a,
+  #contato .ad-social-icon,
+  #socialLinks a {
+    width: 42px !important;
+    height: 42px !important;
+    font-size: 1.1rem !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   DISCOGRAFIA — GRADE (sem carrossel)
+   ═══════════════════════════════════════════════════════════════════ */
+
+#discografia .amz-discografia-wrap {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+#discographyContainer {
+  display: block;
+  width: 100%;
+}
+
+#discographyContainer .album-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 2rem 1.25rem;
+  align-items: start;
+}
+
+#discographyContainer .album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  cursor: pointer;
+  min-width: 0;
+  transition: transform 0.2s;
+}
+#discographyContainer .album-card:hover {
+  transform: translateY(-3px);
+}
+
+#discographyContainer .album-card__cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #2a252e, #0d0b0e);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+#discographyContainer .album-card__cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.4s ease;
+}
+#discographyContainer .album-card:hover .album-card__cover img {
+  transform: scale(1.04);
+}
+
+#discographyContainer .album-card__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+#discographyContainer .album-card__meta {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.55);
+  line-height: 1.3;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Se o JS ainda gerar .amz-carousel na Discografia, anula */
+#discografia .amz-carousel-track {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)) !important;
+  gap: 2rem 1.25rem !important;
+  overflow: visible !important;
+  flex-wrap: wrap !important;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  #discografia .amz-discografia-wrap { padding: 0 1.25rem; }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 1.25rem 0.9rem;
+  }
+  #discographyContainer .album-card__title { font-size: 0.85rem; }
+  #discographyContainer .album-card__meta { font-size: 0.72rem; }
+}
+
+@media (max-width: 600px) {
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem 0.75rem;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   BANNER DO ARTISTA — sem imagem de fundo
+   ═══════════════════════════════════════════════════════════════════ */
+
+#artistBanner,
+.artist-banner {
+  background-image: transparent !important;
+  background: transparent !important;
+}
+
+/* Opcional: remove o gradiente escuro se não quiser */
+#artistBanner.artist-banner-overlay,
+.artist-banner-overlay {
   display: none !important;
 }
