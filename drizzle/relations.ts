@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, refreshTokens, orders, playbackEvents, tracks, orderItems, albums, artists, subscriptions, plans, rentalProducts, rentals, passwordResetTokens, emailVerificationTokens } from "./schema";
+import { users, refreshTokens, orders, playbackEvents, tracks, orderItems, albums, artists, subscriptions, plans, rentalProducts, passwordResetTokens, rentals, emailVerificationTokens } from "./schema";
 
 export const refreshTokensRelations = relations(refreshTokens, ({one}) => ({
 	user: one(users, {
@@ -13,8 +13,8 @@ export const usersRelations = relations(users, ({many}) => ({
 	orders: many(orders),
 	playbackEvents: many(playbackEvents),
 	subscriptions: many(subscriptions),
-	rentals: many(rentals),
 	passwordResetTokens: many(passwordResetTokens),
+	rentals: many(rentals),
 	emailVerificationTokens: many(emailVerificationTokens),
 }));
 
@@ -100,6 +100,13 @@ export const rentalProductsRelations = relations(rentalProducts, ({one}) => ({
 	}),
 }));
 
+export const passwordResetTokensRelations = relations(passwordResetTokens, ({one}) => ({
+	user: one(users, {
+		fields: [passwordResetTokens.userId],
+		references: [users.id]
+	}),
+}));
+
 export const rentalsRelations = relations(rentals, ({one}) => ({
 	user: one(users, {
 		fields: [rentals.userId],
@@ -116,13 +123,6 @@ export const rentalsRelations = relations(rentals, ({one}) => ({
 	order: one(orders, {
 		fields: [rentals.orderId],
 		references: [orders.id]
-	}),
-}));
-
-export const passwordResetTokensRelations = relations(passwordResetTokens, ({one}) => ({
-	user: one(users, {
-		fields: [passwordResetTokens.userId],
-		references: [users.id]
 	}),
 }));
 

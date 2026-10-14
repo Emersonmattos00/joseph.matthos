@@ -57,8 +57,18 @@ module.exports = async (req, res) => {
         durationSeconds: track.durationSeconds,
       },
     });
-  } catch (error) {
-    console.error('Erro no stream:', error);
-    return res.status(500).json({ error: 'Erro interno do servidor' });
+    } catch (error) {
+    console.error('[stream] erro detalhado:', error);
+    const isDev = process.env.NODE_ENV !== 'production';
+    return res.status(500).json({
+      error: 'Erro interno do servidor',
+      ...(isDev && {
+        message: error.message,
+        name: error.name,
+        stack: error.stack?.split('\n').slice(0, 5),
+      }),
+    });
   }
 };
+
+// Não esqueça do `};` final!

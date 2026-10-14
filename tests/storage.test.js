@@ -1,8 +1,33 @@
+// @vitest-environment node
+
+
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const storage = require('../api/_storage.js');
+
+function setB2Env({
+  region = 'us-east-005',
+  keyId = 'key-id',
+  appKey = 'application-key',
+  mediaBucket = 'media-images',
+  endpoint = 'https://s3.us-east-005.backblazeb2.com',
+  imagePublicUrl = 'https://f005.backblazeb2.com/file/media-images'
+} = {}) {
+  vi.stubEnv('B2_MEDIA_REGION', region);
+  vi.stubEnv('B2_KEY_ID', keyId);
+  vi.stubEnv('B2_APPLICATION_KEY', appKey);
+  vi.stubEnv('B2_MEDIA_BUCKET', mediaBucket);
+  vi.stubEnv('B2_BUCKET_SITE_ASSETS', '');
+  vi.stubEnv('B2_BUCKET_AUDIO_PREVIEW', '');
+  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');
+  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');
+  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');   // ← ADICIONE ESTA LINHA
+  vi.stubEnv('B2_MEDIA_ENDPOINT', endpoint);
+  vi.stubEnv('B2_IMAGE_PUBLIC_URL', imagePublicUrl);
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -10,7 +35,7 @@ afterEach(() => {
 
 describe('B2 storage configuration', () => {
   it('requires B2 credentials and region', () => {
-    vi.stubEnv('B2_REGION', '');
+    vi.stubEnv('B2_MEDIA_REGION', '');
     vi.stubEnv('B2_KEY_ID', '');
     vi.stubEnv('B2_APPLICATION_KEY', '');
 
@@ -18,34 +43,43 @@ describe('B2 storage configuration', () => {
   });
 
   it('uses the regional B2 endpoints and configured bucket names', () => {
-    vi.stubEnv('B2_REGION', 'us-east-005');
-    vi.stubEnv('B2_KEY_ID', 'key-id');
-    vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
-    vi.stubEnv('B2_BUCKET_SITE_ASSETS', 'media-images');
+    vi.stubEnv('B2_BUCKET_SITE_ASSETS', 'assets/img');
+    setB2Env({
+      region: 'us-east-005',
+      keyId: 'key-id',
+      appKey: 'application-key',
+      mediaBucket: 'media-images'
+    });
 
     expect(storage.getStorageConfig()).toMatchObject({
       endpoint: 'https://s3.us-east-005.backblazeb2.com',
       publicBaseUrl: 'https://f005.backblazeb2.com/file'
     });
     expect(storage.getBucketForKind('image')).toBe('media-images');
-    expect(storage.getBucketForKind('audio-preview')).toBe('audio-preview');
+    expect(storage.getBucketForKind('audio-preview')).toBe('media-images');
     expect(storage.getBucketForKind('audio-full')).toBe('audio-premium');
   });
 
-  it('encodes public object paths without flattening folders', () => {
-    vi.stubEnv('B2_REGION', 'us-east-005');
-    vi.stubEnv('B2_KEY_ID', 'key-id');
-    vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
+  it('uses the configured image URL and preserves nested object paths', () => {
+    setB2Env({
+      region: 'us-east-005',
+      keyId: 'key-id',
+      appKey: 'application-key',
+      mediaBucket: 'josephmatthos',
+      imagePublicUrl: 'https://f005.backblazeb2.com/file/josephmatthos'
+    });
 
-    expect(storage.getPublicUrl('site-assets', 'images/Capa nova.jpg')).toBe(
-      'https://f005.backblazeb2.com/file/site-assets/images/Capa%20nova.jpg'
+    expect(storage.getPublicUrl('josephmatthos', 'images/Capa nova.jpg')).toBe(
+      'https://f005.backblazeb2.com/file/josephmatthos/images/Capa%20nova.jpg'
     );
   });
 
   it('creates a signed PUT URL without exposing credentials', async () => {
-    vi.stubEnv('B2_REGION', 'us-east-005');
-    vi.stubEnv('B2_KEY_ID', 'key-id');
-    vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
+    setB2Env({
+      region: 'us-east-005',
+      keyId: 'key-id',
+      appKey: 'application-key'
+    });
 
     const { uploadUrl } = await storage.createSignedUploadUrl(
       'audio-preview',
@@ -57,5 +91,24 @@ describe('B2 storage configuration', () => {
     expect(uploadUrl).toContain('X-Amz-Algorithm=AWS4-HMAC-SHA256');
     expect(uploadUrl).toContain('X-Amz-Credential=key-id%2F');
     expect(uploadUrl).not.toContain('application-key');
+  });
+
+  it('continues to support the legacy B2 variable names', () => {
+    vi.stubEnv('B2_MEDIA_REGION', '');
+    vi.stubEnv('B2_MEDIA_ENDPOINT', '');
+    vi.stubEnv('B2_MEDIA_BUCKET', '');
+    vi.stubEnv('B2_IMAGE_PUBLIC_URL', '');
+    vi.stubEnv('B2_REGION', 'us-east-005');
+    vi.stubEnv('B2_ENDPOINT', 'https://s3.us-east-005.backblazeb2.com');
+    vi.stubEnv('B2_PUBLIC_BASE_URL', 'https://f005.backblazeb2.com/file');
+    vi.stubEnv('B2_KEY_ID', 'key-id');
+    vi.stubEnv('B2_APPLICATION_KEY', 'application-key');
+    vi.stubEnv('B2_BUCKET_SITE_ASSETS', 'site-assets');
+
+    expect(storage.getStorageConfig()).toMatchObject({
+      endpoint: 'https://s3.us-east-005.backblazeb2.com',
+      publicBaseUrl: 'https://f005.backblazeb2.com/file'
+    });
+    expect(storage.getBucketForKind('image')).toBe('site-assets');
   });
 });

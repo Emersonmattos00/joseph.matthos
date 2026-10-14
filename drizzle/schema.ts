@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, text, integer, index, uniqueIndex, uuid, jsonb, foreignKey, char, boolean, bigserial, date, pgEnum } from "drizzle-orm/pg-core"
+import { pgTable, varchar, timestamp, text, integer, index, uniqueIndex, uuid, jsonb, foreignKey, char, boolean, bigserial, pgPolicy, date, unique, inet, pgEnum } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const orderStatus = pgEnum("OrderStatus", ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'REFUNDED'])
@@ -139,6 +139,8 @@ export const tracks = pgTable("tracks", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
 	trackNumber: integer("track_number"),
+	fullPath: text("full_path"),
+	previewPath: text("preview_path"),
 }, (table) => [
 	index("tracks_album_id_idx").using("btree", table.albumId.asc().nullsLast().op("uuid_ops")),
 	index("tracks_album_id_track_number_idx").using("btree", table.albumId.asc().nullsLast().op("int4_ops"), table.trackNumber.asc().nullsLast().op("uuid_ops")),
@@ -155,6 +157,20 @@ export const tracks = pgTable("tracks", {
 			foreignColumns: [artists.id],
 			name: "tracks_artist_id_fkey"
 		}).onUpdate("cascade").onDelete("restrict"),
+	pgPolicy("tracks_no_write", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
+]);
+
+export const users = pgTable("users", {
+	id: uuid().primaryKey().notNull(),
+	email: text().notNull(),
+	passwordHash: text("password_hash"),
+	name: text().notNull(),
+	role: userRole().default('CUSTOMER').notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+	emailVerified: timestamp("email_verified", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	uniqueIndex("users_email_key").using("btree", table.email.asc().nullsLast().op("text_ops")),
 ]);
 
 export const subscriptions = pgTable("subscriptions", {
@@ -171,6 +187,9 @@ export const subscriptions = pgTable("subscriptions", {
 	initPoint: text("init_point"),
 	payerEmail: text("payer_email"),
 }, (table) => [
+	index("idx_subscriptions_status").using("btree", table.status.asc().nullsLast().op("enum_ops")),
+	index("idx_subscriptions_user").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	index("idx_subscriptions_user_status").using("btree", table.userId.asc().nullsLast().op("enum_ops"), table.status.asc().nullsLast().op("enum_ops")),
 	uniqueIndex("subscriptions_external_subscription_id_key").using("btree", table.externalSubscriptionId.asc().nullsLast().op("text_ops")),
 	index("subscriptions_user_id_idx").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
@@ -183,19 +202,7 @@ export const subscriptions = pgTable("subscriptions", {
 			foreignColumns: [plans.id],
 			name: "subscriptions_plan_id_fkey"
 		}).onUpdate("cascade").onDelete("restrict"),
-]);
-
-export const users = pgTable("users", {
-	id: uuid().primaryKey().notNull(),
-	email: text().notNull(),
-	passwordHash: text("password_hash"),
-	name: text().notNull(),
-	role: userRole().default('CUSTOMER').notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull(),
-	emailVerified: timestamp("email_verified", { withTimezone: true, mode: 'string' }),
-}, (table) => [
-	uniqueIndex("users_email_key").using("btree", table.email.asc().nullsLast().op("text_ops")),
+	pgPolicy("subscriptions_no_write", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
 ]);
 
 export const albums = pgTable("albums", {
@@ -217,6 +224,7 @@ export const albums = pgTable("albums", {
 			foreignColumns: [artists.id],
 			name: "albums_artist_id_fkey"
 		}).onUpdate("cascade").onDelete("restrict"),
+	pgPolicy("albums_no_write", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
 ]);
 
 export const artists = pgTable("artists", {
@@ -277,6 +285,23 @@ export const rentalProducts = pgTable("rental_products", {
 		}).onUpdate("cascade").onDelete("cascade"),
 ]);
 
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+	id: uuid().primaryKey().notNull(),
+	userId: uuid("user_id").notNull(),
+	tokenHash: text("token_hash").notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	usedAt: timestamp("used_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
+}, (table) => [
+	uniqueIndex("password_reset_tokens_token_hash_key").using("btree", table.tokenHash.asc().nullsLast().op("text_ops")),
+	index("password_reset_tokens_user_id_idx").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [users.id],
+			name: "password_reset_tokens_user_id_fkey"
+		}).onUpdate("cascade").onDelete("cascade"),
+]);
+
 export const rentals = pgTable("rentals", {
 	id: uuid().primaryKey().notNull(),
 	rentalCode: text("rental_code").notNull(),
@@ -289,6 +314,7 @@ export const rentals = pgTable("rentals", {
 	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
 }, (table) => [
+	index("idx_rentals_user_track").using("btree", table.userId.asc().nullsLast().op("uuid_ops"), table.trackId.asc().nullsLast().op("uuid_ops")),
 	index("rentals_album_id_idx").using("btree", table.albumId.asc().nullsLast().op("uuid_ops")),
 	uniqueIndex("rentals_rental_code_key").using("btree", table.rentalCode.asc().nullsLast().op("text_ops")),
 	index("rentals_track_id_idx").using("btree", table.trackId.asc().nullsLast().op("uuid_ops")),
@@ -313,23 +339,7 @@ export const rentals = pgTable("rentals", {
 			foreignColumns: [orders.id],
 			name: "rentals_order_id_fkey"
 		}).onUpdate("cascade").onDelete("set null"),
-]);
-
-export const passwordResetTokens = pgTable("password_reset_tokens", {
-	id: uuid().primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
-	tokenHash: text("token_hash").notNull(),
-	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
-	usedAt: timestamp("used_at", { withTimezone: true, mode: 'string' }),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
-}, (table) => [
-	uniqueIndex("password_reset_tokens_token_hash_key").using("btree", table.tokenHash.asc().nullsLast().op("text_ops")),
-	index("password_reset_tokens_user_id_idx").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.userId],
-			foreignColumns: [users.id],
-			name: "password_reset_tokens_user_id_fkey"
-		}).onUpdate("cascade").onDelete("cascade"),
+	pgPolicy("rentals_no_write", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
 ]);
 
 export const emailVerificationTokens = pgTable("email_verification_tokens", {
@@ -347,4 +357,55 @@ export const emailVerificationTokens = pgTable("email_verification_tokens", {
 			foreignColumns: [users.id],
 			name: "email_verification_tokens_user_id_fkey"
 		}).onUpdate("cascade").onDelete("cascade"),
+]);
+
+export const paymentsEvents = pgTable("payments_events", {
+	id: bigserial({ mode: "bigint" }).primaryKey().notNull(),
+	provider: text().default('mercadopago').notNull(),
+	providerEvent: text("provider_event").notNull(),
+	eventType: text("event_type").notNull(),
+	externalId: text("external_id"),
+	payload: jsonb().notNull(),
+	processedAt: timestamp("processed_at", { withTimezone: true, mode: 'string' }),
+	failureReason: text("failure_reason"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_events_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
+	index("idx_events_external").using("btree", table.externalId.asc().nullsLast().op("text_ops")),
+	index("idx_events_unprocessed").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(processed_at IS NULL)`),
+	unique("payments_events_provider_provider_event_key").on(table.providerEvent, table.provider),
+	pgPolicy("events_no_access", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
+]);
+
+export const adminAudit = pgTable("admin_audit", {
+	id: bigserial({ mode: "bigint" }).primaryKey().notNull(),
+	actor: text(),
+	action: text().notNull(),
+	target: text(),
+	metadata: jsonb(),
+	ip: inet(),
+	userAgent: text("user_agent"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_admin_audit_action").using("btree", table.action.asc().nullsLast().op("text_ops")),
+	index("idx_admin_audit_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
+	pgPolicy("admin_audit_no_access", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
+]);
+
+export const authAuditLog = pgTable("auth_audit_log", {
+	id: bigserial({ mode: "bigint" }).primaryKey().notNull(),
+	event: text().notNull(),
+	emailHash: text("email_hash"),
+	userId: uuid("user_id"),
+	ip: inet(),
+	userAgent: text("user_agent"),
+	success: boolean().notNull(),
+	reason: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_auth_audit_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
+	index("idx_auth_audit_email_hash").using("btree", table.emailHash.asc().nullsLast().op("text_ops")),
+	index("idx_auth_audit_event").using("btree", table.event.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
+	index("idx_auth_audit_ip").using("btree", table.ip.asc().nullsLast().op("inet_ops")),
+	pgPolicy("auth_audit_no_access", { as: "permissive", for: "all", to: ["public"], using: sql`false`, withCheck: sql`false`  }),
 ]);

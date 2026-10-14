@@ -154,6 +154,16 @@ const VALID_ACTIONS = new Set([
 
 const VALID_ALBUM_TYPES = new Set(['album', 'ep', 'single']);
 
+// ⚠️ DEV ONLY: bypass do rate limit (só ativa com DISABLE_RATE_LIMIT=true e fora de produção)
+const DEV_NO_RATE_LIMIT =
+  process.env.NODE_ENV !== 'production' &&
+  process.env.DISABLE_RATE_LIMIT === 'true';
+
+// ⚠️ DEV ONLY: bypass do CSRF (só ativa com DISABLE_CSRF=true e fora de produção)
+const DEV_NO_CSRF =
+  process.env.NODE_ENV !== 'production' &&
+  process.env.DISABLE_CSRF === 'true';
+
 // ─────────────────────────────────────────────────────────────
 // Segredo da sessão — validação
 // ─────────────────────────────────────────────────────────────
@@ -193,8 +203,8 @@ module.exports = async function handler(req, res) {
 
   const method = (req.method || 'GET').toUpperCase();
 
-  // ── CSRF: Origin check em métodos mutantes
-  if (method !== 'GET' && method !== 'HEAD') {
+  // ── CSRF: Origin check em métodos mutantes (bypass em dev via DEV_NO_CSRF)
+  if (method !== 'GET' && method !== 'HEAD' && !DEV_NO_CSRF) {
     if (!checkOrigin(req)) {
       console.warn('[admin] Origin rejeitada:', {
         action,
@@ -309,13 +319,16 @@ async function handleLogin(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
 
-  // ⚠️ failClosed: true → se o KV cair, bloqueia login por segurança.
-  const rate = await checkAndIncrement(
-    `admin-login:${ip}`,
-    MAX_LOGIN_ATTEMPTS,
-    LOGIN_WINDOW_MS,
-    { failClosed: true }
-  );
+  // ⚠️ Em dev, se DISABLE_RATE_LIMIT=true, ignora o rate limit.
+  const rate = DEV_NO_RATE_LIMIT
+    ? { limited: false, retryAfter: 0 }
+    : await checkAndIncrement(
+        `admin-login:${ip}`,
+        MAX_LOGIN_ATTEMPTS,
+        LOGIN_WINDOW_MS,
+        { failClosed: true }
+      );
+
   if (rate.limited) {
     res.setHeader('Retry-After', String(rate.retryAfter));
     console.warn(
@@ -368,7 +381,9 @@ async function handleLogin(req, res) {
   }
 
   // Login OK → zera o contador de tentativas deste IP.
-  await resetBucket(`admin-login:${ip}`);
+  if (!DEV_NO_RATE_LIMIT) {
+    await resetBucket(`admin-login:${ip}`);
+  }
 
   const token = signHmac({ user: expectedUser, iat: Date.now() }, secret);
 
