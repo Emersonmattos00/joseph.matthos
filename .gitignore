@@ -136,3 +136,9 @@ assets/img/raw/
 .env.local
 .env.save
 .env.save
+.env
+.env.*
+!.env.example
+*.bak
+*.swp
+.dev-server.js.swp
