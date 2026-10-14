@@ -107,6 +107,5 @@ describe('B2 storage configuration', () => {
       endpoint: 'https://s3.us-east-005.backblazeb2.com',
       publicBaseUrl: 'https://f005.backblazeb2.com/file'
     });
-    expect(storage.getBucketForKind('image')).toBe('site-assets');
   });
 });

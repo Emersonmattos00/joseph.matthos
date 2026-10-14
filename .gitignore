@@ -142,3 +142,11 @@ assets/img/raw/
 *.bak
 *.swp
 .dev-server.js.swp
+
+# Backups locais
+*.pre-amz
+*.pre-indice
+*.pre-final
+*.pre-b2-fix
+*.backup-*
+.env

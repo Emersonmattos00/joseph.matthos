@@ -24,7 +24,7 @@
        3. req.headers.get('range')
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v18';
+const CACHE_VERSION = 'jm-v19';
 
 // ─────────────────────────────────────────────────────────────
 // Precache — assets estáticos do site público
