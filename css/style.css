@@ -1754,3 +1754,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 section[aria-labelledby="destaqueTitle"] {
   display: none !important;
 }
+/* Esconde "Em Destaques" — reverter removendo este bloco */
+section[aria-labelledby="destaqueTitle"] {
+  display: none !important;
+}
