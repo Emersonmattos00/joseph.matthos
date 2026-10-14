@@ -3138,3 +3138,393 @@ section[aria-labelledby="destaqueTitle"] {
 .spotify-card-action.share:hover svg {
   fill: #1DB954;
 }
+
+/* ═════════════════════════════════════════════════════════════
+   ESTILO SPOTIFY — Header + Hero + Acentos globais
+   ═════════════════════════════════════════════════════════════ */
+
+/* ─── Variáveis globais (override do tema) ─────────────── */
+:root {
+  --accent: #1DB954;
+  --accent-hover: #1ed760;
+  --accent-dark: #158a3f;
+  --bg: #000000;
+  --bg-elevated: #121212;
+  --card: #181818;
+  --border: #282828;
+  --text: #ffffff;
+  --text-dim: #b3b3b3;
+  --text-muted: #6a6a6a;
+}
+
+/* ─── Fundo geral ─────────────────────────────────────── */
+body {
+  background-color: #000000;
+}
+
+/* ─── HEADER ──────────────────────────────────────────── */
+.amz-header {
+  background: #000000;
+  border-bottom: 1px solid #181818;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.amz-header-inner {
+  background: transparent;
+}
+
+/* Logo */
+.amz-logo-text {
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.amz-logo-text em {
+  color: #ffffff;
+  font-style: normal;
+  font-weight: 800;
+}
+.amz-logo-mark {
+  color: #1DB954;
+}
+
+/* Links da navegação */
+.amz-nav-item {
+  color: #b3b3b3;
+  font-weight: 600;
+  font-size: 0.875rem;
+  letter-spacing: 0.02em;
+  transition: color 0.15s ease, transform 0.15s ease;
+  position: relative;
+  padding: 0.5rem 0;
+}
+
+.amz-nav-item i,
+.amz-nav-item svg {
+  color: inherit;
+}
+
+.amz-nav-item:hover {
+  color: #ffffff;
+  transform: scale(1.04);
+}
+
+.amz-nav-item--active {
+  color: #ffffff;
+}
+
+/* Remove a linha ciano embaixo do item ativo */
+.amz-nav-item--active::after,
+.amz-nav-item::after {
+  display: none !important;
+}
+
+/* Busca */
+.amz-search {
+  background: #242424;
+  border: 1px solid transparent;
+  color: #ffffff;
+  border-radius: 500px;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.amz-search::placeholder {
+  color: #a7a7a7;
+}
+
+.amz-search:hover {
+  background: #2a2a2a;
+  border-color: #3a3a3a;
+}
+
+.amz-search:focus {
+  background: #2a2a2a;
+  border-color: #ffffff;
+  outline: none;
+}
+
+.amz-search-btn {
+  color: #b3b3b3;
+  background: transparent;
+}
+.amz-search-btn:hover {
+  color: #ffffff;
+}
+
+/* Botão "Faça Upgrade" (outline) */
+.amz-upgrade,
+.btn-outline {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid #727272;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  padding: 0.55rem 1.2rem;
+  transition: transform 0.1s ease, border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.amz-upgrade:hover,
+.btn-outline:hover {
+  border-color: #ffffff;
+  background: transparent;
+  transform: scale(1.04);
+}
+
+/* Botão primário (Criar conta, SIGA, etc) */
+.btn-primary,
+#signupBtn,
+#followBtn {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  padding: 0.55rem 1.2rem;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.btn-primary:hover,
+#signupBtn:hover,
+#followBtn:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+/* Botão "Entrar" — pill outline */
+#loginBtn {
+  border-radius: 500px;
+  border: 1px solid #727272;
+  background: transparent;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 0.55rem 1.2rem;
+}
+
+#loginBtn:hover {
+  border-color: #ffffff;
+  transform: scale(1.04);
+}
+
+/* User chip */
+.user-chip {
+  background: #000000;
+  border: 1px solid #282828;
+  border-radius: 500px;
+  padding: 0.3rem 0.5rem;
+}
+.user-chip:hover {
+  background: #181818;
+}
+.user-avatar {
+  background: #1DB954;
+  color: #000000;
+  font-weight: 800;
+}
+
+/* ─── HERO ────────────────────────────────────────────── */
+.artist-spotify {
+  background: linear-gradient(180deg, #1f1f1f 0%, #121212 60%, #000000 100%);
+}
+
+.artist-banner {
+  background: transparent !important;
+  padding: 2.5rem 0 1.5rem;
+}
+
+.artist-eyebrow {
+  color: #b3b3b3;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+
+.artist-spotify-name {
+  color: #ffffff;
+  font-weight: 900;
+  font-size: clamp(2.8rem, 7vw, 5.5rem);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  margin: 0.4rem 0 1rem;
+  font-family: var(--font-serif, 'Playfair Display', serif);
+}
+
+.artist-tagline {
+  color: #b3b3b3;
+  font-size: 0.95rem;
+  margin-bottom: 1.5rem;
+  max-width: 640px;
+}
+
+/* Ações do hero */
+.artist-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* Botão "SIGA" / "SEGUINDO" */
+#followBtn {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  padding: 0.7rem 1.6rem;
+  text-transform: uppercase;
+}
+
+#followBtn.following {
+  background: transparent;
+  color: #ffffff;
+  border: 1px solid #727272;
+}
+
+#followBtn.following:hover {
+  border-color: #ffffff;
+}
+
+#followBtn:hover {
+  transform: scale(1.04);
+}
+
+/* Botões redondos ao lado do SIGA */
+.btn-icon-round {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #727272;
+  color: #b3b3b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.btn-icon-round:hover {
+  border-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1.06);
+}
+
+/* Botão "Reproduzir Músicas Semelhantes" (se ainda existir) */
+.btn-follow {
+  background: #1DB954;
+  color: #000000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 700;
+  padding: 0.7rem 1.4rem;
+}
+.btn-follow:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+/* Avatar do artista (canto direito do hero) */
+.artist-avatar {
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+}
+
+/* ─── ABAS DO ARTISTA ─────────────────────────────────── */
+.artist-tabs-bar {
+  background: transparent;
+  border-bottom: 1px solid #181818;
+}
+
+.artist-tab {
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  padding: 0.9rem 1.1rem;
+  position: relative;
+  transition: color 0.15s ease;
+  text-transform: uppercase;
+}
+
+.artist-tab:hover {
+  color: #ffffff;
+}
+
+.artist-tab.active,
+.artist-tab[aria-selected="true"] {
+  color: #ffffff;
+}
+
+.artist-tab.active::after,
+.artist-tab[aria-selected="true"]::after {
+  content: '';
+  position: absolute;
+  left: 1.1rem;
+  right: 1.1rem;
+  bottom: 0;
+  height: 2px;
+  background: #1DB954;
+  border-radius: 2px;
+}
+
+/* ─── SEÇÕES (títulos de seção) ───────────────────────── */
+.section-spotify-title {
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.section-spotify-link {
+  color: #b3b3b3;
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  transition: color 0.15s ease;
+}
+
+.section-spotify-link:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* ─── SELO "ARTISTA" / badges de ciano → verde ────────── */
+.gold,
+[style*="color:var(--accent)"] {
+  color: #1DB954;
+}
+
+/* Remove ciano residual em qualquer lugar */
+a,
+button {
+  accent-color: #1DB954;
+}
+
+/* ─── MOBILE ──────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .artist-spotify-name {
+    font-size: 2.6rem;
+  }
+  .artist-actions {
+    gap: 0.5rem;
+  }
+  #followBtn {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.8rem;
+  }
+  .btn-icon-round {
+    width: 40px;
+    height: 40px;
+  }
+}
