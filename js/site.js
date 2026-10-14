@@ -1,10 +1,12 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v6 FINAL)
+   SITE.JS — Joseph Matthos (v7 FINAL)
    ------------------------------------------------------------
    - Lançamentos e Álbuns mais ouvidos em CARROSSEL
    - Discografia em GRADE (sem carrossel)
-   - Abas: Todos / Lançamentos / Discografia / Mais ouvidos
-   - Modal de álbum, player expandido, rádio, planos, aluguel
+   - Modal de álbum com ❤️ curtir + ✈️ compartilhar + ▶️ player
+   - Clique no card (lançamentos/mais ouvidos) abre o MODAL
+   - Botão ▶️ do card abre o PLAYER
+   - Deep link #album-ID abre o modal direto
    ============================================================ */
 
 import {
@@ -123,6 +125,7 @@ async function boot() {
       console.error('[radio] initRadio falhou:', err);
     }
 
+    checkAlbumHash();
     console.log('✅ site.js pronto');
   } catch (err) {
     console.error('❌ Falha no boot:', err);
@@ -268,7 +271,7 @@ function isLocked(albumId, trackIndex) {
 }
 
 function findAlbum(albumId) {
-  return SITE.albums.find((a) => a.id === albumId) || null;
+  return SITE.albums.find((a) => String(a.id) === String(albumId)) || null;
 }
 
 function findTrackByIndex(albumId, realTrackIndex) {
@@ -426,7 +429,6 @@ function renderArtistHero() {
     if (safe) avatar.style.backgroundImage = `url('${safe}')`;
   }
 
-    // Banner sem imagem de fundo
   if (banner) {
     banner.style.backgroundImage = 'transparent';
   }
@@ -482,7 +484,7 @@ function renderArtistHero() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ABAS DO ARTISTA — filtra seções
+// ABAS DO ARTISTA
 // ─────────────────────────────────────────────────────────────
 function bindArtistTabs() {
   document.querySelectorAll('.artist-tab').forEach((tab) => {
@@ -504,20 +506,14 @@ function bindArtistTabs() {
   });
 }
 
-/**
- * Mostra apenas a(s) seção(ões) da aba selecionada.
- */
 function applyArtistTabFilter(tab) {
   const secLancamentos = document.getElementById('secao-lancamentos');
   const secMaisOuvidos = document.getElementById('secao-mais-ouvidos');
   const secDiscografia = document.getElementById('discografia');
 
   const allSections = [secLancamentos, secMaisOuvidos, secDiscografia].filter(Boolean);
-
-  // Esconde tudo
   allSections.forEach((el) => { el.style.display = 'none'; });
 
-  // Mostra conforme a aba
   switch (tab) {
     case 'todos':
       allSections.forEach((el) => { el.style.display = ''; });
@@ -535,34 +531,26 @@ function applyArtistTabFilter(tab) {
       allSections.forEach((el) => { el.style.display = ''; });
   }
 
-  // Re-inicializa carrosséis (podem ter sido escondidos e reexibidos)
   if (typeof initCarousels === 'function') {
     requestAnimationFrame(() => initCarousels());
   }
 }
 
 // ============================================================
-// CARROSSEL — APENAS Lançamentos e Álbuns mais ouvidos
-// (Discografia fica em GRADE, sem carrossel)
+// CARROSSEL
 // ============================================================
 function initCarousels() {
-  // 1. Carrossel apenas nas seções .section-amz COM .section-amz-nav
   document.querySelectorAll('.section-amz .section-amz-nav').forEach((nav) => {
     const section = nav.closest('.section-amz');
     if (!section) return;
-
-    // Ignora Discografia
     if (section.id === 'discografia') return;
     if (section.classList.contains('section-amz-discografia')) return;
 
     const grid = section.querySelector('.amz-grid');
     if (!grid) return;
-
-    // Só inicializa uma vez
     if (grid.dataset.carouselInit === '1') return;
     grid.dataset.carouselInit = '1';
 
-    // Envolve o grid num wrapper de carrossel
     const wrapper = document.createElement('div');
     wrapper.className = 'amz-carousel';
     grid.parentNode.insertBefore(wrapper, grid);
@@ -593,7 +581,6 @@ function initCarousels() {
     updateArrows();
   });
 
-  // 2. Botão "Ver tudo" → rola para #discografia
   document.querySelectorAll('.section-spotify-link').forEach((link) => {
     if (link.dataset.bound === '1') return;
     const text = (link.textContent || '').trim().toUpperCase();
@@ -601,14 +588,10 @@ function initCarousels() {
     link.dataset.bound = '1';
     link.addEventListener('click', (e) => {
       e.preventDefault();
-      // Garante que a aba Discografia ou Todos está ativa
       const tabDiscografia = document.querySelector('[data-artist-tab="discografia"]');
       const tabTodos = document.querySelector('[data-artist-tab="todos"]');
-      // Se estiver na aba Lançamentos ou Mais ouvidos, muda para Discografia
       if (SITE.artistTab === 'lancamentos' || SITE.artistTab === 'mais-ouvidos') {
-        if (tabDiscografia) {
-          tabDiscografia.click();
-        }
+        if (tabDiscografia) tabDiscografia.click();
       } else if (tabTodos) {
         // mantém Todos
       }
@@ -728,6 +711,11 @@ function renderSpotifyCard(item, type = 'album') {
     </div>`;
 }
 
+/**
+ * Cards de Lançamentos / Mais ouvidos:
+ *   - Clique no ▶️ → abre o player
+ *   - Clique no card → abre o modal do álbum
+ */
 function bindSpotifyCards(container) {
   container.querySelectorAll('[data-spotify-card]').forEach((card) => {
     if (card.dataset.bound === '1') return;
@@ -745,8 +733,9 @@ function bindSpotifyCards(container) {
       });
     }
 
-    card.addEventListener('click', () => {
-      openExpandedPlayer(albumId, trackIndex);
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-spotify-play]')) return;
+      openAlbumModal(albumId);
     });
   });
 }
@@ -831,7 +820,7 @@ function renderPlans() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA — GRADE DE CARDS (sem carrossel)
+// DISCOGRAFIA
 // ─────────────────────────────────────────────────────────────
 function renderDiscography() {
   const container = document.getElementById('discographyContainer');
@@ -895,6 +884,7 @@ function renderTrackCard(album, track) {
 
   const identity = `${album.id}:${realIndex}`;
   const isPlaying = currentTrackIdentity && currentTrackIdentity.identity === identity;
+  const isLiked = localStorage.getItem(`jm_like_${album.id}_${realIndex}`) === '1';
 
   const coverStyle = album.coverImage
     ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
@@ -930,6 +920,16 @@ function renderTrackCard(album, track) {
         <span class="track-duration">${esc(track.duration || '—')}</span>
       </span>
       <span class="track-right">
+        <button class="track-action-icon like ${isLiked ? 'liked' : ''}" type="button"
+                data-action="like-track"
+                data-album="${esc(album.id)}"
+                data-track-index="${realIndex}"
+                title="Curtir" aria-label="Curtir">❤️</button>
+        <button class="track-action-icon share" type="button"
+                data-action="share-track"
+                data-album="${esc(album.id)}"
+                data-track-index="${realIndex}"
+                title="Compartilhar" aria-label="Compartilhar">✈️</button>
         ${rentBtn}
         ${stateHTML}
       </span>
@@ -937,7 +937,7 @@ function renderTrackCard(album, track) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLAYLISTS (desativado visualmente)
+// PLAYLISTS
 // ─────────────────────────────────────────────────────────────
 function renderPlaylists() {
   const grid = document.getElementById('playlistsGrid');
@@ -1008,7 +1008,7 @@ function resolvePlaylistTracks(playlist) {
 // MODAL DE ÁLBUM
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
-  const album = (SITE.albums || []).find((a) => String(a.id) === String(albumId));
+  const album = findAlbum(albumId);
   if (!album) {
     console.warn('[album] não encontrado:', albumId);
     return;
@@ -1425,6 +1425,14 @@ function bindGlobalEvents() {
     const action = actionEl.dataset.action;
 
     switch (action) {
+      case 'like-track': {
+        toggleLike(actionEl.dataset.album, Number(actionEl.dataset.trackIndex), actionEl);
+        break;
+      }
+      case 'share-track': {
+        shareTrack(actionEl.dataset.album, Number(actionEl.dataset.trackIndex));
+        break;
+      }
       case 'open-player': {
         if (e.target.closest('button')) break;
         const albumId = actionEl.dataset.album;
@@ -1839,6 +1847,52 @@ function initPlayer() {
   bindMobileTabs();
   bindFullscreenBtn();
   updateMuteButtons();
+}
+
+function checkAlbumHash() {
+  const m = location.hash.match(/^#album-(.+)$/);
+  if (m) openAlbumModal(decodeURIComponent(m[1]));
+}
+window.addEventListener('hashchange', checkAlbumHash);
+
+// ─────────────────────────────────────────────────────────────
+// CURTIR / COMPARTILHAR
+// ─────────────────────────────────────────────────────────────
+function toggleLike(albumId, trackIndex, btn) {
+  if (!albumId || !Number.isFinite(trackIndex)) return;
+  const key = `jm_like_${albumId}_${trackIndex}`;
+  const liked = localStorage.getItem(key) === '1';
+  if (liked) {
+    localStorage.removeItem(key);
+  } else {
+    localStorage.setItem(key, '1');
+  }
+  if (btn) btn.classList.toggle('liked', !liked);
+}
+
+async function shareTrack(albumId, trackIndex) {
+  const album = findAlbum(albumId);
+  const track = album && Array.isArray(album.tracks) ? album.tracks[trackIndex] : null;
+  const title = track && track.title
+    ? `${track.title} — Joseph Matthos`
+    : 'Joseph Matthos';
+  const url = `${location.origin}${location.pathname}#album-${albumId}`;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, url });
+    } catch (e) {
+      // usuário cancelou
+    }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    if (typeof toast === 'function') toast('Link copiado!');
+    else alert('Link copiado!');
+  } catch (e) {
+    alert('Não foi possível copiar o link.');
+  }
 }
 
 function bindPlayerControls() {
@@ -2435,6 +2489,7 @@ function updatePlayingHighlight() {
 }
 
 function openExpandedPlayer(albumId, trackIndex) {
+  closeAlbumModal();
   const modal = document.getElementById('expandedPlayerModal');
   if (!modal) return;
   modal.classList.add('open');

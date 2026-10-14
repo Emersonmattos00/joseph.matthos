@@ -3354,3 +3354,52 @@ section[aria-labelledby="destaqueTitle"] {
 .artist-banner-overlay {
   display: none !important;
 }
+
+/* Botões de curtir / compartilhar nas faixas */
+.track-action-icon.like,
+.track-action-icon.share {
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  transition: color 0.15s, transform 0.15s;
+}
+.track-action-icon.like:hover,
+.track-action-icon.share:hover {
+  color: var(--accent, #d4af37);
+  transform: scale(1.1);
+}
+.track-action-icon.like.liked {
+  color: #e63946;
+}
+.track-action-icon.like.liked:hover {
+  color: #ff4d5e;
+}
+
+/* Botões de curtir / compartilhar nas faixas */
+.track-action-icon.like,
+.track-action-icon.share {
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  transition: color 0.15s, transform 0.15s;
+  line-height: 1;
+  position: relative;
+  z-index: 2;
+}
+.track-action-icon.like:hover,
+.track-action-icon.share:hover {
+  color: var(--accent, #d4af37);
+  transform: scale(1.15);
+}
+.track-action-icon.like.liked {
+  color: #e63946;
+}
+.track-action-icon.like.liked:hover {
+  color: #ff4d5e;
+}
