@@ -4165,6 +4165,222 @@ button, input, textarea, select, optgroup, option {
   .artist-stats-row { gap: 1.25rem; }
 }
 
-/* ============================================================
-   FIM — Novas seções (Artist Spotify + Sections)
-   ============================================================ */
+/* ═══════════════════════════════════════════════════════════
+   AMAZON MUSIC LAYOUT — sobreposição
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Header estilo Amazon ─────────────────────────────── */
+.amz-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: #0b0a0c;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(12px);
+}
+.amz-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+}
+.amz-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+.amz-logo-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  background: #25d1da;
+  border-radius: 50%;
+  color: #000;
+  font-size: 1.1rem;
+}
+.amz-logo-text em {
+  font-style: normal;
+  color: #25d1da;
+  margin-left: 2px;
+}
+.amz-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-left: 1rem;
+}
+.amz-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: rgba(255,255,255,0.7);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  transition: color .15s, background .15s;
+}
+.amz-nav-item:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.amz-nav-item--active { color: #fff; }
+.amz-nav-item--active::after {
+  content: '';
+  position: absolute;
+  bottom: -0.75rem;
+  left: 0; right: 0;
+  height: 2px;
+  background: #25d1da;
+}
+.amz-nav-item--active { position: relative; }
+
+.amz-header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.amz-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: rgba(255,255,255,0.08);
+  border-radius: 6px;
+  overflow: hidden;
+  width: 260px;
+}
+.amz-search {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.9rem;
+  outline: none;
+}
+.amz-search-btn {
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.7);
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+}
+.amz-upgrade {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  padding: 0.5rem 0.9rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  transition: border-color .15s, background .15s;
+}
+.amz-upgrade:hover { border-color: #25d1da; background: rgba(37,209,218,0.08); }
+
+/* ── Hero do artista em 2 colunas ─────────────────────── */
+.artist-hero-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: center;
+}
+.artist-hero-left { text-align: left; }
+.artist-hero-right { display: flex; justify-content: flex-end; }
+
+.artist-quote-block {
+  font-family: var(--font-serif, Georgia, serif);
+  font-style: italic;
+  font-size: 1.1rem;
+  line-height: 1.7;
+  color: rgba(255,255,255,0.7);
+  margin-top: 1.5rem;
+  padding-left: 1rem;
+  border-left: 2px solid rgba(212,175,55,0.4);
+}
+.artist-quote-block em {
+  display: block;
+  margin-top: 0.5rem;
+  color: #d4af37;
+  font-weight: 500;
+}
+
+/* ── Seções estilo Amazon ─────────────────────────────── */
+.section-amz { padding: 2rem 0; }
+.section-amz .section-spotify-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.section-amz-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.amz-arrow {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s;
+}
+.amz-arrow:hover { background: rgba(255,255,255,0.12); }
+
+.amz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1.25rem;
+}
+
+/* ── Card de destaque ─────────────────────────────────── */
+.amz-feature-card {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 1rem;
+  padding: 1rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer;
+  transition: background .15s;
+}
+.amz-feature-card:hover { background: rgba(255,255,255,0.06); }
+
+/* ── Discografia em grade ─────────────────────────────── */
+.section-amz-discografia {
+  padding: 2rem 0 4rem;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: 2rem;
+}
+
+/* ── Ajuste do player fixo ────────────────────────────── */
+.player {
+  border-top: 1px solid rgba(37,209,218,0.15);
+}
+
+/* ── Responsivo ───────────────────────────────────────── */
+@media (max-width: 900px) {
+  .amz-nav { display: none; }
+  .artist-hero-split { grid-template-columns: 1fr; gap: 1.5rem; }
+  .artist-hero-right { justify-content: center; }
+  .amz-search-wrap { width: 160px; }
+  .amz-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+}
+
+@media (max-width: 600px) {
+  .amz-search-wrap { display: none; }
+  .amz-upgrade { display: none; }
+  .amz-header-inner { gap: 0.75rem; padding: 0.6rem 1rem; }
+}
