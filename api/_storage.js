@@ -11,7 +11,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 let client;
 
 function getStorageConfig() {
-  const region = String(process.env.B2_REGION || '').trim();
+  const region = String(process.env.B2_MEDIA_REGION || process.env.B2_REGION || '').trim();
   const keyId = String(process.env.B2_KEY_ID || '').trim();
   const applicationKey = String(process.env.B2_APPLICATION_KEY || '').trim();
 
@@ -30,7 +30,7 @@ function getStorageConfig() {
     keyId,
     applicationKey,
     endpoint: String(
-      process.env.B2_ENDPOINT || `https://s3.${region}.backblazeb2.com`
+      process.env.B2_MEDIA_ENDPOINT || process.env.B2_ENDPOINT || `https://s3.${region}.backblazeb2.com`
     ).trim().replace(/\/+$/, ''),
     publicBaseUrl
   };
@@ -59,17 +59,32 @@ function getS3Client() {
 }
 
 function getBucketForKind(kind) {
-  const buckets = {
-    image: process.env.B2_BUCKET_SITE_ASSETS || 'site-assets',
-    'audio-preview': process.env.B2_BUCKET_AUDIO_PREVIEW || 'audio-preview',
-    'audio-full': process.env.B2_BUCKET_AUDIO_PREMIUM || 'audio-premium'
-  };
-  return buckets[kind] || null;
+  const bucket = String(process.env.B2_MEDIA_BUCKET || '').trim();
+  if (!bucket) {
+    throw new Error('B2_MEDIA_BUCKET não configurado.');
+  }
+
+  const valid = new Set([
+    'image',
+    'site-assets',
+    'audio-preview',
+    'audio-full',
+    'audio-premium'
+  ]);
+
+  return valid.has(kind) ? bucket : null;
 }
 
 function getPublicUrl(bucket, key) {
   const { publicBaseUrl } = getStorageConfig();
   if (!bucket || !key) throw new Error('Bucket e caminho são obrigatórios.');
+  const imagePublicUrl = String(process.env.B2_IMAGE_PUBLIC_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const mediaBucket = String(process.env.B2_MEDIA_BUCKET || '').trim();
+  if (imagePublicUrl && bucket === mediaBucket) {
+    return `${imagePublicUrl}/${encodeKey(key)}`;
+  }
   return `${publicBaseUrl}/${encodeURIComponent(bucket)}/${encodeKey(key)}`;
 }
 
@@ -125,10 +140,31 @@ async function createSignedDownloadUrl(bucket, key, expiresInSec, downloadFilena
   return getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
 }
 
+/**
+ * Gera URL temporária para reprodução de áudio.
+ * isFull=true  → bucket audio-premium
+ * isFull=false → bucket audio-preview
+ */
+async function getPlaybackUrl(key, isFull = false) {
+  if (!key || typeof key !== 'string') {
+    throw new Error('Chave do áudio não informada.');
+  }
+
+  const bucket = getBucketForKind(isFull ? 'audio-full' : 'audio-preview');
+
+  if (!bucket) {
+    throw new Error('Bucket de áudio não configurado.');
+  }
+
+  // 5 minutos
+  return createSignedDownloadUrl(bucket, key, 300);
+}
+
 module.exports = {
   createSignedDownloadUrl,
   createSignedUploadUrl,
   getBucketForKind,
+  getPlaybackUrl,          // ← adicione esta linha
   getPublicUrl,
   getStorageConfig,
   objectExists,

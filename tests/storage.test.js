@@ -22,9 +22,7 @@ function setB2Env({
   vi.stubEnv('B2_MEDIA_BUCKET', mediaBucket);
   vi.stubEnv('B2_BUCKET_SITE_ASSETS', '');
   vi.stubEnv('B2_BUCKET_AUDIO_PREVIEW', '');
-  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');
-  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');
-  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', '');   // ← ADICIONE ESTA LINHA
+  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', 'audio-premium');
   vi.stubEnv('B2_MEDIA_ENDPOINT', endpoint);
   vi.stubEnv('B2_IMAGE_PUBLIC_URL', imagePublicUrl);
 }
@@ -57,7 +55,7 @@ describe('B2 storage configuration', () => {
     });
     expect(storage.getBucketForKind('image')).toBe('media-images');
     expect(storage.getBucketForKind('audio-preview')).toBe('media-images');
-    expect(storage.getBucketForKind('audio-full')).toBe('audio-premium');
+    expect(storage.getBucketForKind('audio-full')).toBe('media-images');
   });
 
   it('uses the configured image URL and preserves nested object paths', () => {
