@@ -844,10 +844,19 @@ function renderPlans() {
 
   grid.innerHTML = plans
     .map((p) => {
-      const priceInfo = SITE.plans[p.id] || {};
+      // Mapeia o plano do admin ('premium'/'anual') pro plano do backend (UUID)
+      let priceInfo = SITE.plans[p.id];
+      if (!priceInfo && (p.id === 'premium' || p.id === 'anual')) {
+        const foundId = Object.keys(SITE.plans).find(
+          (id) => SITE.plans[id].kind === p.id
+        );
+        if (foundId) priceInfo = SITE.plans[foundId];
+      }
+      priceInfo = priceInfo || {};
+
       const cents = Number(priceInfo.priceCents) || 0;
       const interval = priceInfo.interval;
-      const planKind = priceInfo.kind;
+      const planKind = priceInfo.kind || (p.id === 'premium' || p.id === 'anual' ? p.id : null);
       const available = priceInfo.available !== false && (p.id === 'free' || cents > 0);
 
       const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
@@ -1560,11 +1569,22 @@ async function subscribe(planId) {
     return;
   }
 
-  const planInfo = SITE.plans[planId];
-  const planKind = planInfo?.kind;
+  // Aceita tanto o id do admin ('premium'/'anual') quanto o UUID do backend
+  let planInfo = SITE.plans[planId];
+  if (!planInfo && (planId === 'premium' || planId === 'anual')) {
+    const foundId = Object.keys(SITE.plans).find(
+      (id) => SITE.plans[id].kind === planId
+    );
+    if (foundId) planInfo = SITE.plans[foundId];
+  }
+
+  const planKind = planInfo?.kind || (planId === 'premium' || planId === 'anual' ? planId : null);
   const currentPlan = SITE.user.plan;
 
-  if (currentPlan === planId || (planKind && currentPlan === planKind)) {
+  // ID que será enviado ao backend (prefere o UUID do backend)
+  const backendPlanId = planInfo?.id || planId;
+
+  if (currentPlan === backendPlanId || (planKind && currentPlan === planKind)) {
     closeModal('plansModal');
     openManageModal();
     return;
@@ -1592,7 +1612,7 @@ async function subscribe(planId) {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan: planId })
+      body: JSON.stringify({ plan: backendPlanId })
     });
     const json = await r.json();
 
