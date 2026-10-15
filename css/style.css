@@ -4677,3 +4677,239 @@ body:has(.player-modal-overlay.open) {
     max-height: 55vh;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   LISTA DE FAIXAS NO PAINEL DIREITO — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+
+.album-tracklist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 0.75rem 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 0.5rem;
+}
+
+.album-tracklist-title {
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.album-tracklist-count {
+  color: #6a6a6a;
+  font-size: 0.72rem;
+}
+
+.album-tracklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ─── Cada faixa ───────────────────────────────────────── */
+.album-track-item {
+  display: grid;
+  grid-template-columns: 28px 1fr auto auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+  color: #b3b3b3;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.album-track-item:hover {
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+}
+
+.album-track-item.playing {
+  color: #1DB954;
+}
+
+.album-track-item.playing .album-track-title {
+  color: #1DB954;
+  font-weight: 700;
+}
+
+/* ─── Coluna 1: número que vira ▶ no hover ─────────────── */
+.album-track-index {
+  position: relative;
+  width: 28px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.82rem;
+  color: #6a6a6a;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.album-track-index .album-track-num {
+  display: inline-block;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.album-track-index .album-track-play {
+  position: absolute;
+  inset: 0;
+  width: 20px;
+  height: 20px;
+  margin: auto;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  color: #fff;
+}
+
+.album-track-item:hover .album-track-index .album-track-num {
+  opacity: 0;
+  transform: scale(0.7);
+}
+
+.album-track-item:hover .album-track-index .album-track-play {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.album-track-item.playing .album-track-index .album-track-num,
+.album-track-item.playing .album-track-index .album-track-play {
+  color: #1DB954;
+}
+
+/* ─── Coluna 2: título + artista ───────────────────────── */
+.album-track-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.album-track-title {
+  color: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-track-artist {
+  color: #6a6a6a;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Coluna 3: ações (❤️ ✈️) ─────────────────────────── */
+.album-track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-shrink: 0;
+}
+
+.album-track-action {
+  background: transparent;
+  border: none;
+  padding: 0.2rem;
+  cursor: pointer;
+  color: #6a6a6a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s ease, transform 0.12s ease;
+}
+
+.album-track-action svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.album-track-action.like svg {
+  fill: transparent;
+  stroke: #b3b3b3;
+  stroke-width: 2;
+}
+
+.album-track-action.like:hover svg {
+  stroke: #fff;
+}
+
+.album-track-action.like.liked svg {
+  fill: #1DB954;
+  stroke: #1DB954;
+}
+
+.album-track-action.like.liked:hover svg {
+  fill: #1ed760;
+  stroke: #1ed760;
+}
+
+.album-track-action.share svg {
+  fill: #b3b3b3;
+}
+
+.album-track-action.share:hover svg {
+  fill: #fff;
+}
+
+.album-track-action:hover {
+  transform: scale(1.12);
+}
+
+/* ─── Coluna 4: duração ────────────────────────────────── */
+.album-track-duration {
+  color: #6a6a6a;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 44px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.album-track-item.playing .album-track-duration {
+  color: #1DB954;
+}
+
+/* ─── Coluna 5: cadeado ────────────────────────────────── */
+.album-track-lock {
+  font-size: 0.85rem;
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/* Mobile: esconde ações no hover (aparecem sempre) */
+@media (max-width: 899px) {
+  .album-track-item {
+    grid-template-columns: 24px 1fr auto auto;
+    gap: 0.5rem;
+    padding: 0.5rem 0.4rem;
+  }
+  .album-track-actions {
+    gap: 0.5rem;
+  }
+  .album-track-action svg {
+    width: 14px;
+    height: 14px;
+  }
+  .album-track-duration {
+    min-width: 38px;
+    font-size: 0.75rem;
+  }
+}

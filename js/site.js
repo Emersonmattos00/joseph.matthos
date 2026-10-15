@@ -2890,20 +2890,50 @@ function renderTracklistPanel() {
         const ti = Number(t.trackIndex) || 0;
         const isCurrent = ti === currentIdx;
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
+        const locked = isLocked(album.id, ti);
         return `
           <button class="album-track-item ${isCurrent ? 'playing' : ''}"
                   type="button"
                   data-action="play-track-in-player"
                   data-album="${esc(album.id)}"
                   data-track-index="${ti}">
-            <span class="album-track-index">${isCurrent ? '▶' : (i + 1)}</span>
+            <span class="album-track-index" aria-hidden="true">
+              <span class="album-track-num">${isCurrent ? '▶' : (i + 1)}</span>
+              <svg class="album-track-play" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 5v14l11-7z" fill="currentColor"/>
+              </svg>
+            </span>
             <span class="album-track-info">
               <span class="album-track-title">${esc(t.title || '—')}</span>
-              <span class="album-track-meta">
-                <span class="album-track-duration">${esc(t.duration || '—')}</span>
-                ${isLiked ? '<span class="album-track-liked">💚</span>' : ''}
-              </span>
+              <span class="album-track-artist">Joseph Matthos</span>
             </span>
+            <span class="album-track-actions">
+              <button class="album-track-action like ${isLiked ? 'liked' : ''}"
+                      type="button"
+                      data-action="like-track"
+                      data-album="${esc(album.id)}"
+                      data-track-index="${ti}"
+                      title="${isLiked ? 'Remover dos curtidos' : 'Curtir'}"
+                      aria-label="Curtir"
+                      aria-pressed="${isLiked ? 'true' : 'false'}">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                </svg>
+              </button>
+              <button class="album-track-action share"
+                      type="button"
+                      data-action="share-track"
+                      data-album="${esc(album.id)}"
+                      data-track-index="${ti}"
+                      title="Compartilhar"
+                      aria-label="Compartilhar">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+                </svg>
+              </button>
+            </span>
+            <span class="album-track-duration">${esc(t.duration || '—')}</span>
+            ${locked ? '<span class="album-track-lock" aria-label="Bloqueada">🔒</span>' : '<span class="album-track-lock"></span>'}
           </button>
         `;
       }).join('')}
