@@ -2181,14 +2181,49 @@ function bindPlayerControls() {
     } catch (e) { console.warn('[fullscreen]', e); }
   });
 
-  // Bars
+    // Bars
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
 
   // Abas mobile
   bindMobileTabs();
+
+  // 👇 Botões do rodapé (mobile)
+  bind('bottomDevicesBtn', async () => {
+    const player = document.querySelector('#expandedPlayerModal .music-player');
+    if (!player) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    try {
+      if (fsEl) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      } else {
+        if (player.requestFullscreen) await player.requestFullscreen();
+        else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
+      }
+    } catch (e) { console.warn('[fullscreen]', e); }
+  });
+
+  bind('bottomLyricsBtn', () => {
+    const tab = document.querySelector('#expandedPlayerModal .mobile-tab[data-tab="lyrics"]');
+    if (tab) tab.click();
+  });
+
+  bind('bottomShareBtn', () => {
+    if (currentTrackIdentity) {
+      shareTrack(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
+    } else {
+      toast('Nenhuma faixa tocando.', 'ℹ');
+    }
+  });
+
+  bind('bottomQueueBtn', () => {
+    const tab = document.querySelector('#expandedPlayerModal .mobile-tab[data-tab="music"]');
+    if (tab) tab.click();
+  });
 }
+
 
 function bindMobileTabs() {
   const player = document.querySelector('#expandedPlayerModal .music-player');
