@@ -1,11 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v13 FINAL)
+   SITE.JS — Joseph Matthos (v14 FINAL)
    ------------------------------------------------------------
-   - Sem duplicação de binds nos botões do player
-   - bindPlayerControls com estrutura correta (fechado antes de bindMobileTabs)
-   - bottomLyricsBtn/bottomQueueBtn chamam render*Panel() direto
+   - Planos de faixa e álbum separados (albumRentalPlans)
+   - Modal de aluguel com abas Faixa/Álbum
+   - Sem duplicação de binds no player
    - /api/stream usa trackId (UUID)
-   - Painel direito: só faixa atual fica verde
    ============================================================ */
 
 import {
@@ -44,7 +43,8 @@ export const SITE = {
   albums: [],
   tracks: {},
   plans: {},
-  rentalPlans: [],
+  rentalPlans: [],         // planos de faixa
+  albumRentalPlans: [],    // planos de álbum
   user: null,
   rentals: [],
   viewMode: 'cards',
@@ -71,7 +71,7 @@ let renewTimer = null;
 let currentAbortController = null;
 let isRenewing = false;
 
-let _rentContext = { albumId: null, trackIndex: null, planId: null };
+let _rentContext = { albumId: null, trackIndex: null, planId: null, kind: 'track' };
 
 // ─────────────────────────────────────────────────────────────
 // BOOT
@@ -163,6 +163,7 @@ async function loadPublicData() {
       SITE.tracks = {};
       SITE.plans = {};
       SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
+      SITE.albumRentalPlans = [];
       return;
     }
 
@@ -188,26 +189,55 @@ async function loadPublicData() {
       for (const p of json.plans) if (p && p.id) SITE.plans[p.id] = p;
     }
 
+    // ─── Planos de aluguel (faixa + álbum) ───────────────────
     SITE.rentalPlans = [];
-    if (Array.isArray(json.rentalPlans)) {
-      SITE.rentalPlans = json.rentalPlans
-        .filter((p) => p && p.id)
+    SITE.albumRentalPlans = [];
+
+    if (Array.isArray(json.rentalPlans) && json.rentalPlans.length) {
+      const allPlans = json.rentalPlans
+        .filter((p) => p && p.id && p.available !== false && Number(p.price) > 0)
         .map((p) => ({
           id: String(p.id),
           label: String(p.label || p.id),
           days: Number(p.days) || 1,
           hours: Number(p.hours) || 0,
           price: Number(p.price) || 0,
+          priceCents: Number(p.priceCents) || Math.round((Number(p.price) || 0) * 100),
           popular: !!p.popular,
-          available: p.available !== false && Number(p.price) > 0
+          available: true,
+          trackId: p.trackId || null,
+          albumId: p.albumId || null
         }));
+
+      const dedupe = (arr) => {
+        const seen = new Set();
+        return arr.filter((p) => {
+          const key = `${p.label}|${p.days}|${p.hours}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
+
+      SITE.rentalPlans = dedupe(allPlans.filter((p) => p.trackId));
+      SITE.albumRentalPlans = dedupe(allPlans.filter((p) => p.albumId));
     }
 
     if (!SITE.rentalPlans.length) {
       SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
         ...p,
         price: 0,
-        available: false
+        available: false,
+        trackId: null,
+        albumId: null
+      }));
+    }
+    if (!SITE.albumRentalPlans.length) {
+      SITE.albumRentalPlans = SITE.rentalPlans.map((p) => ({
+        ...p,
+        id: `album:${p.id}`,
+        trackId: null,
+        albumId: 'fallback'
       }));
     }
   } catch (err) {
@@ -217,6 +247,7 @@ async function loadPublicData() {
     SITE.tracks = {};
     SITE.plans = {};
     SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
+    SITE.albumRentalPlans = [];
   }
 }
 
@@ -1272,21 +1303,85 @@ function openTrackMoreMenu(albumId, trackIndex, anchorEl) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ALUGUEL
+// MODAL DE ALUGUEL (com abas Faixa/Álbum)
 // ─────────────────────────────────────────────────────────────
 function openRentModal(albumId, trackIndex) {
   const album = findAlbum(albumId);
   const track = findTrackByIndex(albumId, trackIndex);
-  if (!album || !track) { toast('Faixa indisponível para aluguel.', '⚠'); return; }
+  if (!album) { toast('Álbum indisponível.', '⚠'); return; }
   if (isPremium()) { toast('Você já é Premium — ouça sem alugar.', '✓'); return; }
-  if (isRented(albumId, trackIndex)) { toast('Você já alugou esta faixa.', '✓'); return; }
 
-  const plans = SITE.rentalPlans;
-  const firstAvailable = plans.find((p) => p.available && p.popular)
-    || plans.find((p) => p.available);
+  const realIndex = track ? (Number(track.trackNumber ?? track.trackIndex) || 0) : 0;
+  const trackRented = track && isRented(albumId, realIndex);
+  const albumRented = SITE.rentals.some(
+    (r) => r.trackKey === `album:${albumId}` && new Date(r.expiresAt).getTime() > Date.now()
+  );
 
-  _rentContext = { albumId, trackIndex, planId: firstAvailable?.id || null };
+  if (albumRented) { toast('Você já alugou este álbum.', '✓'); return; }
 
+  // Abre na aba "faixa" se tiver track; senão, aba "álbum"
+  const initialKind = (track && !trackRented) ? 'track' : 'album';
+
+  _rentContext = {
+    albumId,
+    trackIndex: realIndex,
+    kind: initialKind,
+    planId: null
+  };
+
+  // Título
+  const titleEl = document.getElementById('rentModalTitle');
+  if (titleEl) {
+    titleEl.innerHTML = `Alugar <span class="gold">${initialKind === 'track' ? 'faixa' : 'álbum'}</span>`;
+  }
+  const subEl = document.getElementById('rentModalSub');
+  if (subEl) subEl.textContent = 'Escolha por quanto tempo quer ouvir.';
+
+  // Abas — cria se não existir
+  let tabsEl = document.querySelector('#rentModal .rent-tabs');
+  if (!tabsEl) {
+    const infoEl = document.querySelector('#rentModal .rent-track-info');
+    if (infoEl && infoEl.parentNode) {
+      tabsEl = document.createElement('div');
+      tabsEl.className = 'rent-tabs';
+      tabsEl.setAttribute('role', 'tablist');
+      tabsEl.innerHTML = `
+        <button class="rent-tab" data-rent-kind="track" role="tab" aria-selected="false">Faixa</button>
+        <button class="rent-tab" data-rent-kind="album" role="tab" aria-selected="false">Álbum inteiro</button>
+      `;
+      infoEl.parentNode.insertBefore(tabsEl, infoEl);
+    }
+  }
+
+  if (tabsEl) {
+    const tabs = tabsEl.querySelectorAll('.rent-tab');
+    tabs.forEach((tab) => {
+      const isActive = tab.dataset.rentKind === initialKind;
+      tab.classList.toggle('active', isActive);
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      tab.disabled = tab.dataset.rentKind === 'track' && (!track || trackRented);
+
+      if (tab.dataset.bound === '1') return;
+      tab.dataset.bound = '1';
+      tab.addEventListener('click', () => {
+        if (tab.disabled) return;
+        const newKind = tab.dataset.rentKind;
+        _rentContext.kind = newKind;
+        _rentContext.planId = null;
+
+        tabs.forEach((t) => {
+          const active = t.dataset.rentKind === newKind;
+          t.classList.toggle('active', active);
+          t.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+
+        updateRentHeader(newKind);
+        renderRentOptions(newKind);
+      });
+    });
+  }
+
+  // Capa + info
   const cover = document.getElementById('rentTrackCover');
   if (cover) {
     cover.innerHTML = '';
@@ -1301,56 +1396,95 @@ function openRentModal(albumId, trackIndex) {
       cover.textContent = album.coverInitials || album.cover || '♪';
     }
   }
-  const titleEl = document.getElementById('rentTrackTitle');
-  if (titleEl) titleEl.textContent = track.title;
-  const albumEl = document.getElementById('rentTrackAlbum');
-  if (albumEl) albumEl.textContent = `${album.title} · ${track.duration || ''}`.trim();
 
-  const optionsEl = document.getElementById('rentOptions');
-  if (optionsEl) {
-    const hasAnyAvailable = plans.some((p) => p.available);
-    if (!hasAnyAvailable) {
-      optionsEl.innerHTML = `<p class="hint" style="color:var(--warning,#f0a100);text-align:center;padding:1rem;">
-        Aluguel temporariamente indisponível. Tente novamente em instantes.</p>`;
-      openModal('rentModal');
-      return;
-    }
-
-    optionsEl.innerHTML = plans.map((p) => {
-      const disabled = !p.available;
-      const selected = p.id === _rentContext.planId;
-      const priceText = p.available
-        ? esc(formatPrice(p.price))
-        : '<span style="color:var(--text-dim);font-size:0.85rem;">Indisponível</span>';
-
-      return `
-        <label class="rent-option ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}"
-               data-plan="${esc(p.id)}"
-               ${disabled ? 'style="opacity:0.55;cursor:not-allowed;"' : ''}>
-          <input type="radio" name="rent-plan" value="${esc(p.id)}"
-                 ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-          <span>
-            <span class="rent-option-label">${esc(p.label)}</span>
-            <span class="rent-option-sub">Acesso por ${p.days} dia${p.days > 1 ? 's' : ''}</span>
-          </span>
-          <span class="rent-option-price">${priceText}</span>
-          ${p.popular && p.available ? '<span class="popular-tag">Mais popular</span>' : ''}
-        </label>`;
-    }).join('');
-
-    optionsEl.querySelectorAll('input[name="rent-plan"]:not(:disabled)').forEach((radio) => {
-      radio.addEventListener('change', () => {
-        _rentContext.planId = radio.value;
-        optionsEl.querySelectorAll('.rent-option').forEach((opt) => {
-          opt.classList.toggle('selected', opt.dataset.plan === radio.value);
-        });
-      });
-    });
-  }
+  updateRentHeader(initialKind);
+  renderRentOptions(initialKind);
 
   const errEl = document.getElementById('rentError');
   if (errEl) errEl.textContent = '';
   openModal('rentModal');
+}
+
+function updateRentHeader(kind) {
+  const album = findAlbum(_rentContext.albumId);
+  const track = findTrackByIndex(_rentContext.albumId, _rentContext.trackIndex);
+  if (!album) return;
+
+  const titleEl = document.getElementById('rentModalTitle');
+  if (titleEl) {
+    titleEl.innerHTML = `Alugar <span class="gold">${kind === 'track' ? 'faixa' : 'álbum'}</span>`;
+  }
+
+  const titleText = document.getElementById('rentTrackTitle');
+  if (titleText) {
+    titleText.textContent = kind === 'track'
+      ? (track?.title || '—')
+      : album.title;
+  }
+
+  const albumText = document.getElementById('rentTrackAlbum');
+  if (albumText) {
+    albumText.textContent = kind === 'track'
+      ? `${album.title}${track?.duration ? ' · ' + track.duration : ''}`
+      : `Acesso a todas as faixas do álbum`;
+  }
+}
+
+function renderRentOptions(kind) {
+  const optionsEl = document.getElementById('rentOptions');
+  if (!optionsEl) return;
+
+  const plans = kind === 'track' ? SITE.rentalPlans : SITE.albumRentalPlans;
+
+  if (!plans.length) {
+    optionsEl.innerHTML = `<p class="hint" style="color:var(--warning,#f0a100);text-align:center;padding:1rem;">
+      Aluguel temporariamente indisponível.</p>`;
+    return;
+  }
+
+  const hasAny = plans.some((p) => p.available);
+  if (!hasAny) {
+    optionsEl.innerHTML = `<p class="hint" style="color:var(--warning,#f0a100);text-align:center;padding:1rem;">
+      Aluguel temporariamente indisponível.</p>`;
+    return;
+  }
+
+  if (!_rentContext.planId || !plans.find((p) => p.id === _rentContext.planId)) {
+    const popular = plans.find((p) => p.popular) || plans.find((p) => p.days === 3) || plans[0];
+    _rentContext.planId = popular?.id || null;
+  }
+
+  optionsEl.innerHTML = plans.map((p) => {
+    const disabled = !p.available;
+    const selected = p.id === _rentContext.planId;
+    const priceText = p.available
+      ? esc(formatPrice(p.price))
+      : '<span style="color:var(--text-dim);font-size:0.85rem;">Indisponível</span>';
+    const showPopular = p.popular || (p.days === 3);
+
+    return `
+      <label class="rent-option ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}"
+             data-plan="${esc(p.id)}"
+             ${disabled ? 'style="opacity:0.5;cursor:not-allowed;"' : ''}>
+        <input type="radio" name="rent-plan" value="${esc(p.id)}"
+               ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+        <span>
+          <span class="rent-option-label">${esc(p.label)}</span>
+          <span class="rent-option-sub">Acesso por ${p.days} dia${p.days > 1 ? 's' : ''}</span>
+        </span>
+        <span class="rent-option-price">${priceText}</span>
+        ${showPopular && p.available ? '<span class="popular-tag">Mais popular</span>' : ''}
+      </label>`;
+  }).join('');
+
+  optionsEl.querySelectorAll('input[name="rent-plan"]:not(:disabled)').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      _rentContext.planId = radio.value;
+      optionsEl.querySelectorAll('.rent-option').forEach((opt) => {
+        opt.classList.toggle('selected', opt.dataset.plan === radio.value);
+      });
+    });
+  });
 }
 
 async function confirmRent() {
@@ -1367,7 +1501,8 @@ async function confirmRent() {
     return;
   }
 
-  const selected = SITE.rentalPlans.find((p) => p.id === _rentContext.planId);
+  const plans = _rentContext.kind === 'track' ? SITE.rentalPlans : SITE.albumRentalPlans;
+  const selected = plans.find((p) => p.id === _rentContext.planId);
   if (!selected || !selected.available) {
     if (errEl) errEl.textContent = 'Período indisponível. Escolha outro.';
     return;
@@ -1381,8 +1516,9 @@ async function confirmRent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         albumId: _rentContext.albumId,
-        trackIndex: _rentContext.trackIndex,
-        planId: _rentContext.planId
+        trackIndex: _rentContext.kind === 'track' ? _rentContext.trackIndex : null,
+        planId: _rentContext.planId,
+        kind: _rentContext.kind
       })
     });
     const json = await r.json();
@@ -3122,6 +3258,7 @@ if (document.readyState === 'loading') {
 window.__site = {
   get state() { return { ...SITE }; },
   get rentalPlans() { return SITE.rentalPlans.slice(); },
+  get albumRentalPlans() { return SITE.albumRentalPlans.slice(); },
   get currentStream() { return currentStream ? { ...currentStream } : null; },
   async reload() {
     await loadUser();
