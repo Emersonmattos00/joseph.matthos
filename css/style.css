@@ -4327,3 +4327,291 @@ body:has(.player-modal-overlay.open) {
     display: none;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   MODAL DE ÁLBUM — estilo Spotify
+   ═════════════════════════════════════════════════════════════ */
+
+.album-detail {
+  padding: 2rem 2rem 2.5rem;
+  max-width: 1100px;
+}
+
+.album-detail__header {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 1rem;
+}
+
+.album-detail__cover {
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  background-size: cover;
+  background-position: center;
+  background-color: #181818;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+  color: #b3b3b3;
+  flex-shrink: 0;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+}
+
+.album-detail__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.album-detail__type {
+  color: #b3b3b3;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.album-detail__title {
+  color: #fff;
+  font-family: var(--font-serif, 'Playfair Display', serif);
+  font-size: clamp(1.8rem, 4.5vw, 3rem);
+  font-weight: 900;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.album-detail__artist {
+  color: #b3b3b3;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.album-detail__meta {
+  color: #6a6a6a;
+  font-size: 0.82rem;
+  margin-bottom: 0.75rem;
+}
+
+/* Botão grande de Play no topo */
+.album-detail__play {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #1DB954;
+  color: #000;
+  border: none;
+  border-radius: 500px;
+  font-weight: 800;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  padding: 0.75rem 1.6rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+  align-self: flex-start;
+  margin-top: 0.5rem;
+}
+
+.album-detail__play:hover {
+  background: #1ed760;
+  transform: scale(1.04);
+}
+
+.album-detail__play svg {
+  margin-left: -2px;
+}
+
+/* Lista de faixas dentro do modal */
+.album-detail__tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 0.5rem;
+}
+
+.album-detail__tracks .discography-track-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.album-detail__tracks .discography-track-card:last-child {
+  border-bottom: none;
+}
+
+.album-detail__tracks .discography-track-card:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.album-detail__tracks .discography-track-card.playing {
+  background: rgba(29,185,84,0.08);
+}
+
+.album-detail__tracks .track-index {
+  width: 22px;
+  text-align: center;
+  color: #6a6a6a;
+  font-size: 0.82rem;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.album-detail__tracks .discography-track-card.playing .track-index {
+  color: #1DB954;
+}
+
+.album-detail__tracks .track-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.album-detail__tracks .track-title {
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-detail__tracks .track-artist-line {
+  color: #6a6a6a;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.album-detail__tracks .track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+.album-detail__tracks .track-duration {
+  color: #6a6a6a;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
+.album-detail__tracks .track-state {
+  color: #1DB954;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* Botão ⋯ (mais opções) */
+.track-action-btn.more {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  color: #b3b3b3;
+}
+
+.discography-track-card:hover .track-action-btn.more {
+  opacity: 1;
+}
+
+.track-action-btn.more:hover {
+  color: #fff;
+}
+
+.track-action-btn.more svg {
+  fill: currentColor;
+}
+
+/* ─── Menu ⋯ flutuante ────────────────────────────────── */
+.track-more-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 220px;
+  background: #282828;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  padding: 0.35rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  animation: moreMenuFade 0.12s ease-out;
+}
+
+@keyframes moreMenuFade {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.track-more-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+  font-family: inherit;
+  padding: 0.55rem 0.7rem;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.track-more-menu button:hover {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
+
+.track-more-menu button svg {
+  flex-shrink: 0;
+  color: #b3b3b3;
+}
+
+.track-more-menu button:hover svg {
+  color: #fff;
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .album-detail {
+    padding: 1.25rem 1rem 2rem;
+  }
+  .album-detail__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+  .album-detail__cover {
+    width: 140px;
+    height: 140px;
+  }
+  .album-detail__title {
+    font-size: 1.6rem;
+  }
+  .album-detail__play {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.82rem;
+  }
+  .album-detail__tracks .track-action-btn.more {
+    opacity: 1;
+  }
+  .album-detail__tracks .track-duration {
+    display: none;
+  }
+}
