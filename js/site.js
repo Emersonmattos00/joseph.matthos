@@ -1,10 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v11 FINAL)
+   SITE.JS — Joseph Matthos (v12 FINAL)
    ------------------------------------------------------------
+   - Sem delegação duplicada nos botões do player
+   - bindPlayerControls sem replaceWith (dataset.bound)
    - /api/stream usa trackId (UUID)
-   - findTrackByIndex aceita id OU trackIndex
-   - Handler usa data-track-id com fallback
-   - Painel direito com número/hover play
+   - Painel direito: só faixa atual fica verde
    ============================================================ */
 
 import {
@@ -2147,7 +2147,7 @@ function bindPlayerControls() {
   bind('expandedMuteBtn', toggleMute);
   bind('expandedShuffleBtn', toggleShuffle);
 
-  // Coração do player expandido
+  // Coração do player
   bind('expandedLikeBtn', () => {
     const info = getTrackKeyFromCurrent();
     if (!info) return;
@@ -2163,6 +2163,22 @@ function bindPlayerControls() {
       el.classList.toggle('liked', liked);
       el.setAttribute('aria-pressed', liked ? 'true' : 'false');
     });
+  });
+
+  // Fullscreen
+  bind('expandedFullscreenBtn', async () => {
+    const player = document.querySelector('#expandedPlayerModal .music-player');
+    if (!player) return;
+    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+    try {
+      if (fsEl) {
+        if (document.exitFullscreen) await document.exitFullscreen();
+        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+      } else {
+        if (player.requestFullscreen) await player.requestFullscreen();
+        else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
+      }
+    } catch (e) { console.warn('[fullscreen]', e); }
   });
 
   // Bars
@@ -2324,7 +2340,6 @@ function buildQueueForAlbum(albumId, startIndex) {
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
 
-  // ⚠️ Usa track.id (UUID) em vez de trackIndex (que é null no banco)
   let indices = albumTracks.map((t) => t.id).filter(Boolean);
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
@@ -2580,6 +2595,9 @@ function updateVolumeFill() {
 function bindProgressBar(id) {
   const bar = document.getElementById(id);
   if (!bar) return;
+  if (bar.dataset.bound === '1') return;
+  bar.dataset.bound = '1';
+
   const seek = (clientX) => {
     if (!audio || !audio.duration) return;
     const rect = bar.getBoundingClientRect();
@@ -2616,6 +2634,9 @@ function seekBy(seconds) {
 function bindVolumeBar(id) {
   const bar = document.getElementById(id);
   if (!bar) return;
+  if (bar.dataset.bound === '1') return;
+  bar.dataset.bound = '1';
+
   bar.addEventListener('click', (e) => {
     if (!audio) return;
     const rect = bar.getBoundingClientRect();
@@ -2888,7 +2909,6 @@ function renderTracklistPanel() {
     return;
   }
 
-  // ⚠️ Só compara pelo trackId (UUID). Se não tiver, NADA fica marcado como playing
   const currentId = currentTrackIdentity?.trackId || null;
 
   container.innerHTML = `
@@ -2899,7 +2919,6 @@ function renderTracklistPanel() {
     <div class="album-tracklist">
       ${albumTracks.map((t, i) => {
         const ti = Number(t.trackNumber ?? t.trackIndex) || 0;
-        // ⚠️ Só marca como "tocando" se o ID bater exatamente
         const isCurrent = currentId && t.id && String(t.id) === String(currentId);
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
@@ -3030,23 +3049,6 @@ function closeModal(id) {
   el.setAttribute('aria-hidden', 'true');
   document.body.style.overflow = '';
 }
-
-  // ⚠️ Delegação de eventos para os botões do player (fallback)
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('#expandedPlayBtn, #expandedNextBtn, #expandedPrevBtn, #expandedShuffleBtn, #expandedMuteBtn, #closeExpandedPlayer');
-    if (!btn) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    switch (btn.id) {
-      case 'expandedPlayBtn': togglePlay(); break;
-      case 'expandedNextBtn': nextTrack(); break;
-      case 'expandedPrevBtn': prevTrack(); break;
-      case 'expandedShuffleBtn': toggleShuffle(); break;
-      case 'expandedMuteBtn': toggleMute(); break;
-      case 'closeExpandedPlayer': closeExpandedPlayer(); break;
-    }
-  });
 
 // ─────────────────────────────────────────────────────────────
 // START
