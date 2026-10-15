@@ -2493,7 +2493,7 @@ function onPlay() {
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.add('playing');
-  if (expandedIcon) expandedIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+  if (expandedIcon) expandedIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
   updateMuteButtons();
 }
 
@@ -2505,7 +2505,7 @@ function onPause() {
   const expandedBtn = document.getElementById('expandedPlayBtn');
   const expandedIcon = document.getElementById('expandedPlayIcon');
   if (expandedBtn) expandedBtn.classList.remove('playing');
-  if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
+  if (expandedIcon) expandedIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
 }
 
 async function onError(e) {
@@ -2593,11 +2593,16 @@ function syncExpandedPlayer(track, album, unlocked) {
   const title = document.getElementById('expandedPlayerTitle');
   const albumEl = document.getElementById('expandedPlayerAlbum');
   const cover = document.getElementById('expandedPlayerCover');
+  const coverBg = document.getElementById('expandedPlayerCoverBg');
   const badge = document.getElementById('expandedPreviewBadge');
+
   if (title) title.textContent = track.title;
   if (albumEl) albumEl.textContent = `Joseph Matthos · ${album.title}`;
+
+  const safeCover = safeMediaUrl(album.coverImage);
+
+  // Capa principal
   if (cover) {
-    const safeCover = safeMediaUrl(album.coverImage);
     cover.style.backgroundImage = '';
     cover.innerHTML = '';
     if (safeCover) {
@@ -2610,9 +2615,19 @@ function syncExpandedPlayer(track, album, unlocked) {
       cover.textContent = album.coverInitials || album.cover || '♪';
     }
   }
+
+  // Fundo com blur
+  if (coverBg) {
+    if (safeCover) {
+      coverBg.style.backgroundImage = `url('${safeCover}')`;
+    } else {
+      coverBg.style.backgroundImage = '';
+    }
+  }
+
+  // Background do player inteiro (blur grande)
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
-    const safeCover = safeMediaUrl(album.coverImage);
     if (safeCover) {
       playerEl.style.setProperty('--player-bg', `url('${safeCover}')`);
       playerEl.setAttribute('data-has-bg', '1');
@@ -2621,8 +2636,58 @@ function syncExpandedPlayer(track, album, unlocked) {
       playerEl.removeAttribute('data-has-bg');
     }
   }
+
   if (badge) badge.classList.toggle('visible', !unlocked);
+
+  // Atualiza coração do player
+  updateExpandedLikeButton(track);
 }
+
+// ─────────────────────────────────────────────────────────────
+// CURTIR / COMPARTILHAR NO PLAYER EXPANDIDO
+// ─────────────────────────────────────────────────────────────
+function getTrackKeyFromCurrent() {
+  if (!currentTrackIdentity) return null;
+  const { albumId, trackIndex } = currentTrackIdentity;
+  return { albumId, trackIndex, key: `jm_like_${albumId}_${trackIndex}` };
+}
+
+function updateExpandedLikeButton(track) {
+  const btn = document.getElementById('expandedLikeBtn');
+  if (!btn || !currentTrackIdentity) return;
+
+  const key = `jm_like_${currentTrackIdentity.albumId}_${currentTrackIdentity.trackIndex}`;
+  const liked = localStorage.getItem(key) === '1';
+  btn.classList.toggle('liked', liked);
+  btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+  btn.setAttribute('title', liked ? 'Remover dos curtidos' : 'Curtir');
+
+  // Rebind click (uma vez só)
+  if (btn.dataset.bound !== '1') {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const info = getTrackKeyFromCurrent();
+      if (!info) return;
+      const isLiked = localStorage.getItem(info.key) === '1';
+      if (isLiked) localStorage.removeItem(info.key);
+      else localStorage.setItem(info.key, '1');
+
+      btn.classList.toggle('liked', !isLiked);
+      btn.setAttribute('aria-pressed', !isLiked ? 'true' : 'false');
+      btn.setAttribute('title', !isLiked ? 'Remover dos curtidos' : 'Curtir');
+
+      // Atualiza também os cards visíveis (modal + home)
+      document.querySelectorAll(
+        `[data-action="like-track"][data-album="${info.albumId}"][data-track-index="${info.trackIndex}"]`
+      ).forEach((el) => {
+        el.classList.toggle('liked', !isLiked);
+        el.setAttribute('aria-pressed', !isLiked ? 'true' : 'false');
+      });
+    });
+  }
+}
+
+
 
 function renderLyrics(track) {
   const html = (() => {

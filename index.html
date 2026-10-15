@@ -240,11 +240,6 @@
             <p id="contatoDesc">Para convites, parcerias ou apenas para compartilhar um verso.</p>
             <div class="social-links" id="socialLinks"></div>
           </div>
-          <form class="newsletter-form" id="newsletterForm">
-            <input type="text" placeholder="Seu nome" required aria-label="Seu nome">
-            <input type="email" placeholder="Seu melhor e-mail" required aria-label="Seu e-mail">
-            <button type="submit" class="btn btn-primary">Quero receber</button>
-          </form>
         </div>
       </div>
     </section>
@@ -296,83 +291,119 @@
   </div>
   <audio id="audio" preload="auto"></audio>
 
-  <!-- ═══════════ PLAYER EXPANDIDO ═══════════ -->
-  <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
-    <div class="music-player">
+  <!-- ═══════════ PLAYER EXPANDIDO v2 ═══════════ -->
+<div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
+  <div class="music-player">
+
+    <!-- Topo: fechar / tabs / menu -->
+    <div class="player-top">
+      <button class="player-icon-btn" id="closeExpandedPlayer" aria-label="Fechar player">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
       <div class="mobile-tabs" role="tablist">
         <button class="mobile-tab active" data-tab="music" role="tab" aria-selected="true">Música</button>
         <button class="mobile-tab" data-tab="lyrics" role="tab" aria-selected="false">Letra</button>
       </div>
 
-      <button class="player-fullscreen" id="expandedFullscreenBtn" aria-label="Tela cheia" title="Tela cheia">
-        <svg class="icon-enter" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-        <svg class="icon-exit" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
+      <button class="player-icon-btn" id="expandedFullscreenBtn" aria-label="Tela cheia">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+          <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+        </svg>
       </button>
+    </div>
 
-      <button class="player-close" id="closeExpandedPlayer" aria-label="Fechar player">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-      </button>
+    <!-- Coluna principal -->
+    <div class="player-grid">
 
-      <div class="player-grid">
-        <div class="player-col">
-          <div class="player-watermark-area">
-            <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
-            <div class="track-info">
-              <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
-              <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
-            </div>
-            <div class="preview-badge" id="expandedPreviewBadge">PRÉVIA 30s</div>
-            <div class="progress-container">
-              <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
-                <div class="progress" id="expandedProgressFill"></div>
-              </div>
-              <div class="time-info">
-                <span id="expandedCurrentTime">0:00</span>
-                <span id="expandedDuration">0:00</span>
-              </div>
-            </div>
+      <!-- Coluna música -->
+      <div class="player-col player-col--music">
 
-            <div class="controls">
-              <button class="control-btn control-btn-shuffle" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-              </button>
-              <button class="control-btn" id="expandedPrevBtn" title="Anterior" aria-label="Faixa anterior">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-              </button>
-              <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
-                <svg viewBox="0 0 24 24" id="expandedPlayIcon"><path d="M8 5v14l11-7z"/></svg>
-              </button>
-              <button class="control-btn" id="expandedNextBtn" title="Próxima" aria-label="Próxima faixa">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-              </button>
-              <button class="control-btn control-btn-mute" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-              </button>
-            </div>
+        <!-- Capa grande com blur de fundo -->
+        <div class="player-cover-wrap">
+          <div class="player-cover-bg" id="expandedPlayerCoverBg"></div>
+          <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
+        </div>
 
-            <div class="player-actions" id="expandedPlayerActions"></div>
+        <!-- Título + coração + menu -->
+        <div class="player-track-head">
+          <div class="player-track-info">
+            <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
+            <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
           </div>
+          <button class="player-icon-btn player-like-btn" id="expandedLikeBtn" aria-label="Curtir">
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+                    fill="none" stroke="currentColor" stroke-width="2"/>
+            </svg>
+          </button>
+        </div>
 
-          <div class="player-queue" id="expandedPlayerQueue" hidden>
-            <div class="player-queue-header">
-              <span class="player-queue-label">A seguir</span>
-              <span class="player-queue-count" id="expandedQueueCount"></span>
-            </div>
-            <div class="player-queue-list" id="expandedQueueList"></div>
+        <!-- Progresso -->
+        <div class="progress-container">
+          <div class="progress-bar" id="expandedProgressBar" role="slider"
+               aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+            <div class="progress" id="expandedProgressFill"></div>
+          </div>
+          <div class="time-info">
+            <span id="expandedCurrentTime">0:00</span>
+            <span id="expandedDuration">0:00</span>
           </div>
         </div>
 
-        <div class="lyrics-col">
-          <div class="lyrics-header">
-            <h3>Letra</h3>
-          </div>
-          <div class="lyrics-scroll" id="expandedLyricsContent">
-            <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
-          </div>
+        <!-- Controles principais -->
+        <div class="controls">
+          <button class="control-btn" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+            </svg>
+          </button>
+          <button class="control-btn" id="expandedPrevBtn" title="Anterior" aria-label="Faixa anterior">
+            <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
+            <svg viewBox="0 0 24 24" width="32" height="32" id="expandedPlayIcon">
+              <path d="M8 5v14l11-7z" fill="currentColor"/>
+            </svg>
+          </button>
+          <button class="control-btn" id="expandedNextBtn" title="Próxima" aria-label="Próxima faixa">
+            <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+          <button class="control-btn" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+            </svg>
+          </button>
+        </div>
+
+        <!-- Ações secundárias -->
+        <div class="player-actions" id="expandedPlayerActions"></div>
+      </div>
+
+      <!-- Coluna letra (desktop) -->
+      <div class="lyrics-col">
+        <div class="lyrics-header">
+          <h3>Letra</h3>
+        </div>
+        <div class="lyrics-scroll" id="expandedLyricsContent">
+          <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
         </div>
       </div>
     </div>
+
+    <!-- Fila -->
+    <div class="player-queue" id="expandedPlayerQueue" hidden>
+      <div class="player-queue-header">
+        <span class="player-queue-label">A seguir</span>
+        <span class="player-queue-count" id="expandedQueueCount"></span>
+      </div>
+      <div class="player-queue-list" id="expandedQueueList"></div>
+    </div>
+
   </div>
+</div>
 
   <!-- ═══════════ MODAIS ═══════════ -->
 

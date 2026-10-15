@@ -3728,3 +3728,527 @@ button {
     font-size: 0.78rem;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   PLAYER EXPANDIDO v2 — estilo Spotify / Apple Music / Samsung
+   ═════════════════════════════════════════════════════════════ */
+
+/* Overlay ocupa a tela toda */
+.player-modal-overlay {
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #000;
+}
+
+.player-modal-overlay .music-player {
+  width: 100vw;
+  max-width: 100%;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  background: #121212;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  --player-bg: none;
+}
+
+/* Fundo com a capa em blur — descoberto pelo print 1 */
+.player-modal-overlay .music-player[data-has-bg="1"]::before {
+  content: '';
+  position: absolute;
+  inset: -60px;
+  background-image: var(--player-bg);
+  background-size: cover;
+  background-position: center;
+  filter: blur(60px) saturate(1.4) brightness(0.55);
+  opacity: 0.7;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.player-modal-overlay .music-player > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Topo */
+.player-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.4rem;
+  gap: 1rem;
+}
+
+.player-icon-btn {
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  cursor: pointer;
+  padding: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.player-icon-btn:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+  transform: scale(1.06);
+}
+
+.mobile-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+}
+.mobile-tab {
+  background: transparent;
+  border: none;
+  color: #a7a7a7;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  padding: 0.3rem 0.2rem;
+  letter-spacing: 0.02em;
+}
+.mobile-tab.active {
+  color: #fff;
+}
+.mobile-tab.active::after {
+  content: '';
+  display: block;
+  height: 2px;
+  background: currentColor;
+  margin-top: 2px;
+  border-radius: 2px;
+}
+
+/* Grid */
+.player-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.player-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 1.4rem 2rem;
+  overflow-y: auto;
+  gap: 1.25rem;
+  min-height: 0;
+}
+
+/* Em desktop: 2 colunas (música + letra) */
+@media (min-width: 900px) {
+  .player-grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+  .lyrics-col {
+    display: flex !important;
+  }
+}
+
+/* Capa */
+.player-cover-wrap {
+  position: relative;
+  width: min(78vw, 420px);
+  aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  flex-shrink: 0;
+}
+
+.player-cover-bg {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(30px) brightness(0.7);
+  transform: scale(1.15);
+  z-index: 0;
+}
+
+.album-cover {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 4rem;
+  color: #fff;
+  background-color: #1f1f1f;
+}
+.album-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Head do título */
+.player-track-head {
+  width: min(100%, 520px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.player-track-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.player-track-info .track-title {
+  font-family: var(--font-serif, 'Playfair Display', serif);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.15;
+  margin-bottom: 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-track-info .track-artist {
+  font-size: 0.95rem;
+  color: #b3b3b3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-like-btn.liked svg path {
+  fill: #1DB954;
+  stroke: #1DB954;
+}
+
+/* Progresso */
+.progress-container {
+  width: min(100%, 520px);
+}
+
+.progress-container .progress-bar {
+  position: relative;
+  height: 4px;
+  background: rgba(255,255,255,0.25);
+  border-radius: 4px;
+  cursor: pointer;
+  overflow: visible;
+}
+
+.progress-container .progress-bar .progress {
+  height: 100%;
+  background: #fff;
+  border-radius: 4px;
+  width: 0;
+  position: relative;
+  transition: width 0.15s linear;
+}
+
+.progress-container .progress-bar:hover .progress::after {
+  content: '';
+  position: absolute;
+  right: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(0,0,0,0.4);
+}
+
+.progress-container .time-info {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: #b3b3b3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Controles */
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.4rem;
+  width: min(100%, 520px);
+}
+
+.control-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  border-radius: 50%;
+  transition: color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+  opacity: 0.85;
+}
+.control-btn:hover {
+  opacity: 1;
+  transform: scale(1.08);
+}
+.control-btn.active {
+  color: #1DB954;
+  opacity: 1;
+}
+.control-btn.active::before {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1DB954;
+  margin-top: 34px;
+}
+
+/* Botão de play grande */
+.control-btn.play-btn {
+  width: 68px;
+  height: 68px;
+  background: #fff;
+  color: #000;
+  opacity: 1;
+}
+.control-btn.play-btn:hover {
+  transform: scale(1.06);
+}
+.control-btn.play-btn svg {
+  margin-left: 3px;
+}
+.control-btn.play-btn.playing svg {
+  margin-left: 0;
+}
+
+/* Ações secundárias */
+.player-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: min(100%, 520px);
+}
+.player-actions .btn {
+  border-radius: 500px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 0.55rem 1.1rem;
+}
+.expanded-access {
+  color: #1DB954;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* Letra */
+.lyrics-col {
+  display: none;
+  flex-direction: column;
+  padding: 2rem 2rem 2rem 1rem;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.lyrics-header {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 0.75rem;
+}
+.lyrics-header h3 {
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.lyrics-scroll {
+  flex: 1;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  padding-right: 0.5rem;
+}
+
+.lyric-line {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #6a6a6a;
+  font-size: 1.1rem;
+  line-height: 1.5;
+  text-align: left;
+  padding: 0.5rem 0;
+  cursor: pointer;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+.lyric-line:hover {
+  color: #b3b3b3;
+}
+.lyric-line.active {
+  color: #fff;
+  font-weight: 700;
+  transform: scale(1.03);
+  transform-origin: left center;
+}
+.lyrics-empty {
+  color: #6a6a6a;
+  font-style: italic;
+  padding: 1rem 0;
+}
+
+/* Fila */
+.player-queue {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 0.75rem 1.4rem 1rem;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.player-queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.player-queue-label {
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.player-queue-count {
+  color: #b3b3b3;
+  font-size: 0.75rem;
+}
+.player-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.queue-track {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.queue-track:hover {
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+}
+.queue-track.playing {
+  color: #1DB954;
+}
+.queue-track-index {
+  width: 20px;
+  font-size: 0.75rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+.queue-track-cover {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background-size: cover;
+  background-position: center;
+  background-color: #2a2a2a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+.queue-track-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.queue-track-title {
+  font-size: 0.85rem;
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-track-duration {
+  font-size: 0.72rem;
+  color: #6a6a6a;
+}
+
+/* Mobile — tabs */
+@media (max-width: 899px) {
+  .player-col--music {
+    padding: 0.5rem 1.25rem 1.5rem;
+  }
+  .player-cover-wrap {
+    width: min(82vw, 340px);
+  }
+  .player-track-info .track-title {
+    font-size: 1.3rem;
+    text-align: center;
+  }
+  .player-track-info .track-artist {
+    text-align: center;
+  }
+  .player-track-head {
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .player-like-btn {
+    position: absolute;
+    right: 1.4rem;
+    top: 5rem;
+  }
+  .player-grid {
+    grid-template-columns: 1fr;
+  }
+  .lyrics-col {
+    display: none;
+  }
+  /* Quando o usuário toca na tab "Letra", escondemos a música e mostramos letra */
+  .music-player.mobile-lyrics .player-col--music {
+    display: none;
+  }
+  .music-player.mobile-lyrics .lyrics-col {
+    display: flex;
+  }
+}
+
+/* Impede scroll do body quando o player está aberto */
+body:has(.player-modal-overlay.open) {
+  overflow: hidden;
+}
