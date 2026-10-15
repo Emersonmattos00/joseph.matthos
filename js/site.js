@@ -186,7 +186,22 @@ async function loadPublicData() {
 
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
-      for (const p of json.plans) if (p && p.id) SITE.plans[p.id] = p;
+      for (const p of json.plans) {
+        if (!p || !p.id) continue;
+
+        // Inferir o "tipo" pelo name (já que o backend manda UUID como id)
+        const nameLower = String(p.name || '').toLowerCase();
+        let kind = null;
+        if (nameLower.includes('anual') || nameLower.includes('annual')) kind = 'anual';
+        else if (nameLower.includes('mensal') || nameLower.includes('monthly') || nameLower.includes('premium')) kind = 'premium';
+
+        SITE.plans[p.id] = {
+          ...p,
+          kind,                         // 'premium' | 'anual' | null
+          priceCents: Number(p.priceCents) || 0,
+          available: p.available !== false
+        };
+      }
     }
 
     // ─── Planos de aluguel (faixa + álbum) ───────────────────
@@ -828,15 +843,18 @@ function renderPlans() {
   grid.innerHTML = plans
     .map((p) => {
       const priceInfo = SITE.plans[p.id] || {};
-      const cents = priceInfo.priceCents || 0;
+      const cents = Number(priceInfo.priceCents) || 0;
       const interval = priceInfo.interval;
+      const planKind = priceInfo.kind; // 'premium' | 'anual' | null
       const available = priceInfo.available !== false && (p.id === 'free' || cents > 0);
 
       const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
-      const suffixText = interval === 'month' ? '/mês' : interval === 'year' ? '/ano' : '';
+      const suffixText =
+        planKind === 'premium' || interval === 'month' ? '/mês' :
+        planKind === 'anual' || interval === 'year' ? '/ano' : '';
 
       const isCurrent = SITE.user && currentPlan === p.id;
-      const isPaidPlan = p.id === 'premium' || p.id === 'anual';
+      const isPaidPlan = planKind === 'premium' || planKind === 'anual';
       const isManageView = userIsPremium && isPaidPlan;
 
       let ctaText = p.cta;
@@ -1549,7 +1567,10 @@ async function subscribe(planId) {
   }
 
   const currentIsPremium = ['premium', 'anual'].includes(SITE.user.plan);
-  const wantsPaid = ['premium', 'anual'].includes(planId);
+  // Aceita UUID ou tipo — checa se é um plano pago
+  const planInfo = SITE.plans[planId];
+  const wantsPaid = planInfo?.kind === 'premium' || planInfo?.kind === 'anual' ||
+                    ['premium', 'anual'].includes(planId);
 
   if (currentIsPremium && wantsPaid) {
     toast('Você já tem uma assinatura ativa.', 'ℹ');
