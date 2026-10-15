@@ -2316,34 +2316,11 @@ function toggleShuffle() {
 
 function renderQueue() {
   const wrap = document.getElementById('expandedPlayerQueue');
-  const list = document.getElementById('expandedQueueList');
-  const count = document.getElementById('expandedQueueCount');
-  if (!wrap || !list) return;
-  if (playerQueue.length <= 1) { wrap.hidden = true; list.innerHTML = ''; return; }
-  wrap.hidden = false;
-  if (count) count.textContent = `${playerQueue.length} faixas`;
-  list.innerHTML = playerQueue.map((item, idx) => {
-    const album = findAlbum(item.albumId);
-    if (!album) return '';
-    const track = findTrackByIndex(item.albumId, item.trackIndex);
-    if (!track) return '';
-    const isCurrent = idx === playerQueueIndex;
-    const locked = isLocked(item.albumId, item.trackIndex);
-    const coverStyle = album.coverImage
-      ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
-      : '';
-    const coverText = album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪');
-    return `
-      <button class="queue-track ${isCurrent ? 'playing' : ''}" type="button" data-action="play-queue" data-queue-index="${idx}">
-        <span class="queue-track-index">${isCurrent ? '▶' : idx + 1}</span>
-        <span class="queue-track-cover" ${coverStyle}>${coverText}</span>
-        <span class="queue-track-info">
-          <span class="queue-track-title">${esc(track.title)}</span>
-          <span class="queue-track-duration">${esc(track.duration || '—')}</span>
-        </span>
-        <span class="queue-track-lock">${locked ? '🔒' : '▶'}</span>
-      </button>`;
-  }).join('');
+  if (wrap) {
+    wrap.hidden = true;
+    wrap.innerHTML = '';
+  }
+  return;
 }
 
 async function playFromDiscography(albumId, trackIndex, opts = {}) {
@@ -2892,13 +2869,14 @@ function renderTracklistPanel() {
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
         return `
-          <button class="album-track-item ${isCurrent ? 'playing' : ''}"
-                  type="button"
-                  data-action="play-track-in-player"
-                  data-album="${esc(album.id)}"
-                  data-track-index="${ti}">
+          <div class="album-track-item ${isCurrent ? 'playing' : ''}"
+               role="button"
+               tabindex="0"
+               data-action="play-track-in-player"
+               data-album="${esc(album.id)}"
+               data-track-index="${ti}">
             <span class="album-track-index" aria-hidden="true">
-              <span class="album-track-num">${isCurrent ? '▶' : (i + 1)}</span>
+              <span class="album-track-num">${i + 1}</span>
               <svg class="album-track-play" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 5v14l11-7z" fill="currentColor"/>
               </svg>
@@ -2933,8 +2911,8 @@ function renderTracklistPanel() {
               </button>
             </span>
             <span class="album-track-duration">${esc(t.duration || '—')}</span>
-            ${locked ? '<span class="album-track-lock" aria-label="Bloqueada">🔒</span>' : '<span class="album-track-lock"></span>'}
-          </button>
+            <span class="album-track-lock">${locked ? '🔒' : ''}</span>
+          </div>
         `;
       }).join('')}
     </div>
