@@ -38,7 +38,6 @@ module.exports = async (req, res) => {
     }
 
     // Escolher a chave do B2
-    // Sua tabela tem: previewKey, streamKey, masterKey
     const b2Key = accessLevel === 'full' ? track.streamKey : track.previewKey;
     if (!b2Key) return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
 
@@ -57,7 +56,7 @@ module.exports = async (req, res) => {
         durationSeconds: track.durationSeconds,
       },
     });
-    } catch (error) {
+  } catch (error) {
     console.error('[stream] erro detalhado:', error);
     const isDev = process.env.NODE_ENV !== 'production';
     return res.status(500).json({
@@ -70,5 +69,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-
-// Não esqueça do `};` final!

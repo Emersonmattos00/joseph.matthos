@@ -2375,7 +2375,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     );
     let json = null;
     try { json = await r.json(); } catch { json = null; }
-    if (!r.ok || !json?.ok) throw new Error(json?.error || `Falha ao obter áudio (${r.status})`);
+    if (!r.ok) throw new Error(json?.error || `Falha ao obter áudio (${r.status})`);
     streamData = json;
   } catch (err) {
     if (err?.name === 'AbortError') return;
@@ -2384,28 +2384,32 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     return;
   }
 
-  const unlocked = Boolean(streamData.unlocked);
-  const source = streamData.source || (unlocked ? 'full' : 'preview');
-  const src = source === 'full' ? streamData.fullUrl : streamData.previewUrl;
+  // ⚠️ NOVO FORMATO do /api/stream
+  const accessLevel = streamData.accessLevel || 'preview';
+  const unlocked = accessLevel === 'full';
+  const src = streamData.audioUrl;
 
   if (!src) {
-    toast(streamData.warning || (unlocked ? 'O áudio completo não está disponível.' : 'Esta música não possui uma prévia cadastrada.'), '⚠');
+    toast('Áudio não disponível.', '⚠');
     return;
   }
 
-  if (source === 'full') {
+  if (unlocked) {
     previewState = { active: false, start: 0, end: Infinity };
   } else {
-    const start = Math.max(0, Number(streamData.previewStart) || 0);
     const duration = Math.max(1, Number(streamData.previewDuration) || 30);
-    previewState = { active: true, start, end: start + duration };
+    previewState = { active: true, start: 0, end: duration };
   }
   previewNoticeTrackKey = '';
 
   currentStream = {
-    albumId, trackIndex: realIndex, trackId,
-    unlocked, source, url: src,
-    expiresIn: Number(streamData.expiresIn) || null,
+    albumId,
+    trackIndex: realIndex,
+    trackId,
+    unlocked,
+    source: accessLevel,           // 'preview' ou 'full'
+    url: src,
+    expiresIn: null,               // backend não retorna mais
     loadedAt: Date.now()
   };
 
