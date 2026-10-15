@@ -1,10 +1,11 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v9 FINAL)
+   SITE.JS — Joseph Matthos (v10 FINAL)
    ------------------------------------------------------------
-   - Painel direito: lista de faixas por padrão, letra só na tab
-   - Modal de álbum estilo Spotify (botão Tocar + menu ⋯)
-   - Faixas com número correto e feat
-   - Capa inteira no player expandido
+   - /api/stream usa trackId (corrige erro 400)
+   - Painel direito: lista de faixas, número vira play no hover
+   - Ícones ❤️ ✈️ ⋯ funcionando
+   - Capa do player em preenchimento total
+   - Fila desativada (não duplica)
    ============================================================ */
 
 import {
@@ -227,6 +228,11 @@ async function loadUser() {
   }
   try {
     const r = await fetch('/api/auth?action=me', { credentials: 'same-origin' });
+    if (r.status === 401) {
+      SITE.user = null;
+      SITE.rentals = [];
+      return;
+    }
     const json = await r.json();
     if (r.ok && json.ok && json.user) {
       SITE.user = json.user;
@@ -745,7 +751,6 @@ function bindSpotifyCards(container) {
     const albumId = card.dataset.albumId;
     const trackIndex = Number(card.dataset.trackIndex);
 
-    // ▶️ botão de play → abre o player
     const playBtn = card.querySelector('[data-spotify-play]');
     if (playBtn) {
       playBtn.addEventListener('click', (e) => {
@@ -755,8 +760,6 @@ function bindSpotifyCards(container) {
       });
     }
 
-    // ❤️ e ✈️ → já tratados pelo handler global (não abre nada)
-    // Clique no resto do card → SEMPRE abre o modal do álbum
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-spotify-play]')) return;
       if (e.target.closest('[data-action="like-track"]')) return;
@@ -1059,8 +1062,7 @@ function resolvePlaylistTracks(playlist) {
 // ─────────────────────────────────────────────────────────────
 // MODAL DE ÁLBUM (estilo Spotify)
 // ─────────────────────────────────────────────────────────────
-  function openAlbumModal(albumId) {
-  // Fecha qualquer modal aberto antes de abrir o novo
+function openAlbumModal(albumId) {
   const existing = document.getElementById('albumModal');
   if (existing && existing.classList.contains('open')) {
     existing.classList.remove('open');
@@ -1131,7 +1133,6 @@ function resolvePlaylistTracks(playlist) {
     tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
   }
 
-  // Botão Tocar do álbum
   const playBtn = modal.querySelector('#albumModalPlay');
   if (playBtn && !playBtn.dataset.bound) {
     playBtn.dataset.bound = '1';
@@ -1606,7 +1607,7 @@ function bindGlobalEvents() {
     if (!actionEl) return;
     const action = actionEl.dataset.action;
 
-        switch (action) {
+    switch (action) {
       case 'like-track': {
         e.preventDefault();
         e.stopPropagation();
@@ -1628,7 +1629,6 @@ function bindGlobalEvents() {
         break;
       }
       case 'play-track-in-player': {
-        // Só dispara se o clique NÃO foi num botão interno
         if (e.target.closest('button')) break;
         const albId = actionEl.dataset.album;
         const trkIdx = Number(actionEl.dataset.trackIndex);
@@ -2057,7 +2057,6 @@ function checkAlbumHash() {
   if (!m) return;
   const id = decodeURIComponent(m[1]);
   const modal = document.getElementById('albumModal');
-  // Se o modal já está aberto com esse álbum, não faz nada
   if (modal && modal.classList.contains('open')) {
     const titleEl = modal.querySelector('#albumModalTitle');
     const currentAlbum = findAlbum(id);
@@ -2242,14 +2241,14 @@ async function renewSignedUrl() {
   if (isRenewing) return;
   if (!currentStream || currentStream.source !== 'full') return;
   isRenewing = true;
-  const { albumId, trackIndex } = currentStream;
+  const { trackId } = currentStream;
   const wasPlaying = audio && !audio.paused;
   const savedTime = audio?.currentTime || 0;
   const savedVolume = audio?.volume ?? lastVolume;
 
   try {
     const r = await fetch(
-      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(trackIndex)}`,
+      `/api/stream?trackId=${encodeURIComponent(trackId)}`,
       { credentials: 'same-origin', cache: 'no-store' }
     );
     const json = await r.json();
@@ -2332,6 +2331,15 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   if (!album) return;
   const track = findTrackByIndex(albumId, trackIndex);
   if (!track) { console.warn('[player] faixa não encontrada:', albumId, trackIndex); return; }
+
+  // ⚠️ O backend /api/stream agora espera trackId (não albumId + trackIndex)
+  const trackId = track.id;
+  if (!trackId) {
+    console.error('[player] faixa sem id:', track);
+    toast('Faixa sem ID — não foi possível carregar.', '⚠');
+    return;
+  }
+
   const realIndex = Number(track.trackIndex) || 0;
   if (!opts.fromQueue) buildQueueForAlbum(albumId, realIndex);
 
@@ -2341,7 +2349,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   isRenewing = false;
 
   currentTrackIdentity = {
-    albumId, trackIndex: realIndex,
+    albumId, trackIndex: realIndex, trackId,
     trackTitle: track.title,
     identity: `${albumId}:${realIndex}`
   };
@@ -2358,7 +2366,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   let streamData;
   try {
     const r = await fetch(
-      `/api/stream?albumId=${encodeURIComponent(albumId)}&trackIndex=${encodeURIComponent(realIndex)}`,
+      `/api/stream?trackId=${encodeURIComponent(trackId)}`,
       {
         credentials: 'same-origin', cache: 'no-store',
         headers: { Accept: 'application/json' },
@@ -2395,7 +2403,8 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   previewNoticeTrackKey = '';
 
   currentStream = {
-    albumId, trackIndex: realIndex, unlocked, source, url: src,
+    albumId, trackIndex: realIndex, trackId,
+    unlocked, source, url: src,
     expiresIn: Number(streamData.expiresIn) || null,
     loadedAt: Date.now()
   };
@@ -2842,7 +2851,6 @@ function updateExpandedLikeButton(track) {
   }
 }
 
-/** Desenha a lista de faixas do álbum (estado padrão do painel) */
 function renderTracklistPanel() {
   const container = document.getElementById('expandedLyricsContent');
   if (!container) return;
@@ -2859,6 +2867,7 @@ function renderTracklistPanel() {
     return;
   }
 
+  // Compara pela POSIÇÃO (index) da lista, não pelo trackIndex
   const currentIdx = currentTrackIdentity?.trackIndex;
 
   container.innerHTML = `
@@ -2872,7 +2881,6 @@ function renderTracklistPanel() {
         const isCurrent = ti === currentIdx;
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
-        const playable = !locked || isPremium() || isRented(album.id, ti);
 
         return `
           <div class="album-track-item ${isCurrent ? 'playing' : ''}"
@@ -2949,7 +2957,6 @@ function renderTracklistPanel() {
   `;
 }
 
-/** Desenha a letra (só quando a tab "Letra" está ativa) */
 function renderLyricsPanel() {
   const container = document.getElementById('expandedLyricsContent');
   if (!container) return;
