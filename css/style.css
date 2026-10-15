@@ -3895,102 +3895,107 @@ button {
   }
 }
 
-/* ═════════════════════════════════════════════════════════════
-   CAPA DO ÁLBUM NO PLAYER — sempre completa, sem cortar
+//* ═════════════════════════════════════════════════════════════
+   CAPA DO PLAYER — maior, preenchendo mais espaço
    ═════════════════════════════════════════════════════════════ */
 
 .player-cover-wrap {
   position: relative;
-  width: min(80vw, 420px);
-  aspect-ratio: 1 / 1;
-  border-radius: 12px;
+  width: min(92vw, 520px);
+  max-height: 70vh;
+  border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+  box-shadow: 0 24px 70px rgba(0,0,0,0.75);
   flex-shrink: 0;
-  background: #000;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto;
 }
 
-/* Remove o fundo blur antigo que estava cortando */
 .player-cover-wrap .player-cover-bg {
   display: none !important;
 }
 
-/* A capa — contém a imagem inteira dentro do quadrado */
 .player-cover-wrap .album-cover {
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: #000;
-  background-size: contain !important;   /* 👈 NÃO corta */
-  background-repeat: no-repeat !important;
-  background-position: center !important;
+  height: auto;
+  max-height: 70vh;
+  display: block;
+  background: none !important;
   font-size: 4rem;
   color: #fff;
   padding: 0;
+  line-height: 0;
 }
 
-/* Imagem dentro da capa */
 .player-cover-wrap .album-cover img {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
-  object-fit: contain !important;         /* 👈 NÃO corta */
   display: block;
+  width: 100%;
+  height: auto;
+  max-height: 70vh;
+  object-fit: cover;
+  border-radius: 16px;
 }
 
-/* Mobile */
+/* Mobile — capa ocupa quase toda a largura */
 @media (max-width: 899px) {
   .player-cover-wrap {
-    width: min(85vw, 360px);
+    width: min(94vw, 440px);
+    max-height: 62vh;
+  }
+  .player-cover-wrap .album-cover,
+  .player-cover-wrap .album-cover img {
+    max-height: 62vh;
   }
 }
 
-/* Head do título */
+/* Coração do player — na linha do título, à direita */
 .player-track-head {
-  width: min(100%, 520px);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
+  width: min(100%, 520px);
+  margin: 0 auto;
 }
 
-.player-track-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.player-track-info .track-title {
-  font-family: var(--font-serif, 'Playfair Display', serif);
-  font-size: 1.6rem;
-  font-weight: 700;
-  color: #fff;
-  line-height: 1.15;
-  margin-bottom: 0.2rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-track-info .track-artist {
-  font-size: 0.95rem;
+.player-like-btn {
+  background: transparent;
+  border: none;
   color: #b3b3b3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  cursor: pointer;
+  padding: 0.4rem;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.player-like-btn:hover {
+  color: #fff;
+  transform: scale(1.1);
 }
 
 .player-like-btn.liked svg path {
   fill: #1DB954;
   stroke: #1DB954;
+}
+
+/* Mobile */
+@media (max-width: 899px) {
+  .player-track-head {
+    flex-direction: row;
+    align-items: center;
+  }
+  .player-like-btn {
+    position: static;
+    margin-left: auto;
+  }
 }
 
 /* Progresso */
@@ -4926,5 +4931,43 @@ body:has(.player-modal-overlay.open) {
   .album-track-duration {
     min-width: 36px;
     font-size: 0.75rem;
+  }
+}
+/* ═════════════════════════════════════════════════════════════
+   AÇÕES INFERIORES DO PLAYER (mobile)
+   ═════════════════════════════════════════════════════════════ */
+
+.player-bottom-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: min(100%, 520px);
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.player-bottom-btn {
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  cursor: pointer;
+  padding: 0.6rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, transform 0.15s ease;
+}
+
+.player-bottom-btn:hover {
+  color: #fff;
+  transform: scale(1.1);
+}
+
+/* Só aparece no mobile */
+@media (min-width: 900px) {
+  .player-bottom-actions {
+    display: none;
   }
 }
