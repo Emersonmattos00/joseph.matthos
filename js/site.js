@@ -745,6 +745,7 @@ function bindSpotifyCards(container) {
     const albumId = card.dataset.albumId;
     const trackIndex = Number(card.dataset.trackIndex);
 
+    // ▶️ botão de play → abre o player
     const playBtn = card.querySelector('[data-spotify-play]');
     if (playBtn) {
       playBtn.addEventListener('click', (e) => {
@@ -754,10 +755,15 @@ function bindSpotifyCards(container) {
       });
     }
 
+    // ❤️ e ✈️ → já tratados pelo handler global (não abre nada)
+    // Clique no resto do card → SEMPRE abre o modal do álbum
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-spotify-play]')) return;
       if (e.target.closest('[data-action="like-track"]')) return;
       if (e.target.closest('[data-action="share-track"]')) return;
+      if (e.target.closest('[data-action="open-rent"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
       openAlbumModal(albumId);
     });
   });
@@ -1053,7 +1059,13 @@ function resolvePlaylistTracks(playlist) {
 // ─────────────────────────────────────────────────────────────
 // MODAL DE ÁLBUM (estilo Spotify)
 // ─────────────────────────────────────────────────────────────
-function openAlbumModal(albumId) {
+  function openAlbumModal(albumId) {
+  // Fecha qualquer modal aberto antes de abrir o novo
+  const existing = document.getElementById('albumModal');
+  if (existing && existing.classList.contains('open')) {
+    existing.classList.remove('open');
+  }
+
   const album = findAlbum(albumId);
   if (!album) {
     console.warn('[album] não encontrado:', albumId);
@@ -2038,8 +2050,18 @@ function initPlayer() {
 
 function checkAlbumHash() {
   const m = location.hash.match(/^#album-(.+)$/);
-  if (m) openAlbumModal(decodeURIComponent(m[1]));
+  if (!m) return;
+  const id = decodeURIComponent(m[1]);
+  const modal = document.getElementById('albumModal');
+  // Se o modal já está aberto com esse álbum, não faz nada
+  if (modal && modal.classList.contains('open')) {
+    const titleEl = modal.querySelector('#albumModalTitle');
+    const currentAlbum = findAlbum(id);
+    if (currentAlbum && titleEl && titleEl.textContent === currentAlbum.title) return;
+  }
+  openAlbumModal(id);
 }
+
 window.addEventListener('hashchange', checkAlbumHash);
 
 // ─────────────────────────────────────────────────────────────

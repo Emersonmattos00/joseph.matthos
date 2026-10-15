@@ -4615,3 +4615,65 @@ body:has(.player-modal-overlay.open) {
     display: none;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   CAPA DO PLAYER — preenchimento total (sem barras pretas)
+   ═════════════════════════════════════════════════════════════ */
+
+.player-cover-wrap {
+  position: relative;
+  width: min(85vw, 460px);
+  /* NÃO usa aspect-ratio: 1/1 — deixa a altura ser natural */
+  max-height: 60vh;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+  flex-shrink: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+}
+
+/* Esconde o fundo blur antigo (não precisa mais) */
+.player-cover-wrap .player-cover-bg {
+  display: none !important;
+}
+
+/* A capa em si — ocupa 100% e mantém a proporção natural */
+.player-cover-wrap .album-cover {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+  display: block;
+  background: none !important;
+  font-size: 4rem;
+  color: #fff;
+  padding: 0;
+  line-height: 0;
+}
+
+/* Imagem dentro da capa — preenche sem distorcer, sem barras */
+.player-cover-wrap .album-cover img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+  object-fit: cover;
+  border-radius: 12px;
+}
+
+/* Mobile */
+@media (max-width: 899px) {
+  .player-cover-wrap {
+    width: min(92vw, 420px);
+    max-height: 55vh;
+  }
+  .player-cover-wrap .album-cover,
+  .player-cover-wrap .album-cover img {
+    max-height: 55vh;
+  }
+}
