@@ -4966,3 +4966,338 @@ body:has(.player-modal-overlay.open) {
     display: none;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════
+   MODAL DE ALUGUEL — layout fechado (sem rolagem)
+   ═════════════════════════════════════════════════════════════ */
+
+#rentModal .modal {
+  max-width: 520px;
+  width: 92vw;
+  max-height: 92vh;
+  padding: 1.5rem 1.5rem 1.2rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #181818;
+  border-radius: 16px;
+}
+
+#rentModal .modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+#rentModal .modal-close:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.08);
+}
+
+/* Título */
+#rentModal h2 {
+  font-family: var(--font-sans, 'Inter', sans-serif);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0 0 0.35rem;
+  padding-right: 2rem;
+  line-height: 1.2;
+}
+#rentModal h2 .gold {
+  color: #d4af37;
+}
+
+#rentModal .sub {
+  font-size: 0.875rem;
+  color: #b3b3b3;
+  margin: 0 0 1rem;
+  line-height: 1.4;
+}
+
+/* ─── Abas Faixa / Álbum ──────────────────────────────────── */
+#rentModal .rent-tabs {
+  display: flex;
+  gap: 0.35rem;
+  background: #0a0a0a;
+  border: 1px solid #282828;
+  border-radius: 999px;
+  padding: 0.35rem;
+  margin: 0 0 1rem;
+  flex-shrink: 0;
+}
+
+#rentModal .rent-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #b3b3b3;
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 0.65rem 0.5rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+#rentModal .rent-tab:hover:not(:disabled):not(.active) {
+  color: #fff;
+}
+#rentModal .rent-tab.active {
+  background: #d4af37;
+  color: #000;
+}
+#rentModal .rent-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ─── Info da faixa/álbum (thumbnail + título) ────────────── */
+#rentModal .rent-track-info {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  background: #242424;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  padding: 0.75rem;
+  margin: 0 0 1rem;
+  flex-shrink: 0;
+}
+
+#rentModal .rent-track-cover {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background-size: cover;
+  background-position: center;
+  background-color: #333;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  color: #b3b3b3;
+  overflow: hidden;
+}
+#rentModal .rent-track-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#rentModal .rent-track-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+#rentModal .rent-track-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#rentModal .rent-track-album {
+  font-size: 0.8rem;
+  color: #b3b3b3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Opções de plano ─────────────────────────────────────── */
+#rentModal .rent-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+#rentModal .rent-option {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 0.9rem;
+  background: #242424;
+  border: 1.5px solid #2a2a2a;
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  position: relative;
+  min-height: 60px;
+}
+
+#rentModal .rent-option:hover {
+  border-color: #3a3a3a;
+}
+
+#rentModal .rent-option.selected {
+  border-color: #d4af37;
+  background: rgba(212, 175, 55, 0.08);
+}
+
+#rentModal .rent-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Radio customizado */
+#rentModal .rent-option input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  border: 2px solid #555;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  margin: 0;
+  transition: border-color 0.15s ease;
+}
+
+#rentModal .rent-option.selected input[type="radio"] {
+  border-color: #d4af37;
+}
+
+#rentModal .rent-option.selected input[type="radio"]::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: #d4af37;
+}
+
+/* Texto */
+#rentModal .rent-option > span:not(.popular-tag) {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+#rentModal .rent-option-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.2;
+}
+
+#rentModal .rent-option-sub {
+  font-size: 0.8rem;
+  color: #b3b3b3;
+  line-height: 1.2;
+}
+
+#rentModal .rent-option-price {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #d4af37;
+  white-space: nowrap;
+  justify-self: end;
+}
+
+/* Tag "Mais popular" */
+#rentModal .popular-tag {
+  position: absolute;
+  top: -8px;
+  left: 12px;
+  background: #d4af37;
+  color: #000;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* ─── Erro ───────────────────────────────────────────────── */
+#rentModal .form-error {
+  color: #ff4d5e;
+  font-size: 0.8rem;
+  margin: 0 0 0.5rem;
+  min-height: 1rem;
+  flex-shrink: 0;
+}
+
+/* ─── Botão principal ───────────────────────────────────── */
+#rentModal #rentConfirmBtn {
+  width: 100%;
+  padding: 1rem;
+  background: #d4af37;
+  color: #000;
+  border: none;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  flex-shrink: 0;
+  margin-top: auto;
+}
+#rentModal #rentConfirmBtn:hover {
+  background: #e0bc4a;
+  transform: translateY(-1px);
+}
+#rentModal #rentConfirmBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ─── Link "assine o Premium" ───────────────────────────── */
+#rentModal .modal-switch {
+  text-align: center;
+  font-size: 0.8rem;
+  color: #b3b3b3;
+  margin-top: 0.8rem;
+  flex-shrink: 0;
+}
+#rentModal .modal-switch a {
+  color: #d4af37;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* Mobile */
+@media (max-width: 520px) {
+  #rentModal .modal {
+    width: 96vw;
+    padding: 1.25rem 1.1rem 1rem;
+    max-height: 94vh;
+  }
+  #rentModal h2 { font-size: 1.3rem; }
+  #rentModal .rent-option { padding: 0.7rem 0.85rem; min-height: 56px; }
+  #rentModal .rent-option-label { font-size: 0.9rem; }
+  #rentModal .rent-option-price { font-size: 0.95rem; }
+  #rentModal #rentConfirmBtn { padding: 0.9rem; font-size: 0.9rem; }
+}
