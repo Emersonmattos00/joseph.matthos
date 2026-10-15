@@ -2218,17 +2218,49 @@ function bindPlayerControls() {
     }
   });
 
-  bind('bottomQueueBtn', () => {
-    const tab = document.querySelector('#expandedPlayerModal .mobile-tab[data-tab="music"]');
-    if (tab) tab.click();
+    bind('bottomQueueBtn', () => {
+    const modal = document.getElementById('expandedPlayerModal');
+    const player = modal?.querySelector('.music-player');
+    const tabs = modal?.querySelectorAll('.mobile-tab');
+    if (!modal || !player || !tabs) return;
+
+    // Ajusta estado visual das tabs
+    tabs.forEach((t) => {
+      const isMusic = t.dataset.tab === 'music';
+      t.classList.toggle('active', isMusic);
+      t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
+    });
+
+    // Sai do modo letra
+    player.classList.remove('mobile-lyrics');
+
+    // Renderiza lista de faixas direto
+    renderTracklistPanel();
   });
-}
+
+  bind('bottomLyricsBtn', () => {
+    const modal = document.getElementById('expandedPlayerModal');
+    const player = modal?.querySelector('.music-player');
+    const tabs = modal?.querySelectorAll('.mobile-tab');
+    if (!modal || !player || !tabs) return;
+
+    tabs.forEach((t) => {
+      const isLyrics = t.dataset.tab === 'lyrics';
+      t.classList.toggle('active', isLyrics);
+      t.setAttribute('aria-selected', isLyrics ? 'true' : 'false');
+    });
+
+    player.classList.add('mobile-lyrics');
+
+    renderLyricsPanel();
+  });
 
 
 function bindMobileTabs() {
-  const player = document.querySelector('#expandedPlayerModal .music-player');
-  const tabs = document.querySelectorAll('#expandedPlayerModal .mobile-tab');
-  if (!player || !tabs.length) return;
+  const modal = document.getElementById('expandedPlayerModal');
+  const player = modal?.querySelector('.music-player');
+  const tabs = modal?.querySelectorAll('.mobile-tab');
+  if (!modal || !player || !tabs || !tabs.length) return;
 
   tabs.forEach((tab) => {
     if (tab.dataset.bound === '1') return;
