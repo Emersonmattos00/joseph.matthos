@@ -1,10 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v14 FINAL)
+   SITE.JS — Joseph Matthos (v15 FINAL)
    ------------------------------------------------------------
-   - Planos de faixa e álbum separados (albumRentalPlans)
-   - Modal de aluguel com abas Faixa/Álbum
-   - Sem duplicação de binds no player
-   - /api/stream usa trackId (UUID)
+   - Planos: UUID do backend mapeado pra kind (premium/anual)
+   - Aluguel: faixa e álbum separados com abas
+   - Player: bind sem duplicação, /api/stream?trackId=
+   - Painel direito: lista ou letra (alterna)
    ============================================================ */
 
 import {
@@ -43,8 +43,8 @@ export const SITE = {
   albums: [],
   tracks: {},
   plans: {},
-  rentalPlans: [],         // planos de faixa
-  albumRentalPlans: [],    // planos de álbum
+  rentalPlans: [],
+  albumRentalPlans: [],
   user: null,
   rentals: [],
   viewMode: 'cards',
@@ -184,22 +184,24 @@ async function loadPublicData() {
       }
     }
 
+    // ─── Planos de assinatura (Uuid → kind) ─────────────────
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) {
         if (!p || !p.id) continue;
-
-        // Inferir o "tipo" pelo name (já que o backend manda UUID como id)
         const nameLower = String(p.name || '').toLowerCase();
         let kind = null;
-        if (nameLower.includes('anual') || nameLower.includes('annual')) kind = 'anual';
-        else if (nameLower.includes('mensal') || nameLower.includes('monthly') || nameLower.includes('premium')) kind = 'premium';
+        if (nameLower.includes('anual') || nameLower.includes('annual') || nameLower.includes('ano')) {
+          kind = 'anual';
+        } else if (nameLower.includes('mensal') || nameLower.includes('monthly') || nameLower.includes('mês') || nameLower.includes('mes') || nameLower.includes('premium') || nameLower.includes('pro')) {
+          kind = 'premium';
+        }
 
         SITE.plans[p.id] = {
           ...p,
-          kind,                         // 'premium' | 'anual' | null
+          kind,
           priceCents: Number(p.priceCents) || 0,
-          available: p.available !== false
+          available: p.available !== false && (kind === null || Number(p.priceCents) > 0)
         };
       }
     }
@@ -830,7 +832,7 @@ function bindSpotifyCards(container) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PLANOS
+// PLANOS DE ASSINATURA
 // ─────────────────────────────────────────────────────────────
 function renderPlans() {
   const grid = document.getElementById('plansGrid');
@@ -845,7 +847,7 @@ function renderPlans() {
       const priceInfo = SITE.plans[p.id] || {};
       const cents = Number(priceInfo.priceCents) || 0;
       const interval = priceInfo.interval;
-      const planKind = priceInfo.kind; // 'premium' | 'anual' | null
+      const planKind = priceInfo.kind;
       const available = priceInfo.available !== false && (p.id === 'free' || cents > 0);
 
       const priceText = cents > 0 ? formatPrice(cents / 100) : 'R$ 0';
@@ -853,8 +855,9 @@ function renderPlans() {
         planKind === 'premium' || interval === 'month' ? '/mês' :
         planKind === 'anual' || interval === 'year' ? '/ano' : '';
 
-      const isCurrent = SITE.user && currentPlan === p.id;
-      const isPaidPlan = planKind === 'premium' || planKind === 'anual';
+      const isCurrent = SITE.user && (currentPlan === p.id || currentPlan === planKind);
+      const isPaidPlan = planKind === 'premium' || planKind === 'anual' ||
+                         p.id === 'premium' || p.id === 'anual';
       const isManageView = userIsPremium && isPaidPlan;
 
       let ctaText = p.cta;
@@ -1337,7 +1340,6 @@ function openRentModal(albumId, trackIndex) {
 
   if (albumRented) { toast('Você já alugou este álbum.', '✓'); return; }
 
-  // Abre na aba "faixa" se tiver track; senão, aba "álbum"
   const initialKind = (track && !trackRented) ? 'track' : 'album';
 
   _rentContext = {
@@ -1347,7 +1349,6 @@ function openRentModal(albumId, trackIndex) {
     planId: null
   };
 
-  // Título
   const titleEl = document.getElementById('rentModalTitle');
   if (titleEl) {
     titleEl.innerHTML = `Alugar <span class="gold">${initialKind === 'track' ? 'faixa' : 'álbum'}</span>`;
@@ -1355,7 +1356,6 @@ function openRentModal(albumId, trackIndex) {
   const subEl = document.getElementById('rentModalSub');
   if (subEl) subEl.textContent = 'Escolha por quanto tempo quer ouvir.';
 
-  // Abas — cria se não existir
   let tabsEl = document.querySelector('#rentModal .rent-tabs');
   if (!tabsEl) {
     const infoEl = document.querySelector('#rentModal .rent-track-info');
@@ -1399,7 +1399,6 @@ function openRentModal(albumId, trackIndex) {
     });
   }
 
-  // Capa + info
   const cover = document.getElementById('rentTrackCover');
   if (cover) {
     cover.innerHTML = '';
@@ -1560,16 +1559,19 @@ async function subscribe(planId) {
     openModal('signupModal');
     return;
   }
-  if (SITE.user.plan === planId) {
+
+  const planInfo = SITE.plans[planId];
+  const planKind = planInfo?.kind;
+  const currentPlan = SITE.user.plan;
+
+  if (currentPlan === planId || (planKind && currentPlan === planKind)) {
     closeModal('plansModal');
     openManageModal();
     return;
   }
 
-  const currentIsPremium = ['premium', 'anual'].includes(SITE.user.plan);
-  // Aceita UUID ou tipo — checa se é um plano pago
-  const planInfo = SITE.plans[planId];
-  const wantsPaid = planInfo?.kind === 'premium' || planInfo?.kind === 'anual' ||
+  const currentIsPremium = ['premium', 'anual'].includes(currentPlan);
+  const wantsPaid = planKind === 'premium' || planKind === 'anual' ||
                     ['premium', 'anual'].includes(planId);
 
   if (currentIsPremium && wantsPaid) {
@@ -1579,7 +1581,6 @@ async function subscribe(planId) {
     return;
   }
 
-  const planInfo = SITE.plans[planId];
   if (planInfo && planInfo.available === false) {
     toast('Pagamento indisponível para este plano.', '⚠');
     return;
