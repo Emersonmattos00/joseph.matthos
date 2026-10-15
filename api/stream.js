@@ -1,7 +1,7 @@
 const { eq } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks } = require('../src/schema.js');
-const { verifyUser, getUserAccessCached } = require('./_lib');
+const { getAuthUser, getPlanForUser } = require('./_lib');
 const { getPlaybackUrl } = require('./_storage');
 const { streamRatelimit } = require('./_cache');
 
@@ -24,21 +24,30 @@ module.exports = async (req, res) => {
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
     if (!track) return res.status(404).json({ error: 'Faixa não encontrada' });
 
-    // Verificar acesso
-    const user = await verifyUser(req);
+    // Verificar usuário (usa getAuthUser do _lib)
+    let user = null;
+    try {
+      user = await getAuthUser(req);
+    } catch (e) {
+      console.warn('[stream] getAuthUser falhou:', e.message);
+    }
+
+    // Determinar nível de acesso
     let accessLevel = 'preview';
     let expiresAt = null;
 
     if (user) {
-      const access = await getUserAccessCached(user.id, trackId);
-      if (access.hasSubscription || access.hasRental) {
-        accessLevel = 'full';
-        expiresAt = access.expiresAt;
+      try {
+        const plan = await getPlanForUser(user.id);
+        if (plan === 'premium' || plan === 'anual') {
+          accessLevel = 'full';
+        }
+      } catch (e) {
+        console.warn('[stream] getPlanForUser falhou:', e.message);
       }
     }
 
     // Escolher a chave do B2
-    // Sua tabela tem: previewKey, streamKey, masterKey
     const b2Key = accessLevel === 'full' ? track.streamKey : track.previewKey;
     if (!b2Key) return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
 
@@ -57,8 +66,13 @@ module.exports = async (req, res) => {
         durationSeconds: track.durationSeconds,
       },
     });
-    } catch (error) {
-    console.error('[stream] erro detalhado:', error);
+  } catch (error) {
+    console.error('[stream] erro detalhado:', {
+      message: error.message,
+      name: error.name,
+      code: error.code,
+      stack: error.stack?.split('\n').slice(0, 8)
+    });
     const isDev = process.env.NODE_ENV !== 'production';
     return res.status(500).json({
       error: 'Erro interno do servidor',
@@ -70,5 +84,3 @@ module.exports = async (req, res) => {
     });
   }
 };
-
-// Não esqueça do `};` final!
