@@ -1,12 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v7 FINAL)
+   SITE.JS — Joseph Matthos (v8 FINAL)
    ------------------------------------------------------------
-   - Lançamentos e Álbuns mais ouvidos em CARROSSEL
-   - Discografia em GRADE (sem carrossel)
-   - Modal de álbum com ❤️ curtir + ✈️ compartilhar + ▶️ player
-   - Clique no card (lançamentos/mais ouvidos) abre o MODAL
-   - Botão ▶️ do card abre o PLAYER
-   - Deep link #album-ID abre o modal direto
+   - Painel direito: lista de faixas por padrão, letra só na tab
+   - Clique em faixa da lista toca e sincroniza o player
+   - Capa inteira (sem corte) no player expandido
+   - Coração verde Spotify em todos os lugares
    ============================================================ */
 
 import {
@@ -692,8 +690,6 @@ function renderSpotifyCard(item, type = 'album') {
     ? `<span class="spotify-card-badge spotify-card-badge--${badge.type}">${badge.label}</span>`
     : '';
 
-  // Estado do ❤️ é salvo no localStorage. Se o card for um álbum,
-  // usa o primeiro track como referência.
   const likeKey = `jm_like_${albumId}_${trackIndex}`;
   const isLiked = localStorage.getItem(likeKey) === '1';
 
@@ -741,11 +737,6 @@ function renderSpotifyCard(item, type = 'album') {
     </div>`;
 }
 
-/**
- * Cards de Lançamentos / Mais ouvidos:
- *   - Clique no ▶️ → abre o player
- *   - Clique no card → abre o modal do álbum
- */
 function bindSpotifyCards(container) {
   container.querySelectorAll('[data-spotify-card]').forEach((card) => {
     if (card.dataset.bound === '1') return;
@@ -754,7 +745,6 @@ function bindSpotifyCards(container) {
     const albumId = card.dataset.albumId;
     const trackIndex = Number(card.dataset.trackIndex);
 
-    // ▶️ → abre o player
     const playBtn = card.querySelector('[data-spotify-play]');
     if (playBtn) {
       playBtn.addEventListener('click', (e) => {
@@ -764,7 +754,6 @@ function bindSpotifyCards(container) {
       });
     }
 
-    // Clique no card → abre o modal do álbum
     card.addEventListener('click', (e) => {
       if (e.target.closest('[data-spotify-play]')) return;
       if (e.target.closest('[data-action="like-track"]')) return;
@@ -1452,7 +1441,6 @@ async function openManageModal() {
 // EVENTOS GLOBAIS
 // ─────────────────────────────────────────────────────────────
 function bindGlobalEvents() {
-  // Handler ÚNICO para open-album (com capture para pegar antes do resto)
   document.addEventListener('click', (e) => {
     const card = e.target.closest('[data-action="open-album"]');
     if (!card) return;
@@ -1481,6 +1469,15 @@ function bindGlobalEvents() {
         const albumId = actionEl.dataset.album;
         const trackIndex = Number(actionEl.dataset.trackIndex);
         openExpandedPlayer(albumId, trackIndex);
+        break;
+      }
+      case 'play-track-in-player': {
+        e.preventDefault();
+        e.stopPropagation();
+        const albId = actionEl.dataset.album;
+        const trkIdx = Number(actionEl.dataset.trackIndex);
+        if (!albId || !Number.isFinite(trkIdx)) break;
+        playFromDiscography(albId, trkIdx);
         break;
       }
       case 'open-rent': {
@@ -1965,18 +1962,28 @@ function bindMobileTabs() {
   const player = document.querySelector('#expandedPlayerModal .music-player');
   const tabs = document.querySelectorAll('#expandedPlayerModal .mobile-tab');
   if (!player || !tabs.length) return;
+
   tabs.forEach((tab) => {
     if (tab.dataset.bound === '1') return;
     tab.dataset.bound = '1';
+
     tab.addEventListener('click', () => {
       const target = tab.dataset.tab;
       const isLyrics = target === 'lyrics';
+
       tabs.forEach((t) => {
         const active = t.dataset.tab === target;
         t.classList.toggle('active', active);
         t.setAttribute('aria-selected', active ? 'true' : 'false');
       });
+
       player.classList.toggle('mobile-lyrics', isLyrics);
+
+      if (isLyrics) {
+        renderLyricsPanel();
+      } else {
+        renderTracklistPanel();
+      }
     });
   });
 }
@@ -2282,7 +2289,15 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   document.getElementById('previewBadge')?.classList.toggle('visible', source === 'preview');
   document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', source === 'preview');
 
-  renderLyrics(track);
+  // Painel direito: respeita a tab atual (lista ou letra)
+  const playerEl = document.querySelector('#expandedPlayerModal .music-player');
+  const isLyricsTab = playerEl && playerEl.classList.contains('mobile-lyrics');
+  if (isLyricsTab) {
+    renderLyricsPanel();
+  } else {
+    renderTracklistPanel();
+  }
+
   syncExpandedPlayer(track, album, unlocked);
   renderExpandedPlayerActions(albumId, realIndex);
   renderQueue();
@@ -2601,7 +2616,7 @@ function syncExpandedPlayer(track, album, unlocked) {
 
   const safeCover = safeMediaUrl(album.coverImage);
 
-  // Capa principal
+  // Capa principal (contém a imagem inteira, sem cortar)
   if (cover) {
     cover.style.backgroundImage = '';
     cover.innerHTML = '';
@@ -2616,7 +2631,7 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
-  // Fundo com blur
+  // Fundo com blur atrás da capa
   if (coverBg) {
     if (safeCover) {
       coverBg.style.backgroundImage = `url('${safeCover}')`;
@@ -2625,7 +2640,7 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
-  // Background do player inteiro (blur grande)
+  // Background do player inteiro (marca d'água com blur)
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     if (safeCover) {
@@ -2662,7 +2677,6 @@ function updateExpandedLikeButton(track) {
   btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
   btn.setAttribute('title', liked ? 'Remover dos curtidos' : 'Curtir');
 
-  // Rebind click (uma vez só)
   if (btn.dataset.bound !== '1') {
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => {
@@ -2676,7 +2690,6 @@ function updateExpandedLikeButton(track) {
       btn.setAttribute('aria-pressed', !isLiked ? 'true' : 'false');
       btn.setAttribute('title', !isLiked ? 'Remover dos curtidos' : 'Curtir');
 
-      // Atualiza também os cards visíveis (modal + home)
       document.querySelectorAll(
         `[data-action="like-track"][data-album="${info.albumId}"][data-track-index="${info.trackIndex}"]`
       ).forEach((el) => {
@@ -2687,22 +2700,84 @@ function updateExpandedLikeButton(track) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// PAINEL DIREITO — lista de faixas (padrão) OU letra (tab)
+// ─────────────────────────────────────────────────────────────
 
+/** Desenha a lista de faixas do álbum (estado padrão do painel) */
+function renderTracklistPanel() {
+  const container = document.getElementById('expandedLyricsContent');
+  if (!container) return;
 
-function renderLyrics(track) {
-  const html = (() => {
-    const lyrics = Array.isArray(track?.lyrics) ? track.lyrics : [];
-    if (!lyrics.length) return '<p class="lyrics-empty">Sem letra sincronizada.</p>';
-    return lyrics.map((line, i) =>
-      `<button class="lyric-line" data-lyric-index="${i}" data-lyric-time="${Number(line.time) || 0}">${esc(line.text)}</button>`
-    ).join('');
-  })();
-  const main = document.getElementById('lyricsContent');
-  if (main) main.innerHTML = html;
-  const expanded = document.getElementById('expandedLyricsContent');
-  if (expanded) expanded.innerHTML = html;
-  const title = document.getElementById('lyricsTitle');
-  if (title) title.textContent = track?.title || 'Nenhuma faixa tocando';
+  const panelTitle = document.getElementById('lyricsPanelTitle');
+  if (panelTitle) panelTitle.textContent = 'Faixas do álbum';
+
+  const albumId = currentTrackIdentity?.albumId;
+  const album = albumId ? findAlbum(albumId) : null;
+  const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
+
+  if (!albumTracks.length) {
+    container.innerHTML = '<p class="lyrics-empty">Nenhuma faixa encontrada.</p>';
+    return;
+  }
+
+  const currentIdx = currentTrackIdentity?.trackIndex;
+
+  container.innerHTML = `
+    <div class="album-tracklist-header">
+      <span class="album-tracklist-title">${esc(album.title || 'Álbum')}</span>
+      <span class="album-tracklist-count">${albumTracks.length} faixa${albumTracks.length === 1 ? '' : 's'}</span>
+    </div>
+    <div class="album-tracklist">
+      ${albumTracks.map((t, i) => {
+        const ti = Number(t.trackIndex) || 0;
+        const isCurrent = ti === currentIdx;
+        const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
+        return `
+          <button class="album-track-item ${isCurrent ? 'playing' : ''}"
+                  type="button"
+                  data-action="play-track-in-player"
+                  data-album="${esc(album.id)}"
+                  data-track-index="${ti}">
+            <span class="album-track-index">${isCurrent ? '▶' : (i + 1)}</span>
+            <span class="album-track-info">
+              <span class="album-track-title">${esc(t.title || '—')}</span>
+              <span class="album-track-meta">
+                <span class="album-track-duration">${esc(t.duration || '—')}</span>
+                ${isLiked ? '<span class="album-track-liked">💚</span>' : ''}
+              </span>
+            </span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+/** Desenha a letra (só quando a tab "Letra" está ativa) */
+function renderLyricsPanel() {
+  const container = document.getElementById('expandedLyricsContent');
+  if (!container) return;
+
+  const panelTitle = document.getElementById('lyricsPanelTitle');
+  if (panelTitle) panelTitle.textContent = 'Letra';
+
+  const albumId = currentTrackIdentity?.albumId;
+  const trackIndex = currentTrackIdentity?.trackIndex;
+  const track = albumId && Number.isFinite(trackIndex)
+    ? findTrackByIndex(albumId, trackIndex)
+    : null;
+
+  const lyrics = Array.isArray(track?.lyrics) ? track.lyrics : [];
+
+  if (!lyrics.length) {
+    container.innerHTML = '<p class="lyrics-empty">Esta faixa não tem letra cadastrada.</p>';
+    return;
+  }
+
+  container.innerHTML = lyrics.map((line, i) =>
+    `<button class="lyric-line" data-lyric-index="${i}" data-lyric-time="${Number(line.time) || 0}">${esc(line.text)}</button>`
+  ).join('');
 }
 
 function openPlaylistPlayer(playlistIndex) {

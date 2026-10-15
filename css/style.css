@@ -3895,46 +3895,63 @@ button {
   }
 }
 
-/* Capa */
+/* ═════════════════════════════════════════════════════════════
+   CAPA DO ÁLBUM NO PLAYER — sempre completa, sem cortar
+   ═════════════════════════════════════════════════════════════ */
+
 .player-cover-wrap {
   position: relative;
-  width: min(78vw, 420px);
+  width: min(80vw, 420px);
   aspect-ratio: 1 / 1;
   border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.7);
   flex-shrink: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
 }
 
-.player-cover-bg {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center;
-  filter: blur(30px) brightness(0.7);
-  transform: scale(1.15);
-  z-index: 0;
+/* Remove o fundo blur antigo que estava cortando */
+.player-cover-wrap .player-cover-bg {
+  display: none !important;
 }
 
-.album-cover {
+/* A capa — contém a imagem inteira dentro do quadrado */
+.player-cover-wrap .album-cover {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
-  background-size: cover;
-  background-position: center;
   display: flex;
   align-items: center;
   justify-content: center;
+  background-color: #000;
+  background-size: contain !important;   /* 👈 NÃO corta */
+  background-repeat: no-repeat !important;
+  background-position: center !important;
   font-size: 4rem;
   color: #fff;
-  background-color: #1f1f1f;
+  padding: 0;
 }
-.album-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+
+/* Imagem dentro da capa */
+.player-cover-wrap .album-cover img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain !important;         /* 👈 NÃO corta */
   display: block;
+}
+
+/* Mobile */
+@media (max-width: 899px) {
+  .player-cover-wrap {
+    width: min(85vw, 360px);
+  }
 }
 
 /* Head do título */
@@ -4285,4 +4302,28 @@ button {
 /* Impede scroll do body quando o player está aberto */
 body:has(.player-modal-overlay.open) {
   overflow: hidden;
+}
+
+/* ═════════════════════════════════════════════════════════════
+   PAINEL DIREITO — lista de faixas (padrão) e letra (tab)
+   ═════════════════════════════════════════════════════════════ */
+
+/* Em desktop, o painel direito SEMPRE aparece */
+@media (min-width: 900px) {
+  .lyrics-col {
+    display: flex !important;
+  }
+}
+
+/* Em mobile, esconde por padrão */
+@media (max-width: 899px) {
+  .lyrics-col {
+    display: none;
+  }
+  .music-player.mobile-lyrics .lyrics-col {
+    display: flex;
+  }
+  .music-player.mobile-lyrics .player-col--music {
+    display: none;
+  }
 }
