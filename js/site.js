@@ -2323,17 +2323,21 @@ function buildQueueForAlbum(albumId, startIndex) {
   const album = findAlbum(albumId);
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-  const realIndexes = albumTracks.map((t) => Number(t.trackNumber ?? t.trackIndex) || 0);
-  let indices = realIndexes.slice();
+
+  // ⚠️ Usa track.id (UUID) em vez de trackIndex (que é null no banco)
+  let indices = albumTracks.map((t) => t.id).filter(Boolean);
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
     const clickedPos = indices.indexOf(startIndex);
     if (clickedPos > 0) [indices[0], indices[clickedPos]] = [indices[clickedPos], indices[0]];
   }
-  playerQueue = indices.map((i) => ({ albumId, trackIndex: i }));
+
+  playerQueue = indices.map((trackId) => ({ albumId, trackId }));
   playerQueueIndex = playerQueue.findIndex(
-    (q) => q.albumId === albumId && q.trackIndex === startIndex
+    (q) => q.albumId === albumId && String(q.trackId) === String(startIndex)
   );
+  if (playerQueueIndex < 0) playerQueueIndex = 0;
+
   const shuffleBtn = document.getElementById('expandedShuffleBtn');
   if (shuffleBtn) {
     shuffleBtn.hidden = albumTracks.length <= 1;
@@ -2355,7 +2359,7 @@ function toggleShuffle() {
   const shuffleBtn = document.getElementById('expandedShuffleBtn');
   if (shuffleBtn) shuffleBtn.classList.toggle('active', shuffleEnabled);
   if (currentTrackIdentity) {
-    buildQueueForAlbum(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
+    buildQueueForAlbum(currentTrackIdentity.albumId, currentTrackIdentity.trackId);
     renderQueue();
   }
   toast(shuffleEnabled ? 'Aleatório ativado.' : 'Aleatório desativado.', '🔀');
@@ -2384,7 +2388,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   }
 
   const realIndex = Number(track.trackNumber ?? track.trackIndex) || 0;
-  if (!opts.fromQueue) buildQueueForAlbum(albumId, realIndex);
+  if (!opts.fromQueue) buildQueueForAlbum(albumId, trackId);
 
   if (currentAbortController) currentAbortController.abort();
   currentAbortController = new AbortController();
@@ -2525,7 +2529,7 @@ function nextTrack() {
   if (playerQueueIndex + 1 >= playerQueue.length) { audio.pause(); return; }
   playerQueueIndex++;
   const item = playerQueue[playerQueueIndex];
-  playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+  playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
 }
 
 function prevTrack() {
@@ -2534,7 +2538,7 @@ function prevTrack() {
   if (playerQueueIndex - 1 < 0) return;
   playerQueueIndex--;
   const item = playerQueue[playerQueueIndex];
-  playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+  playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
 }
 
 function onEnded() {
