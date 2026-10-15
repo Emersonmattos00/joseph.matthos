@@ -1,8 +1,9 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v12 FINAL)
+   SITE.JS — Joseph Matthos (v13 FINAL)
    ------------------------------------------------------------
-   - Sem delegação duplicada nos botões do player
-   - bindPlayerControls sem replaceWith (dataset.bound)
+   - Sem duplicação de binds nos botões do player
+   - bindPlayerControls com estrutura correta (fechado antes de bindMobileTabs)
+   - bottomLyricsBtn/bottomQueueBtn chamam render*Panel() direto
    - /api/stream usa trackId (UUID)
    - Painel direito: só faixa atual fica verde
    ============================================================ */
@@ -2165,7 +2166,7 @@ function bindPlayerControls() {
     });
   });
 
-  // Fullscreen
+  // Fullscreen (botão topo)
   bind('expandedFullscreenBtn', async () => {
     const player = document.querySelector('#expandedPlayerModal .music-player');
     if (!player) return;
@@ -2181,7 +2182,7 @@ function bindPlayerControls() {
     } catch (e) { console.warn('[fullscreen]', e); }
   });
 
-    // Bars
+  // Bars
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
@@ -2206,39 +2207,6 @@ function bindPlayerControls() {
   });
 
   bind('bottomLyricsBtn', () => {
-    const tab = document.querySelector('#expandedPlayerModal .mobile-tab[data-tab="lyrics"]');
-    if (tab) tab.click();
-  });
-
-  bind('bottomShareBtn', () => {
-    if (currentTrackIdentity) {
-      shareTrack(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
-    } else {
-      toast('Nenhuma faixa tocando.', 'ℹ');
-    }
-  });
-
-    bind('bottomQueueBtn', () => {
-    const modal = document.getElementById('expandedPlayerModal');
-    const player = modal?.querySelector('.music-player');
-    const tabs = modal?.querySelectorAll('.mobile-tab');
-    if (!modal || !player || !tabs) return;
-
-    // Ajusta estado visual das tabs
-    tabs.forEach((t) => {
-      const isMusic = t.dataset.tab === 'music';
-      t.classList.toggle('active', isMusic);
-      t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
-    });
-
-    // Sai do modo letra
-    player.classList.remove('mobile-lyrics');
-
-    // Renderiza lista de faixas direto
-    renderTracklistPanel();
-  });
-
-  bind('bottomLyricsBtn', () => {
     const modal = document.getElementById('expandedPlayerModal');
     const player = modal?.querySelector('.music-player');
     const tabs = modal?.querySelectorAll('.mobile-tab');
@@ -2255,6 +2223,31 @@ function bindPlayerControls() {
     renderLyricsPanel();
   });
 
+  bind('bottomShareBtn', () => {
+    if (currentTrackIdentity) {
+      shareTrack(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
+    } else {
+      toast('Nenhuma faixa tocando.', 'ℹ');
+    }
+  });
+
+  bind('bottomQueueBtn', () => {
+    const modal = document.getElementById('expandedPlayerModal');
+    const player = modal?.querySelector('.music-player');
+    const tabs = modal?.querySelectorAll('.mobile-tab');
+    if (!modal || !player || !tabs) return;
+
+    tabs.forEach((t) => {
+      const isMusic = t.dataset.tab === 'music';
+      t.classList.toggle('active', isMusic);
+      t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
+    });
+
+    player.classList.remove('mobile-lyrics');
+
+    renderTracklistPanel();
+  });
+}
 
 function bindMobileTabs() {
   const modal = document.getElementById('expandedPlayerModal');
