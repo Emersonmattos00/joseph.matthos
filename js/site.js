@@ -1,11 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v10 FINAL)
+   SITE.JS — Joseph Matthos (v11 FINAL)
    ------------------------------------------------------------
-   - /api/stream usa trackId (corrige erro 400)
-   - Painel direito: lista de faixas, número vira play no hover
-   - Ícones ❤️ ✈️ ⋯ funcionando
-   - Capa do player em preenchimento total
-   - Fila desativada (não duplica)
+   - /api/stream usa trackId (UUID)
+   - findTrackByIndex aceita id OU trackIndex
+   - Handler usa data-track-id com fallback
+   - Painel direito com número/hover play
    ============================================================ */
 
 import {
@@ -175,7 +174,11 @@ async function loadPublicData() {
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
-        if (t && t.albumId) SITE.tracks[`${t.albumId}:${t.trackIndex}`] = t;
+        if (!t) continue;
+        if (t.id) SITE.tracks[t.id] = t;
+        if (t.albumId && t.trackNumber != null) {
+          SITE.tracks[`${t.albumId}:${t.trackNumber}`] = t;
+        }
       }
     }
 
@@ -254,8 +257,9 @@ function isPremium() {
   return SITE.user && (SITE.user.plan === 'premium' || SITE.user.plan === 'anual');
 }
 
-function trackInfo(albumId, trackIndex) {
-  return SITE.tracks[`${albumId}:${trackIndex}`] || null;
+function trackInfo(albumId, trackIndexOrId) {
+  if (SITE.tracks[trackIndexOrId]) return SITE.tracks[trackIndexOrId];
+  return SITE.tracks[`${albumId}:${trackIndexOrId}`] || null;
 }
 
 function isRented(albumId, trackIndex) {
@@ -278,11 +282,15 @@ function findAlbum(albumId) {
   return SITE.albums.find((a) => String(a.id) === String(albumId)) || null;
 }
 
-function findTrackByIndex(albumId, realTrackIndex) {
+function findTrackByIndex(albumId, realTrackIndexOrId) {
   const album = findAlbum(albumId);
   if (!album) return null;
   const tracks = Array.isArray(album.tracks) ? album.tracks : [];
-  return tracks.find((t) => Number(t.trackIndex) === Number(realTrackIndex)) || null;
+  return tracks.find((t) =>
+    String(t.id) === String(realTrackIndexOrId) ||
+    Number(t.trackNumber) === Number(realTrackIndexOrId) ||
+    Number(t.trackIndex) === Number(realTrackIndexOrId)
+  ) || null;
 }
 
 function collectAllTracks() {
@@ -290,7 +298,7 @@ function collectAllTracks() {
   for (const album of SITE.albums || []) {
     const tracks = Array.isArray(album.tracks) ? album.tracks : [];
     for (const track of tracks) {
-      const idx = Number(track.trackIndex);
+      const idx = Number(track.trackNumber ?? track.trackIndex);
       if (!Number.isInteger(idx) || idx < 0) continue;
       out.push({
         albumId: album.id,
@@ -651,7 +659,7 @@ function uniqueAlbumsFromTracks(tracks) {
       map.set(album.id, {
         albumId: album.id,
         title: album.title,
-        coverImage: album.coverImage,
+        coverImage: album.coverImage || album.coverUrl,
         coverInitials: album.coverInitials || album.cover,
         year: album.year,
         type: album.type,
@@ -672,14 +680,14 @@ function renderSpotifyCard(item, type = 'album') {
     album = findAlbum(albumId);
     track = findTrackByIndex(albumId, trackIndex);
     if (!album || !track) return '';
-    cover = album.coverImage;
+    cover = track.coverUrl || album.coverImage || album.coverUrl;
     title = track.title;
     subtitle = `Joseph Matthos · ${album.title || ''}`.trim();
   } else {
     albumId = item.albumId;
     album = findAlbum(albumId);
     if (!album) return '';
-    cover = item.coverImage || album.coverImage;
+    cover = item.coverImage || album.coverImage || album.coverUrl;
     title = item.title || album.title;
     subtitle = `Joseph Matthos · ${item.trackCount || (album.tracks?.length || 0)} faixas`;
     trackIndex = item.firstTrackIndex ?? 0;
@@ -704,6 +712,7 @@ function renderSpotifyCard(item, type = 'album') {
          data-spotify-card
          data-type="${type}"
          data-album-id="${esc(albumId)}"
+         data-track-id="${esc(track?.id || '')}"
          data-track-index="${trackIndex}">
       <div class="spotify-card-cover">
         ${badgeHtml}
@@ -749,6 +758,7 @@ function bindSpotifyCards(container) {
     card.dataset.bound = '1';
 
     const albumId = card.dataset.albumId;
+    const trackId = card.dataset.trackId;
     const trackIndex = Number(card.dataset.trackIndex);
 
     const playBtn = card.querySelector('[data-spotify-play]');
@@ -756,7 +766,7 @@ function bindSpotifyCards(container) {
       playBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openExpandedPlayer(albumId, trackIndex);
+        openExpandedPlayer(albumId, trackId || trackIndex);
       });
     }
 
@@ -884,8 +894,9 @@ function renderDiscography() {
 
   const html = visible
     .map((album) => {
-      const cover = album.coverImage
-        ? `<img src="${esc(safeMediaUrl(album.coverImage))}" alt="${esc(album.title)}" loading="lazy">`
+      const coverImg = album.coverImage || album.coverUrl;
+      const cover = coverImg
+        ? `<img src="${esc(safeMediaUrl(coverImg))}" alt="${esc(album.title)}" loading="lazy">`
         : `<span class="card-initials">${esc(album.coverInitials || album.cover || '♪')}</span>`;
 
       const yearLabel = album.year ? ` • ${esc(album.year)}` : '';
@@ -905,8 +916,8 @@ function renderDiscography() {
 }
 
 function renderTrackCard(album, track, displayIndex = null) {
-  const realIndex = Number(track.trackIndex) || 0;
-  const info = trackInfo(album.id, realIndex);
+  const realIndex = Number(track.trackNumber ?? track.trackIndex) || 0;
+  const info = trackInfo(album.id, track.id);
   const priceCents = info && Number.isFinite(info.priceCents) ? info.priceCents : 0;
   const hasPriceInfo = !!info && priceCents > 0;
   const forSale = info ? info.forSale !== false && hasPriceInfo : false;
@@ -914,7 +925,7 @@ function renderTrackCard(album, track, displayIndex = null) {
   const rented = isRented(album.id, realIndex);
   const locked = isLocked(album.id, realIndex);
 
-  const identity = `${album.id}:${realIndex}`;
+  const identity = `${album.id}:${track.id}`;
   const isPlaying = currentTrackIdentity && currentTrackIdentity.identity === identity;
   const isLiked = localStorage.getItem(`jm_like_${album.id}_${realIndex}`) === '1';
 
@@ -945,6 +956,7 @@ function renderTrackCard(album, track, displayIndex = null) {
   return `
     <div class="discography-track-card ${isPlaying ? 'playing' : ''}"
          data-album="${esc(album.id)}"
+         data-track-id="${esc(track.id)}"
          data-track-index="${realIndex}"
          data-identity="${esc(identity)}"
          data-action="open-player">
@@ -1031,10 +1043,10 @@ function resolvePlaylistTracks(playlist) {
     const tracks = Array.isArray(album.tracks) ? album.tracks : [];
     tracks.forEach((track) => {
       if (track && track.id !== undefined && track.id !== null) {
-        index.set(Number(track.id), {
+        index.set(String(track.id), {
           album,
           track,
-          trackIndex: Number(track.trackIndex) || 0
+          trackIndex: Number(track.trackNumber ?? track.trackIndex) || 0
         });
       }
     });
@@ -1043,24 +1055,21 @@ function resolvePlaylistTracks(playlist) {
   const out = [];
   for (const ref of playlist.tracks) {
     if (typeof ref === 'number' && Number.isFinite(ref)) {
-      const entry = index.get(ref);
+      const entry = index.get(String(ref));
       if (entry) out.push(entry);
       continue;
     }
     if (typeof ref === 'string') {
       const trimmed = ref.trim();
-      const asNum = Number(trimmed);
-      if (Number.isFinite(asNum) && String(asNum) === trimmed) {
-        const entry = index.get(asNum);
-        if (entry) out.push(entry);
-      }
+      const entry = index.get(trimmed);
+      if (entry) out.push(entry);
     }
   }
   return out;
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM (estilo Spotify)
+// MODAL DE ÁLBUM
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
   const existing = document.getElementById('albumModal');
@@ -1110,8 +1119,9 @@ function openAlbumModal(albumId) {
   }
 
   const coverEl = modal.querySelector('#albumModalCover');
-  if (album.coverImage) {
-    coverEl.style.backgroundImage = `url('${safeMediaUrl(album.coverImage)}')`;
+  const coverImg = album.coverImage || album.coverUrl;
+  if (coverImg) {
+    coverEl.style.backgroundImage = `url('${safeMediaUrl(coverImg)}')`;
     coverEl.textContent = '';
   } else {
     coverEl.style.backgroundImage = '';
@@ -1139,9 +1149,8 @@ function openAlbumModal(albumId) {
     playBtn.addEventListener('click', () => {
       const first = tracks[0];
       if (!first) return;
-      const firstIdx = Number(first.trackIndex) || 0;
       closeAlbumModal();
-      openExpandedPlayer(album.id, firstIdx);
+      openExpandedPlayer(album.id, first.id);
     });
   }
 
@@ -1281,7 +1290,7 @@ function openRentModal(albumId, trackIndex) {
   if (cover) {
     cover.innerHTML = '';
     cover.style.backgroundImage = '';
-    const safeCover = safeMediaUrl(album.coverImage);
+    const safeCover = safeMediaUrl(album.coverImage || album.coverUrl);
     if (safeCover) {
       const img = document.createElement('img');
       img.src = safeCover;
@@ -1631,16 +1640,16 @@ function bindGlobalEvents() {
       case 'play-track-in-player': {
         if (e.target.closest('button')) break;
         const albId = actionEl.dataset.album;
-        const trkIdx = Number(actionEl.dataset.trackIndex);
-        if (!albId || !Number.isFinite(trkIdx)) break;
-        playFromDiscography(albId, trkIdx);
+        const trackIdOrIndex = actionEl.dataset.trackId || actionEl.dataset.trackIndex;
+        if (!albId || !trackIdOrIndex) break;
+        playFromDiscography(albId, trackIdOrIndex);
         break;
       }
       case 'open-player': {
         if (e.target.closest('button')) break;
         const albumId = actionEl.dataset.album;
-        const trackIndex = Number(actionEl.dataset.trackIndex);
-        openExpandedPlayer(albumId, trackIndex);
+        const trackIdOrIndex = actionEl.dataset.trackId || Number(actionEl.dataset.trackIndex);
+        openExpandedPlayer(albumId, trackIdOrIndex);
         break;
       }
       case 'open-rent': {
@@ -2037,7 +2046,10 @@ function openAccountModal() {
 // ─────────────────────────────────────────────────────────────
 function initPlayer() {
   audio = document.getElementById('audio');
-  if (!audio) return;
+  if (!audio) {
+    console.error('[player] elemento <audio id="audio"> não encontrado');
+    return;
+  }
   audio.volume = lastVolume;
   audio.addEventListener('timeupdate', onTimeUpdate);
   audio.addEventListener('play', onPlay);
@@ -2047,9 +2059,9 @@ function initPlayer() {
   audio.addEventListener('loadedmetadata', syncProgress);
   audio.addEventListener('loadedmetadata', syncExpandedProgress);
   bindPlayerControls();
-  bindMobileTabs();
   bindFullscreenBtn();
   updateMuteButtons();
+  console.log('[player] init OK');
 }
 
 function checkAlbumHash() {
@@ -2086,9 +2098,9 @@ function toggleLike(albumId, trackIndex, btn) {
   }
 }
 
-async function shareTrack(albumId, trackIndex) {
+async function shareTrack(albumId, trackIndexOrId) {
   const album = findAlbum(albumId);
-  const track = album && Array.isArray(album.tracks) ? album.tracks[trackIndex] : null;
+  const track = findTrackByIndex(albumId, trackIndexOrId);
   const title = track && track.title
     ? `${track.title} — Joseph Matthos`
     : 'Joseph Matthos';
@@ -2112,22 +2124,54 @@ async function shareTrack(albumId, trackIndex) {
 }
 
 function bindPlayerControls() {
-  const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', fn);
+  const bind = (id, fn) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.dataset.bound === '1') return;
+    el.dataset.bound = '1';
+    el.addEventListener('click', fn);
+  };
+
+  // Player fixo (rodapé)
   bind('playBtn', togglePlay);
   bind('nextBtn', nextTrack);
   bind('prevBtn', prevTrack);
   bind('muteBtn', toggleMute);
   bind('lyricsBtn', () => document.getElementById('lyricsDrawer')?.classList.toggle('open'));
+
+  // Player expandido
   bind('closeExpandedPlayer', closeExpandedPlayer);
   bind('expandedPlayBtn', togglePlay);
   bind('expandedNextBtn', nextTrack);
   bind('expandedPrevBtn', prevTrack);
   bind('expandedMuteBtn', toggleMute);
   bind('expandedShuffleBtn', toggleShuffle);
-  bind('closeLyrics', () => document.getElementById('lyricsDrawer')?.classList.remove('open'));
+
+  // Coração do player expandido
+  bind('expandedLikeBtn', () => {
+    const info = getTrackKeyFromCurrent();
+    if (!info) return;
+    const isLiked = localStorage.getItem(info.key) === '1';
+    if (isLiked) localStorage.removeItem(info.key);
+    else localStorage.setItem(info.key, '1');
+    updateExpandedLikeButton(null);
+
+    document.querySelectorAll(
+      `[data-action="like-track"][data-album="${info.albumId}"][data-track-index="${info.trackIndex}"]`
+    ).forEach((el) => {
+      const liked = localStorage.getItem(info.key) === '1';
+      el.classList.toggle('liked', liked);
+      el.setAttribute('aria-pressed', liked ? 'true' : 'false');
+    });
+  });
+
+  // Bars
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
+
+  // Abas mobile
+  bindMobileTabs();
 }
 
 function bindMobileTabs() {
@@ -2252,11 +2296,11 @@ async function renewSignedUrl() {
       { credentials: 'same-origin', cache: 'no-store' }
     );
     const json = await r.json();
-    if (!r.ok || !json?.ok || !json.fullUrl) throw new Error(json?.error || 'URL não renovada');
-    currentStream.url = json.fullUrl;
-    currentStream.expiresIn = Number(json.expiresIn) || currentStream.expiresIn;
+    if (!r.ok || !json?.audioUrl) throw new Error(json?.error || 'URL não renovada');
+    currentStream.url = json.audioUrl;
+    currentStream.expiresIn = 300;
     currentStream.loadedAt = Date.now();
-    audio.src = json.fullUrl;
+    audio.src = json.audioUrl;
     audio.volume = savedVolume;
     audio.load();
     const restore = () => {
@@ -2279,7 +2323,7 @@ function buildQueueForAlbum(albumId, startIndex) {
   const album = findAlbum(albumId);
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
   const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
-  const realIndexes = albumTracks.map((t) => Number(t.trackIndex) || 0);
+  const realIndexes = albumTracks.map((t) => Number(t.trackNumber ?? t.trackIndex) || 0);
   let indices = realIndexes.slice();
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
@@ -2326,13 +2370,12 @@ function renderQueue() {
   return;
 }
 
-async function playFromDiscography(albumId, trackIndex, opts = {}) {
+async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   const album = findAlbum(albumId);
   if (!album) return;
-  const track = findTrackByIndex(albumId, trackIndex);
-  if (!track) { console.warn('[player] faixa não encontrada:', albumId, trackIndex); return; }
+  const track = findTrackByIndex(albumId, trackIndexOrId);
+  if (!track) { console.warn('[player] faixa não encontrada:', albumId, trackIndexOrId); return; }
 
-  // ⚠️ O backend /api/stream agora espera trackId (não albumId + trackIndex)
   const trackId = track.id;
   if (!trackId) {
     console.error('[player] faixa sem id:', track);
@@ -2340,7 +2383,7 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     return;
   }
 
-  const realIndex = Number(track.trackIndex) || 0;
+  const realIndex = Number(track.trackNumber ?? track.trackIndex) || 0;
   if (!opts.fromQueue) buildQueueForAlbum(albumId, realIndex);
 
   if (currentAbortController) currentAbortController.abort();
@@ -2384,10 +2427,10 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     return;
   }
 
-  // ⚠️ NOVO FORMATO do /api/stream
   const accessLevel = streamData.accessLevel || 'preview';
   const unlocked = accessLevel === 'full';
   const src = streamData.audioUrl;
+  const source = accessLevel;
 
   if (!src) {
     toast('Áudio não disponível.', '⚠');
@@ -2407,9 +2450,9 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
     trackIndex: realIndex,
     trackId,
     unlocked,
-    source: accessLevel,           // 'preview' ou 'full'
+    source,
     url: src,
-    expiresIn: null,               // backend não retorna mais
+    expiresIn: 300,
     loadedAt: Date.now()
   };
 
@@ -2419,19 +2462,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   audio.load();
   audio.src = src;
 
-  if (source === 'preview' && previewState.start > 0) {
-    const setPreviewStart = () => {
-      try {
-        if (Number.isFinite(audio.duration) && audio.duration > previewState.start) {
-          audio.currentTime = previewState.start;
-        }
-      } catch (err) { console.debug('[player] falha ao posicionar prévia:', err); }
-    };
-    audio.addEventListener('loadedmetadata', setPreviewStart, { once: true });
-  }
-
-  audio.load();
-
   const artistEl2 = document.getElementById('nowArtist');
   if (artistEl2) {
     artistEl2.textContent = `Joseph Matthos · ${album.title}` + (source === 'preview' ? ' (prévia)' : '');
@@ -2439,7 +2469,8 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
 
   const cover = document.getElementById('playerCover');
   if (cover) {
-    const safeCover = safeMediaUrl(album.coverImage);
+    const coverImg = album.coverImage || album.coverUrl;
+    const safeCover = safeMediaUrl(coverImg);
     if (safeCover) {
       cover.classList.add('has-cover');
       cover.style.backgroundImage = `url('${safeCover}')`;
@@ -2712,7 +2743,7 @@ function updatePlayingHighlight() {
   });
 }
 
-function openExpandedPlayer(albumId, trackIndex) {
+function openExpandedPlayer(albumId, trackIndexOrId) {
   closeAlbumModal();
   const modal = document.getElementById('expandedPlayerModal');
   if (!modal) return;
@@ -2728,7 +2759,10 @@ function openExpandedPlayer(albumId, trackIndex) {
       t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
     });
   }
-  playFromDiscography(albumId, trackIndex);
+
+  bindPlayerControls();
+
+  playFromDiscography(albumId, trackIndexOrId);
 }
 
 function closeExpandedPlayer() {
@@ -2776,7 +2810,8 @@ function syncExpandedPlayer(track, album, unlocked) {
   if (title) title.textContent = track.title;
   if (albumEl) albumEl.textContent = `Joseph Matthos · ${album.title}`;
 
-  const safeCover = safeMediaUrl(album.coverImage);
+  const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
+  const safeCover = safeMediaUrl(coverImg);
 
   if (cover) {
     cover.style.backgroundImage = '';
@@ -2831,28 +2866,6 @@ function updateExpandedLikeButton(track) {
   btn.classList.toggle('liked', liked);
   btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
   btn.setAttribute('title', liked ? 'Remover dos curtidos' : 'Curtir');
-
-  if (btn.dataset.bound !== '1') {
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
-      const info = getTrackKeyFromCurrent();
-      if (!info) return;
-      const isLiked = localStorage.getItem(info.key) === '1';
-      if (isLiked) localStorage.removeItem(info.key);
-      else localStorage.setItem(info.key, '1');
-
-      btn.classList.toggle('liked', !isLiked);
-      btn.setAttribute('aria-pressed', !isLiked ? 'true' : 'false');
-      btn.setAttribute('title', !isLiked ? 'Remover dos curtidos' : 'Curtir');
-
-      document.querySelectorAll(
-        `[data-action="like-track"][data-album="${info.albumId}"][data-track-index="${info.trackIndex}"]`
-      ).forEach((el) => {
-        el.classList.toggle('liked', !isLiked);
-        el.setAttribute('aria-pressed', !isLiked ? 'true' : 'false');
-      });
-    });
-  }
 }
 
 function renderTracklistPanel() {
@@ -2871,7 +2884,7 @@ function renderTracklistPanel() {
     return;
   }
 
-  // Compara pela POSIÇÃO (index) da lista, não pelo trackIndex
+  const currentId = currentTrackIdentity?.trackId;
   const currentIdx = currentTrackIdentity?.trackIndex;
 
   container.innerHTML = `
@@ -2881,8 +2894,8 @@ function renderTracklistPanel() {
     </div>
     <div class="album-tracklist">
       ${albumTracks.map((t, i) => {
-        const ti = Number(t.trackIndex) || 0;
-        const isCurrent = ti === currentIdx;
+        const ti = Number(t.trackNumber ?? t.trackIndex) || 0;
+        const isCurrent = String(t.id) === String(currentId) || ti === currentIdx;
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
 
@@ -2892,6 +2905,7 @@ function renderTracklistPanel() {
                tabindex="0"
                data-action="play-track-in-player"
                data-album="${esc(album.id)}"
+               data-track-id="${esc(t.id)}"
                data-track-index="${ti}">
             <span class="album-track-index" aria-hidden="true">
               <span class="album-track-num">${i + 1}</span>
@@ -2970,9 +2984,9 @@ function renderLyricsPanel() {
 
   const albumId = currentTrackIdentity?.albumId;
   const trackIndex = currentTrackIdentity?.trackIndex;
-  const track = albumId && Number.isFinite(trackIndex)
-    ? findTrackByIndex(albumId, trackIndex)
-    : null;
+  const track = albumId && currentTrackIdentity?.trackId
+    ? findTrackByIndex(albumId, currentTrackIdentity.trackId)
+    : (albumId && Number.isFinite(trackIndex) ? findTrackByIndex(albumId, trackIndex) : null);
 
   const lyrics = Array.isArray(track?.lyrics) ? track.lyrics : [];
 
@@ -2992,7 +3006,7 @@ function openPlaylistPlayer(playlistIndex) {
   const queue = resolvePlaylistTracks(playlist);
   if (!queue.length) { toast('Esta playlist não tem faixas válidas.', '⚠'); return; }
   const first = queue[0];
-  openExpandedPlayer(first.album.id, first.trackIndex);
+  openExpandedPlayer(first.album.id, first.track.id);
 }
 
 function openModal(id) {
