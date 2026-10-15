@@ -2888,8 +2888,8 @@ function renderTracklistPanel() {
     return;
   }
 
-  const currentId = currentTrackIdentity?.trackId;
-  const currentIdx = currentTrackIdentity?.trackIndex;
+  // ⚠️ Só compara pelo trackId (UUID). Se não tiver, NADA fica marcado como playing
+  const currentId = currentTrackIdentity?.trackId || null;
 
   container.innerHTML = `
     <div class="album-tracklist-header">
@@ -2899,7 +2899,8 @@ function renderTracklistPanel() {
     <div class="album-tracklist">
       ${albumTracks.map((t, i) => {
         const ti = Number(t.trackNumber ?? t.trackIndex) || 0;
-        const isCurrent = String(t.id) === String(currentId) || ti === currentIdx;
+        // ⚠️ Só marca como "tocando" se o ID bater exatamente
+        const isCurrent = currentId && t.id && String(t.id) === String(currentId);
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
 
@@ -3029,6 +3030,23 @@ function closeModal(id) {
   el.setAttribute('aria-hidden', 'true');
   document.body.style.overflow = '';
 }
+
+  // ⚠️ Delegação de eventos para os botões do player (fallback)
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('#expandedPlayBtn, #expandedNextBtn, #expandedPrevBtn, #expandedShuffleBtn, #expandedMuteBtn, #closeExpandedPlayer');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    switch (btn.id) {
+      case 'expandedPlayBtn': togglePlay(); break;
+      case 'expandedNextBtn': nextTrack(); break;
+      case 'expandedPrevBtn': prevTrack(); break;
+      case 'expandedShuffleBtn': toggleShuffle(); break;
+      case 'expandedMuteBtn': toggleMute(); break;
+      case 'closeExpandedPlayer': closeExpandedPlayer(); break;
+    }
+  });
 
 // ─────────────────────────────────────────────────────────────
 // START
