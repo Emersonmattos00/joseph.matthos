@@ -3027,10 +3027,6 @@ section[aria-labelledby="destaqueTitle"] {
   min-width: 0;
 }
 
-.discography-track-card.playing .track-action-btn.like svg {
-  /* nada extra — só garante que o like não some quando tocando */
-}
-
 #albumModal .discography-track-card {
   padding: 0.6rem 0.75rem;
   border-radius: 6px;
@@ -3895,7 +3891,7 @@ button {
   }
 }
 
-//* ═════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════
    CAPA DO PLAYER — maior, preenchendo mais espaço
    ═════════════════════════════════════════════════════════════ */
 
