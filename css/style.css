@@ -4686,7 +4686,7 @@ body:has(.player-modal-overlay.open) {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  padding: 0 0.75rem 0.75rem;
+  padding: 0 1rem 0.75rem;
   border-bottom: 1px solid rgba(255,255,255,0.08);
   margin-bottom: 0.5rem;
 }
@@ -4707,14 +4707,15 @@ body:has(.player-modal-overlay.open) {
 .album-tracklist {
   display: flex;
   flex-direction: column;
+  padding: 0 0.5rem;
 }
 
 /* ─── Cada faixa ───────────────────────────────────────── */
 .album-track-item {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.55rem 0.75rem;
+  gap: 1rem;
+  padding: 0.55rem 0.65rem;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s ease;
@@ -4733,7 +4734,7 @@ body:has(.player-modal-overlay.open) {
   background: rgba(29,185,84,0.08);
 }
 
-/* ─── Coluna 1: número ↔ play (hover) ──────────────────── */
+/* ─── Coluna 1: número ↔ play (só no hover) ────────────── */
 .album-track-index {
   position: relative;
   width: 24px;
@@ -4745,6 +4746,7 @@ body:has(.player-modal-overlay.open) {
   color: #6a6a6a;
   font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
+  margin-right: 0.25rem;
 }
 
 .album-track-index .album-track-num {
@@ -4764,6 +4766,7 @@ body:has(.player-modal-overlay.open) {
   pointer-events: none;
 }
 
+/* Hover: esconde número, mostra play */
 .album-track-item:hover .album-track-num {
   opacity: 0;
 }
@@ -4772,7 +4775,7 @@ body:has(.player-modal-overlay.open) {
   opacity: 1;
 }
 
-/* Quando tocando: sempre mostra ▶ verde, esconde número */
+/* Tocando: sempre ▶ verde */
 .album-track-item.playing .album-track-num {
   opacity: 0;
 }
@@ -4782,13 +4785,15 @@ body:has(.player-modal-overlay.open) {
   color: #1DB954;
 }
 
-/* ─── Coluna 2: título + artista ───────────────────────── */
+/* ─── Coluna 2: título + artista (à esquerda, ao lado do número) ─── */
 .album-track-info {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  text-align: left;
+  margin-left: 0.25rem;
 }
 
 .album-track-title {
@@ -4798,6 +4803,7 @@ body:has(.player-modal-overlay.open) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .album-track-item.playing .album-track-title {
@@ -4811,13 +4817,14 @@ body:has(.player-modal-overlay.open) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
-/* ─── Coluna 3: ❤️ ✈️ (à direita do nome) ─────────────── */
+/* ─── Coluna 3: ❤️ ✈️ (duração) — à direita ─────────────── */
 .album-track-actions {
   display: inline-flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 1rem;
   flex-shrink: 0;
   margin-left: auto;
 }
@@ -4825,7 +4832,7 @@ body:has(.player-modal-overlay.open) {
 .album-track-action {
   background: transparent;
   border: none;
-  padding: 0.15rem;
+  padding: 0.2rem;
   cursor: pointer;
   color: #6a6a6a;
   display: inline-flex;
@@ -4840,6 +4847,7 @@ body:has(.player-modal-overlay.open) {
   display: block;
 }
 
+/* ❤️ curtir */
 .album-track-action.like svg {
   fill: transparent;
   stroke: #b3b3b3;
@@ -4855,6 +4863,7 @@ body:has(.player-modal-overlay.open) {
   stroke: #1DB954;
 }
 
+/* ✈️ compartilhar */
 .album-track-action.share svg {
   fill: #b3b3b3;
   stroke: none;
@@ -4864,11 +4873,30 @@ body:has(.player-modal-overlay.open) {
   fill: #fff;
 }
 
-.album-track-action:hover {
-  transform: scale(1.1);
+/* 🔓 alugar (quando bloqueada) */
+.album-track-action.unlock svg {
+  fill: #f0a100;
+  stroke: none;
 }
 
-/* ─── Coluna 4: duração ────────────────────────────────── */
+.album-track-action.unlock:hover svg {
+  fill: #ffb733;
+}
+
+/* ⋯ mais opções */
+.album-track-action.more svg {
+  fill: #b3b3b3;
+}
+
+.album-track-action.more:hover svg {
+  fill: #fff;
+}
+
+.album-track-action:hover {
+  transform: scale(1.12);
+}
+
+/* ─── Duração ──────────────────────────────────────────── */
 .album-track-duration {
   color: #6a6a6a;
   font-size: 0.82rem;
@@ -4882,20 +4910,14 @@ body:has(.player-modal-overlay.open) {
   color: #1DB954;
 }
 
-/* ─── Coluna 5: cadeado ────────────────────────────────── */
-.album-track-lock {
-  font-size: 0.85rem;
-  width: 18px;
-  text-align: center;
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
-/* Mobile */
+/* Mobile: mostra ícones sempre visíveis */
 @media (max-width: 899px) {
   .album-track-item {
-    gap: 0.5rem;
+    gap: 0.6rem;
     padding: 0.5rem 0.4rem;
+  }
+  .album-track-actions {
+    gap: 0.6rem;
   }
   .album-track-action svg {
     width: 14px;

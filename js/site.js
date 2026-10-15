@@ -1606,29 +1606,17 @@ function bindGlobalEvents() {
     if (!actionEl) return;
     const action = actionEl.dataset.action;
 
-    switch (action) {
+        switch (action) {
       case 'like-track': {
+        e.preventDefault();
+        e.stopPropagation();
         toggleLike(actionEl.dataset.album, Number(actionEl.dataset.trackIndex), actionEl);
         break;
       }
       case 'share-track': {
-        shareTrack(actionEl.dataset.album, Number(actionEl.dataset.trackIndex));
-        break;
-      }
-      case 'open-player': {
-        if (e.target.closest('button')) break;
-        const albumId = actionEl.dataset.album;
-        const trackIndex = Number(actionEl.dataset.trackIndex);
-        openExpandedPlayer(albumId, trackIndex);
-        break;
-      }
-      case 'play-track-in-player': {
         e.preventDefault();
         e.stopPropagation();
-        const albId = actionEl.dataset.album;
-        const trkIdx = Number(actionEl.dataset.trackIndex);
-        if (!albId || !Number.isFinite(trkIdx)) break;
-        playFromDiscography(albId, trkIdx);
+        shareTrack(actionEl.dataset.album, Number(actionEl.dataset.trackIndex));
         break;
       }
       case 'track-more': {
@@ -1637,6 +1625,22 @@ function bindGlobalEvents() {
         const aId = actionEl.dataset.album;
         const tIdx = Number(actionEl.dataset.trackIndex);
         openTrackMoreMenu(aId, tIdx, actionEl);
+        break;
+      }
+      case 'play-track-in-player': {
+        // Só dispara se o clique NÃO foi num botão interno
+        if (e.target.closest('button')) break;
+        const albId = actionEl.dataset.album;
+        const trkIdx = Number(actionEl.dataset.trackIndex);
+        if (!albId || !Number.isFinite(trkIdx)) break;
+        playFromDiscography(albId, trkIdx);
+        break;
+      }
+      case 'open-player': {
+        if (e.target.closest('button')) break;
+        const albumId = actionEl.dataset.album;
+        const trackIndex = Number(actionEl.dataset.trackIndex);
+        openExpandedPlayer(albumId, trackIndex);
         break;
       }
       case 'open-rent': {
@@ -2868,6 +2872,8 @@ function renderTracklistPanel() {
         const isCurrent = ti === currentIdx;
         const isLiked = localStorage.getItem(`jm_like_${album.id}_${ti}`) === '1';
         const locked = isLocked(album.id, ti);
+        const playable = !locked || isPremium() || isRented(album.id, ti);
+
         return `
           <div class="album-track-item ${isCurrent ? 'playing' : ''}"
                role="button"
@@ -2909,9 +2915,33 @@ function renderTracklistPanel() {
                   <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
                 </svg>
               </button>
+              ${!locked ? `
+                <span class="album-track-duration">${esc(t.duration || '—')}</span>
+              ` : `
+                <button class="album-track-action unlock"
+                        type="button"
+                        data-action="open-rent"
+                        data-album="${esc(album.id)}"
+                        data-track-index="${ti}"
+                        title="Alugar"
+                        aria-label="Alugar">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2zm-4.42 4.8L13 14.62V17h-2v-6h2v2.38l2.58-2.18 1.42 1.4L14.42 15l2.58 2.4-1.42 1.4z"/>
+                  </svg>
+                </button>
+              `}
             </span>
-            <span class="album-track-duration">${esc(t.duration || '—')}</span>
-            <span class="album-track-lock">${locked ? '🔒' : ''}</span>
+            <button class="album-track-action more"
+                    type="button"
+                    data-action="track-more"
+                    data-album="${esc(album.id)}"
+                    data-track-index="${ti}"
+                    title="Mais opções"
+                    aria-label="Mais opções">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" fill="currentColor"/>
+              </svg>
+            </button>
           </div>
         `;
       }).join('')}
