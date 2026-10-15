@@ -1,10 +1,10 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v8 FINAL)
+   SITE.JS — Joseph Matthos (v9 FINAL)
    ------------------------------------------------------------
    - Painel direito: lista de faixas por padrão, letra só na tab
-   - Clique em faixa da lista toca e sincroniza o player
-   - Capa inteira (sem corte) no player expandido
-   - Coração verde Spotify em todos os lugares
+   - Modal de álbum estilo Spotify (botão Tocar + menu ⋯)
+   - Faixas com número correto e feat
+   - Capa inteira no player expandido
    ============================================================ */
 
 import {
@@ -895,7 +895,7 @@ function renderDiscography() {
   container.innerHTML = `<div class="album-grid">${html}</div>`;
 }
 
-function renderTrackCard(album, track) {
+function renderTrackCard(album, track, displayIndex = null) {
   const realIndex = Number(track.trackIndex) || 0;
   const info = trackInfo(album.id, realIndex);
   const priceCents = info && Number.isFinite(info.priceCents) ? info.priceCents : 0;
@@ -909,10 +909,9 @@ function renderTrackCard(album, track) {
   const isPlaying = currentTrackIdentity && currentTrackIdentity.identity === identity;
   const isLiked = localStorage.getItem(`jm_like_${album.id}_${realIndex}`) === '1';
 
-  const coverStyle = album.coverImage
-    ? `style="background-image:url('${esc(safeMediaUrl(album.coverImage))}')"`
-    : '';
-  const coverText = album.coverImage ? '' : esc(album.coverInitials || album.cover || '♪');
+  const featMatch = String(track.title || '').match(/\(feat\.?\s*([^)]+)\)/i);
+  const feat = featMatch ? featMatch[1].trim() : null;
+  const artistLine = feat ? `Joseph Matthos, ${esc(feat)}` : 'Joseph Matthos';
 
   const stateHTML = premium
     ? '<span class="track-state">✓ Premium</span>'
@@ -924,11 +923,15 @@ function renderTrackCard(album, track) {
 
   const rentBtn = (premium || rented || !forSale)
     ? ''
-    : `<button class="track-action-icon buy" type="button"
+    : `<button class="track-action-btn buy" type="button"
               data-action="open-rent"
               data-album="${esc(album.id)}"
               data-track-index="${realIndex}"
               title="Alugar">🎫</button>`;
+
+  const numberHTML = displayIndex !== null
+    ? `<span class="track-index">${isPlaying ? '▶' : displayIndex}</span>`
+    : '';
 
   return `
     <div class="discography-track-card ${isPlaying ? 'playing' : ''}"
@@ -936,11 +939,10 @@ function renderTrackCard(album, track) {
          data-track-index="${realIndex}"
          data-identity="${esc(identity)}"
          data-action="open-player">
-      <span class="track-index">${isPlaying ? '▶' : realIndex + 1}</span>
-      <span class="track-cover" ${coverStyle}>${coverText}</span>
+      ${numberHTML}
       <span class="track-info">
         <span class="track-title">${esc(track.title)}</span>
-        <span class="track-duration">${esc(track.duration || '—')}</span>
+        <span class="track-artist-line">${artistLine}</span>
       </span>
       <span class="track-actions">
         <button class="track-action-btn like ${isLiked ? 'liked' : ''}" type="button"
@@ -963,6 +965,18 @@ function renderTrackCard(album, track) {
           </svg>
         </button>
         ${rentBtn}
+        <span class="track-duration">${esc(track.duration || '—')}</span>
+        <button class="track-action-btn more" type="button"
+                data-action="track-more"
+                data-album="${esc(album.id)}"
+                data-track-index="${realIndex}"
+                title="Mais opções" aria-label="Mais opções">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="2"/>
+            <circle cx="12" cy="12" r="2"/>
+            <circle cx="19" cy="12" r="2"/>
+          </svg>
+        </button>
         ${stateHTML}
       </span>
     </div>`;
@@ -1037,7 +1051,7 @@ function resolvePlaylistTracks(playlist) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM
+// MODAL DE ÁLBUM (estilo Spotify)
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
   const album = findAlbum(albumId);
@@ -1056,17 +1070,24 @@ function openAlbumModal(albumId) {
     modal.setAttribute('role', 'dialog');
     modal.setAttribute('aria-modal', 'true');
     modal.innerHTML = `
-      <div class="modal modal-wide">
+      <div class="modal modal-wide album-detail">
         <button class="modal-close" data-close aria-label="Fechar">×</button>
-        <div class="album-modal__header">
-          <div class="album-modal__cover" id="albumModalCover"></div>
-          <div class="album-modal__info">
-            <div class="album-modal__type" id="albumModalType"></div>
-            <h2 class="album-modal__title" id="albumModalTitle"></h2>
-            <div class="album-modal__meta" id="albumModalMeta"></div>
+        <div class="album-detail__header">
+          <div class="album-detail__cover" id="albumModalCover"></div>
+          <div class="album-detail__info">
+            <div class="album-detail__type" id="albumModalType"></div>
+            <h2 class="album-detail__title" id="albumModalTitle"></h2>
+            <div class="album-detail__artist">Joseph Matthos</div>
+            <div class="album-detail__meta" id="albumModalMeta"></div>
+            <button class="album-detail__play" id="albumModalPlay" type="button" aria-label="Tocar álbum">
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                <path d="M8 5v14l11-7z" fill="currentColor"/>
+              </svg>
+              <span>Tocar</span>
+            </button>
           </div>
         </div>
-        <div class="album-modal__tracks" id="albumModalTracks"></div>
+        <div class="album-detail__tracks" id="albumModalTracks"></div>
       </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click', (e) => {
@@ -1095,7 +1116,20 @@ function openAlbumModal(albumId) {
   if (!tracks.length) {
     tracksEl.innerHTML = '<p class="album-empty">Nenhuma faixa cadastrada neste álbum.</p>';
   } else {
-    tracksEl.innerHTML = tracks.map((t) => renderTrackCard(album, t)).join('');
+    tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
+  }
+
+  // Botão Tocar do álbum
+  const playBtn = modal.querySelector('#albumModalPlay');
+  if (playBtn && !playBtn.dataset.bound) {
+    playBtn.dataset.bound = '1';
+    playBtn.addEventListener('click', () => {
+      const first = tracks[0];
+      if (!first) return;
+      const firstIdx = Number(first.trackIndex) || 0;
+      closeAlbumModal();
+      openExpandedPlayer(album.id, firstIdx);
+    });
   }
 
   requestAnimationFrame(() => modal.classList.add('open'));
@@ -1107,6 +1141,111 @@ function closeAlbumModal() {
   if (!modal) return;
   modal.classList.remove('open');
   document.body.classList.remove('modal-open');
+}
+
+// ─────────────────────────────────────────────────────────────
+// MENU ⋯ DE UMA FAIXA
+// ─────────────────────────────────────────────────────────────
+function openTrackMoreMenu(albumId, trackIndex, anchorEl) {
+  document.getElementById('trackMoreMenu')?.remove();
+
+  const album = findAlbum(albumId);
+  const track = findTrackByIndex(albumId, trackIndex);
+  if (!album || !track) return;
+
+  const isLiked = localStorage.getItem(`jm_like_${albumId}_${trackIndex}`) === '1';
+
+  const menu = document.createElement('div');
+  menu.id = 'trackMoreMenu';
+  menu.className = 'track-more-menu';
+  menu.innerHTML = `
+    <button type="button" data-menu-action="like">
+      <svg viewBox="0 0 24 24" width="16" height="16">
+        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"
+              fill="${isLiked ? '#1DB954' : 'none'}"
+              stroke="${isLiked ? '#1DB954' : 'currentColor'}"
+              stroke-width="2"/>
+      </svg>
+      <span>${isLiked ? 'Remover dos curtidos' : 'Curtir'}</span>
+    </button>
+    <button type="button" data-menu-action="share">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+      </svg>
+      <span>Compartilhar</span>
+    </button>
+    ${isLocked(albumId, trackIndex) ? `
+      <button type="button" data-menu-action="rent">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2zm-4.42 4.8L13 14.62V17h-2v-6h2v2.38l2.58-2.18 1.42 1.4L14.42 15l2.58 2.4-1.42 1.4z"/>
+        </svg>
+        <span>Alugar</span>
+      </button>
+    ` : ''}
+    <button type="button" data-menu-action="copy-link">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/>
+      </svg>
+      <span>Copiar link</span>
+    </button>
+  `;
+
+  document.body.appendChild(menu);
+
+  const rect = anchorEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const top = Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 10);
+  const left = Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 10);
+  menu.style.top = `${Math.max(10, top)}px`;
+  menu.style.left = `${Math.max(10, left)}px`;
+
+  const close = (ev) => {
+    if (!menu.contains(ev.target) && ev.target !== anchorEl) {
+      menu.remove();
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+
+  menu.querySelectorAll('[data-menu-action]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const act = btn.dataset.menuAction;
+
+      if (act === 'like') {
+        toggleLike(albumId, trackIndex, null);
+        const modal = document.getElementById('albumModal');
+        if (modal) {
+          const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+          const tracksEl = modal.querySelector('#albumModalTracks');
+          if (tracksEl) tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
+        }
+        document.querySelectorAll(
+          `[data-action="like-track"][data-album="${albumId}"][data-track-index="${trackIndex}"]`
+        ).forEach((el) => {
+          const liked = localStorage.getItem(`jm_like_${albumId}_${trackIndex}`) === '1';
+          el.classList.toggle('liked', liked);
+          el.setAttribute('aria-pressed', liked ? 'true' : 'false');
+        });
+        if (currentTrackIdentity?.albumId === albumId && currentTrackIdentity?.trackIndex === trackIndex) {
+          updateExpandedLikeButton(track);
+        }
+      } else if (act === 'share') {
+        shareTrack(albumId, trackIndex);
+      } else if (act === 'rent') {
+        openRentModal(albumId, trackIndex);
+      } else if (act === 'copy-link') {
+        const url = `${location.origin}${location.pathname}#album-${albumId}`;
+        try {
+          await navigator.clipboard.writeText(url);
+          toast('Link copiado!');
+        } catch {
+          alert('Não foi possível copiar.');
+        }
+      }
+      menu.remove();
+    });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1478,6 +1617,14 @@ function bindGlobalEvents() {
         const trkIdx = Number(actionEl.dataset.trackIndex);
         if (!albId || !Number.isFinite(trkIdx)) break;
         playFromDiscography(albId, trkIdx);
+        break;
+      }
+      case 'track-more': {
+        e.preventDefault();
+        e.stopPropagation();
+        const aId = actionEl.dataset.album;
+        const tIdx = Number(actionEl.dataset.trackIndex);
+        openTrackMoreMenu(aId, tIdx, actionEl);
         break;
       }
       case 'open-rent': {
@@ -2289,7 +2436,6 @@ async function playFromDiscography(albumId, trackIndex, opts = {}) {
   document.getElementById('previewBadge')?.classList.toggle('visible', source === 'preview');
   document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', source === 'preview');
 
-  // Painel direito: respeita a tab atual (lista ou letra)
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   const isLyricsTab = playerEl && playerEl.classList.contains('mobile-lyrics');
   if (isLyricsTab) {
@@ -2616,7 +2762,6 @@ function syncExpandedPlayer(track, album, unlocked) {
 
   const safeCover = safeMediaUrl(album.coverImage);
 
-  // Capa principal (contém a imagem inteira, sem cortar)
   if (cover) {
     cover.style.backgroundImage = '';
     cover.innerHTML = '';
@@ -2631,7 +2776,6 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
-  // Fundo com blur atrás da capa
   if (coverBg) {
     if (safeCover) {
       coverBg.style.backgroundImage = `url('${safeCover}')`;
@@ -2640,7 +2784,6 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
-  // Background do player inteiro (marca d'água com blur)
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     if (safeCover) {
@@ -2654,13 +2797,9 @@ function syncExpandedPlayer(track, album, unlocked) {
 
   if (badge) badge.classList.toggle('visible', !unlocked);
 
-  // Atualiza coração do player
   updateExpandedLikeButton(track);
 }
 
-// ─────────────────────────────────────────────────────────────
-// CURTIR / COMPARTILHAR NO PLAYER EXPANDIDO
-// ─────────────────────────────────────────────────────────────
 function getTrackKeyFromCurrent() {
   if (!currentTrackIdentity) return null;
   const { albumId, trackIndex } = currentTrackIdentity;
@@ -2699,10 +2838,6 @@ function updateExpandedLikeButton(track) {
     });
   }
 }
-
-// ─────────────────────────────────────────────────────────────
-// PAINEL DIREITO — lista de faixas (padrão) OU letra (tab)
-// ─────────────────────────────────────────────────────────────
 
 /** Desenha a lista de faixas do álbum (estado padrão do painel) */
 function renderTracklistPanel() {
