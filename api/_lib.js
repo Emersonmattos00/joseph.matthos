@@ -499,20 +499,28 @@ async function audit(event, options = {}) {
   } catch {}
 
   try {
-    const result = await supabaseAdminRequest(`/rest/v1/${table}`, {
-      method: 'POST',
-      headers: { Prefer: 'return=minimal' },
-      body: JSON.stringify(payload)
-    });
+    const { db } = require('./_db');
+    const schema = require('../src/schema.js');
 
-    if (!result.response.ok) {
-      console.error(
-        `[_lib] audit persist falhou (${table}):`,
-        result.response.status,
-        typeof result.body === 'string'
-          ? result.body.slice(0, 200)
-          : JSON.stringify(result.body).slice(0, 200)
-      );
+    if (table === 'admin_audit') {
+      await db.insert(schema.adminAudit).values({
+        actor: payload.actor || null,
+        action: payload.action,
+        target: payload.target || null,
+        metadata: payload.metadata || null,
+        ip: payload.ip || null,
+        userAgent: payload.user_agent || payload.userAgent || null
+      });
+    } else {
+      await db.insert(schema.authAuditLog).values({
+        event: payload.event,
+        emailHash: payload.email_hash || payload.emailHash || null,
+        userId: payload.user_id || payload.userId || null,
+        ip: payload.ip || null,
+        userAgent: payload.user_agent || payload.userAgent || null,
+        success: !!payload.success,
+        reason: payload.reason || null
+      });
     }
   } catch (err) {
     console.error(`[_lib] audit persist erro (${table}):`, err.code || err.message);

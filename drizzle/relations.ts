@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, refreshTokens, orders, playbackEvents, tracks, orderItems, albums, artists, subscriptions, plans, rentalProducts, passwordResetTokens, rentals, emailVerificationTokens } from "./schema";
+import { users, refreshTokens, orders, playbackEvents, tracks, orderItems, albums, artists, emailVerificationTokens, subscriptions, plans, rentalProducts, passwordResetTokens, rentals } from "./schema";
 
 export const refreshTokensRelations = relations(refreshTokens, ({one}) => ({
 	user: one(users, {
@@ -12,10 +12,10 @@ export const usersRelations = relations(users, ({many}) => ({
 	refreshTokens: many(refreshTokens),
 	orders: many(orders),
 	playbackEvents: many(playbackEvents),
+	emailVerificationTokens: many(emailVerificationTokens),
 	subscriptions: many(subscriptions),
 	passwordResetTokens: many(passwordResetTokens),
 	rentals: many(rentals),
-	emailVerificationTokens: many(emailVerificationTokens),
 }));
 
 export const ordersRelations = relations(orders, ({one, many}) => ({
@@ -61,17 +61,24 @@ export const orderItemsRelations = relations(orderItems, ({one}) => ({
 
 export const albumsRelations = relations(albums, ({one, many}) => ({
 	tracks: many(tracks),
+	rentalProducts: many(rentalProducts),
+	rentals: many(rentals),
 	artist: one(artists, {
 		fields: [albums.artistId],
 		references: [artists.id]
 	}),
-	rentalProducts: many(rentalProducts),
-	rentals: many(rentals),
 }));
 
 export const artistsRelations = relations(artists, ({many}) => ({
 	tracks: many(tracks),
 	albums: many(albums),
+}));
+
+export const emailVerificationTokensRelations = relations(emailVerificationTokens, ({one}) => ({
+	user: one(users, {
+		fields: [emailVerificationTokens.userId],
+		references: [users.id]
+	}),
 }));
 
 export const subscriptionsRelations = relations(subscriptions, ({one}) => ({
@@ -123,12 +130,5 @@ export const rentalsRelations = relations(rentals, ({one}) => ({
 	order: one(orders, {
 		fields: [rentals.orderId],
 		references: [orders.id]
-	}),
-}));
-
-export const emailVerificationTokensRelations = relations(emailVerificationTokens, ({one}) => ({
-	user: one(users, {
-		fields: [emailVerificationTokens.userId],
-		references: [users.id]
 	}),
 }));

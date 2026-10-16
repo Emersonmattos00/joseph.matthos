@@ -488,9 +488,9 @@ function bindTrackDragDrop(scope) {
       rows.splice(insertAt, 0, _dragState.row);
 
       const order = rows.map((row, i) => ({
-        id: Number(row.dataset.trackId),
-        track_index: i
-      }));
+      id: String(row.dataset.trackId),
+      track_number: i + 1
+    }));
 
       const originalHtml = tbody.innerHTML;
       cleanupDrag(scope);

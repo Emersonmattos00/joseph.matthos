@@ -1,4 +1,4 @@
-require('dotenv').config({ quiet: true, interpolate: false });
+// dotenv removido — usando --env-file nativo
 const express = require('express');
 const path = require('path');
 

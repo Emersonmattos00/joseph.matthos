@@ -37,6 +37,8 @@ __export(schema_exports, {
   rentalProducts: () => rentalProducts,
   rentalStatus: () => rentalStatus,
   rentals: () => rentals,
+  siteContent: () => siteContent,
+  siteContentHistory: () => siteContentHistory,
   socialLinks: () => socialLinks,
   subscriptionStatus: () => subscriptionStatus,
   subscriptions: () => subscriptions,
@@ -194,8 +196,7 @@ const tracks = (0, import_pg_core.pgTable)("tracks", {
     columns: [table.artistId],
     foreignColumns: [artists.id],
     name: "tracks_artist_id_fkey"
-  }).onUpdate("cascade").onDelete("restrict"),
-  (0, import_pg_core.pgPolicy)("tracks_no_write", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  }).onUpdate("cascade").onDelete("restrict")
 ]);
 const users = (0, import_pg_core.pgTable)("users", {
   id: (0, import_pg_core.uuid)().primaryKey().notNull(),
@@ -237,8 +238,7 @@ const subscriptions = (0, import_pg_core.pgTable)("subscriptions", {
     columns: [table.planId],
     foreignColumns: [plans.id],
     name: "subscriptions_plan_id_fkey"
-  }).onUpdate("cascade").onDelete("restrict"),
-  (0, import_pg_core.pgPolicy)("subscriptions_no_write", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  }).onUpdate("cascade").onDelete("restrict")
 ]);
 const albums = (0, import_pg_core.pgTable)("albums", {
   id: (0, import_pg_core.uuid)().primaryKey().notNull(),
@@ -249,7 +249,15 @@ const albums = (0, import_pg_core.pgTable)("albums", {
   createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).default(import_drizzle_orm.sql`CURRENT_TIMESTAMP`).notNull(),
   coverUrl: (0, import_pg_core.text)("cover_url"),
   sortOrder: (0, import_pg_core.integer)("sort_order").default(0).notNull(),
-  upc: (0, import_pg_core.text)()
+  upc: (0, import_pg_core.text)(),
+  updatedAt: (0, import_pg_core.timestamp)("updated_at", { withTimezone: true, mode: "string" }).defaultNow(),
+  artist: (0, import_pg_core.text)(),
+  year: (0, import_pg_core.integer)(),
+  type: (0, import_pg_core.text)().default("album"),
+  description: (0, import_pg_core.text)(),
+  published: (0, import_pg_core.boolean)().default(false),
+  coverInitials: (0, import_pg_core.text)("cover_initials"),
+  orderIndex: (0, import_pg_core.integer)("order_index").default(0)
 }, (table) => [
   (0, import_pg_core.index)("albums_artist_id_idx").using("btree", table.artistId.asc().nullsLast().op("uuid_ops")),
   (0, import_pg_core.uniqueIndex)("albums_slug_key").using("btree", table.slug.asc().nullsLast().op("text_ops")),
@@ -258,8 +266,7 @@ const albums = (0, import_pg_core.pgTable)("albums", {
     columns: [table.artistId],
     foreignColumns: [artists.id],
     name: "albums_artist_id_fkey"
-  }).onUpdate("cascade").onDelete("restrict"),
-  (0, import_pg_core.pgPolicy)("albums_no_write", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  }).onUpdate("cascade").onDelete("restrict")
 ]);
 const artists = (0, import_pg_core.pgTable)("artists", {
   id: (0, import_pg_core.uuid)().primaryKey().notNull(),
@@ -367,8 +374,7 @@ const rentals = (0, import_pg_core.pgTable)("rentals", {
     columns: [table.orderId],
     foreignColumns: [orders.id],
     name: "rentals_order_id_fkey"
-  }).onUpdate("cascade").onDelete("set null"),
-  (0, import_pg_core.pgPolicy)("rentals_no_write", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  }).onUpdate("cascade").onDelete("set null")
 ]);
 const emailVerificationTokens = (0, import_pg_core.pgTable)("email_verification_tokens", {
   id: (0, import_pg_core.uuid)().primaryKey().notNull(),
@@ -400,8 +406,7 @@ const paymentsEvents = (0, import_pg_core.pgTable)("payments_events", {
   (0, import_pg_core.index)("idx_events_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
   (0, import_pg_core.index)("idx_events_external").using("btree", table.externalId.asc().nullsLast().op("text_ops")),
   (0, import_pg_core.index)("idx_events_unprocessed").using("btree", table.createdAt.asc().nullsLast().op("timestamptz_ops")).where(import_drizzle_orm.sql`(processed_at IS NULL)`),
-  (0, import_pg_core.unique)("payments_events_provider_provider_event_key").on(table.providerEvent, table.provider),
-  (0, import_pg_core.pgPolicy)("events_no_access", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  (0, import_pg_core.unique)("payments_events_provider_provider_event_key").on(table.providerEvent, table.provider)
 ]);
 const adminAudit = (0, import_pg_core.pgTable)("admin_audit", {
   id: (0, import_pg_core.bigserial)({ mode: "bigint" }).primaryKey().notNull(),
@@ -414,8 +419,7 @@ const adminAudit = (0, import_pg_core.pgTable)("admin_audit", {
   createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull()
 }, (table) => [
   (0, import_pg_core.index)("idx_admin_audit_action").using("btree", table.action.asc().nullsLast().op("text_ops")),
-  (0, import_pg_core.index)("idx_admin_audit_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
-  (0, import_pg_core.pgPolicy)("admin_audit_no_access", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  (0, import_pg_core.index)("idx_admin_audit_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops"))
 ]);
 const authAuditLog = (0, import_pg_core.pgTable)("auth_audit_log", {
   id: (0, import_pg_core.bigserial)({ mode: "bigint" }).primaryKey().notNull(),
@@ -431,6 +435,28 @@ const authAuditLog = (0, import_pg_core.pgTable)("auth_audit_log", {
   (0, import_pg_core.index)("idx_auth_audit_created").using("btree", table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
   (0, import_pg_core.index)("idx_auth_audit_email_hash").using("btree", table.emailHash.asc().nullsLast().op("text_ops")),
   (0, import_pg_core.index)("idx_auth_audit_event").using("btree", table.event.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsFirst().op("timestamptz_ops")),
-  (0, import_pg_core.index)("idx_auth_audit_ip").using("btree", table.ip.asc().nullsLast().op("inet_ops")),
-  (0, import_pg_core.pgPolicy)("auth_audit_no_access", { as: "permissive", for: "all", to: ["public"], using: import_drizzle_orm.sql`false`, withCheck: import_drizzle_orm.sql`false` })
+  (0, import_pg_core.index)("idx_auth_audit_ip").using("btree", table.ip.asc().nullsLast().op("inet_ops"))
+]);
+// ═══════════════════════════════════════════════════════════════════════
+//  site_content — conteúdo editável do site (adicionado na migração Neon)
+// ═══════════════════════════════════════════════════════════════════════
+const siteContent = (0, import_pg_core.pgTable)("site_content", {
+  key: (0, import_pg_core.text)().primaryKey().notNull(),
+  data: (0, import_pg_core.jsonb)().default({}).notNull(),
+  version: (0, import_pg_core.integer)().default(0).notNull(),
+  updatedBy: (0, import_pg_core.uuid)("updated_by"),
+  updatedAt: (0, import_pg_core.timestamp)("updated_at", { withTimezone: true, mode: "string" }).defaultNow().notNull()
+});
+// ═══════════════════════════════════════════════════════════════════════
+//  site_content_history — histórico para rollback
+// ═══════════════════════════════════════════════════════════════════════
+const siteContentHistory = (0, import_pg_core.pgTable)("site_content_history", {
+  id: (0, import_pg_core.bigserial)({ mode: "bigint" }).primaryKey().notNull(),
+  key: (0, import_pg_core.text)().notNull(),
+  data: (0, import_pg_core.jsonb)().notNull(),
+  version: (0, import_pg_core.integer)().notNull(),
+  createdBy: (0, import_pg_core.uuid)("created_by"),
+  createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).defaultNow().notNull()
+}, (table) => [
+  (0, import_pg_core.index)("idx_content_history_key").using("btree", table.key.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsFirst().op("timestamptz_ops"))
 ]);
