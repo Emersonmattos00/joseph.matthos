@@ -62,9 +62,6 @@ const {
   parseCookies,
   clientIp,
 
-  // Supabase
-  supabaseAdminRequest,
-
   // Rate limit
   checkAndIncrement,
   resetBucket,
@@ -89,6 +86,28 @@ const {
   // Ambiente
   IS_PROD
 } = require('./_lib');
+
+
+// ─────────────────────────────────────────────────────────────
+// Drizzle + Neon (usado em discografia)
+// ─────────────────────────────────────────────────────────────
+const { db } = require('./_db');
+const schema = require('../src/schema.js');
+const { tracks, albums, artists } = schema;
+const { eq, and, asc, desc, sql, inArray } = require('drizzle-orm');
+
+
+// ─────────────────────────────────────────────────────────────
+// Storage — Backblaze B2 (substitui Supabase Storage)
+// ─────────────────────────────────────────────────────────────
+const {
+  uploadObject,
+  createSignedUploadUrl: b2CreateSignedUploadUrl,
+  createSignedDownloadUrl: b2CreateSignedDownloadUrl,
+  getPublicUrl: b2GetPublicUrl,
+  objectExists: b2ObjectExists,
+  getBucketForKind: b2GetBucketForKind
+} = require('./_storage');
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -319,7 +338,6 @@ async function handleLogin(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
 
-  // ⚠️ Em dev, se DISABLE_RATE_LIMIT=true, ignora o rate limit.
   const rate = DEV_NO_RATE_LIMIT
     ? { limited: false, retryAfter: 0 }
     : await checkAndIncrement(
@@ -380,7 +398,6 @@ async function handleLogin(req, res) {
     return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
   }
 
-  // Login OK → zera o contador de tentativas deste IP.
   if (!DEV_NO_RATE_LIMIT) {
     await resetBucket(`admin-login:${ip}`);
   }
@@ -455,23 +472,17 @@ async function handleLogout(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/site_content?key=eq.${CONTENT_KEY}&select=data,version,updated_at&limit=1`,
-      { method: 'GET' }
-    );
-
-    if (!r.response.ok) {
-      console.error('[admin/content] Supabase erro');
-      return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
-    }
-
-    const row = Array.isArray(r.body) ? r.body[0] : null;
+    const [row] = await db
+      .select()
+      .from(schema.siteContent)
+      .where(eq(schema.siteContent.key, CONTENT_KEY))
+      .limit(1);
 
     return sendJson(res, 200, {
       ok: true,
       data: row?.data && typeof row.data === 'object' ? row.data : {},
       version: Number(row?.version) || 0,
-      updatedAt: row?.updated_at || null
+      updatedAt: row?.updatedAt || null
     });
   } catch (err) {
     console.error('[admin/content] erro:', err.message);
@@ -493,7 +504,6 @@ async function handlePutContent(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
   }
 
-  // ── Sanitiza playlists (apenas track.id numérico)
   if (Array.isArray(data.playlists)) {
     data.playlists = sanitizePlaylists(data.playlists);
   }
@@ -505,11 +515,12 @@ async function handlePutContent(req, res, session) {
   }
 
   try {
-    const current = await supabaseAdminRequest(
-      `/rest/v1/site_content?key=eq.${CONTENT_KEY}&select=version,data`,
-      { method: 'GET' }
-    );
-    const currentRow = Array.isArray(current.body) ? current.body[0] : null;
+    const [currentRow] = await db
+      .select()
+      .from(schema.siteContent)
+      .where(eq(schema.siteContent.key, CONTENT_KEY))
+      .limit(1);
+
     const currentVersion = currentRow?.version || 0;
 
     if (baseVersion !== null && baseVersion !== currentVersion) {
@@ -523,35 +534,25 @@ async function handlePutContent(req, res, session) {
     const newVersion = currentVersion + 1;
 
     if (currentRow) {
-      await supabaseAdminRequest('/rest/v1/site_content_history', {
-        method: 'POST',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          key: CONTENT_KEY,
-          data: currentRow.data,
-          version: currentRow.version
-        })
+      await db.insert(schema.siteContentHistory).values({
+        key: CONTENT_KEY,
+        data: currentRow.data,
+        version: currentRow.version
       }).catch(() => {});
     }
 
-    const upsert = await supabaseAdminRequest(
-      `/rest/v1/site_content?on_conflict=key`,
-      {
-        method: 'POST',
-        headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-        body: JSON.stringify({
-          key: CONTENT_KEY,
-          data,
-          version: newVersion,
-          updated_at: new Date().toISOString()
-        })
-      }
-    );
-
-    if (!upsert.response.ok) {
-      console.error('[admin/content] upsert falhou');
-      return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
-    }
+    await db
+      .insert(schema.siteContent)
+      .values({
+        key: CONTENT_KEY,
+        data,
+        version: newVersion,
+        updatedAt: new Date().toISOString()
+      })
+      .onConflictDoUpdate({
+        target: schema.siteContent.key,
+        set: { data, version: newVersion, updatedAt: new Date().toISOString() }
+      });
 
     await audit('content.update', {
       actor: session.user,
@@ -565,9 +566,6 @@ async function handlePutContent(req, res, session) {
   }
 }
 
-/**
- * Sanitiza o array de playlists.
- */
 function sanitizePlaylists(playlists) {
   if (!Array.isArray(playlists)) return [];
 
@@ -669,7 +667,14 @@ async function handleUpload(req, res, session) {
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = isImage ? `images/${uniqueName}` : uniqueName;
 
-  const uploadResult = await supabaseStorageUpload(bucket, path, buffer, contentType);
+  let uploadResult;
+  try {
+    await uploadObject(bucket, path, buffer, contentType);
+    uploadResult = { ok: true, status: 200 };
+  } catch (err) {
+    console.error('[admin/upload] B2 falhou:', err.message);
+    uploadResult = { ok: false, status: 0, error: err.message };
+  }
 
   if (!uploadResult.ok) {
     console.error('[admin/upload] Storage falhou:', {
@@ -690,9 +695,7 @@ async function handleUpload(req, res, session) {
   }
 
   const isPublicBucket = bucket !== 'audio-premium';
-  const publicUrl = isPublicBucket
-    ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
-    : null;
+  const publicUrl = isPublicBucket ? b2GetPublicUrl(bucket, path) : null;
 
   await audit('upload', {
     actor: session.user,
@@ -848,24 +851,22 @@ async function handleUploadConfirm(req, res, session) {
       });
     }
 
-    const patch = { [field]: path, updated_at: new Date().toISOString() };
+    const isFull = kind === 'audio-full';
+    const patch = isFull
+      ? { fullPath: path, updatedAt: new Date().toISOString() }
+      : { previewPath: path, updatedAt: new Date().toISOString() };
 
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
-      `&track_index=eq.${trackIndex}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=representation' },
-        body: JSON.stringify(patch)
-      }
-    );
+    const updated = await db
+      .update(tracks)
+      .set(patch)
+      .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
+      .returning();
 
-    if (!r.response.ok) {
-      console.error('[admin/upload-confirm] PATCH track falhou:', r.response.status, r.body);
+    if (!updated.length) {
       return sendJson(res, 502, {
         ok: false,
-        error: 'Falha ao associar áudio à faixa.',
-        code: 'DB_ERROR'
+        error: 'Faixa não encontrada.',
+        code: 'TRACK_NOT_FOUND'
       });
     }
 
@@ -875,12 +876,10 @@ async function handleUploadConfirm(req, res, session) {
       metadata: { bucket, path, field }
     });
 
-    const updated = Array.isArray(r.body) ? r.body[0] : null;
+    const updatedTrack = updated[0];
 
     const isPublic = bucket !== 'audio-premium';
-    const publicUrl = isPublic
-      ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
-      : null;
+    const publicUrl = isPublic ? b2GetPublicUrl(bucket, path) : null;
 
     return sendJson(res, 200, {
       ok: true,
@@ -890,14 +889,12 @@ async function handleUploadConfirm(req, res, session) {
       albumId,
       trackIndex,
       field,
-      track: updated
+      track: updatedTrack
     });
   }
 
   const isPublic = bucket !== 'audio-premium';
-  const publicUrl = isPublic
-    ? `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
-    : null;
+  const publicUrl = isPublic ? b2GetPublicUrl(bucket, path) : null;
 
   await audit('upload.confirm', {
     actor: session.user,
@@ -917,149 +914,6 @@ async function handleUploadConfirm(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 // Storage — helpers
 // ─────────────────────────────────────────────────────────────
-
-async function supabaseStorageUpload(bucket, path, buffer, contentType) {
-  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${encodeURIComponent(bucket)}/${String(path)
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/')}`;
-
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!key) {
-    return { ok: false, status: 500, error: 'SUPABASE_SERVICE_ROLE_KEY ausente.' };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${key}`,
-        apikey: key,
-        'Content-Type': contentType,
-        'Content-Length': String(buffer.length),
-        'x-upsert': 'true'
-      },
-      body: buffer,
-      signal: controller.signal
-    });
-
-    const responseText = await response.text().catch(() => '');
-
-    if (!response.ok) {
-      console.error(
-        '[admin/upload] Supabase Storage:',
-        response.status,
-        responseText.slice(0, 1000)
-      );
-    }
-
-    return {
-      ok: response.ok,
-      status: response.status,
-      error: response.ok ? null : responseText
-    };
-  } catch (err) {
-    console.error('[admin/upload] Storage fetch:', err);
-    return {
-      ok: false,
-      status: 0,
-      error: err?.name === 'AbortError'
-        ? 'Upload excedeu o tempo limite.'
-        : err?.message || 'Erro de rede.'
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function createSignedUploadUrl(bucket, path, expiresInSec) {
-  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-
-  if (!url || !key) {
-    return { ok: false, error: 'Supabase não configurado.' };
-  }
-
-  const clean = String(path)
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/');
-
-  const endpoint = `${url}/storage/v1/object/upload/sign/${encodeURIComponent(bucket)}/${clean}`;
-
-  try {
-    const r = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ expiresIn: expiresInSec })
-    });
-
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      console.error('[admin/sign] Supabase:', r.status, text.slice(0, 300));
-      return { ok: false, error: `http_${r.status}` };
-    }
-
-    const data = await r.json();
-
-    if (!data?.url) {
-      return { ok: false, error: 'signed_url_missing' };
-    }
-
-    let uploadUrl = String(data.url);
-    if (!/^https?:\/\//i.test(uploadUrl)) {
-      uploadUrl = `${url}/storage/v1${uploadUrl.startsWith('/') ? '' : '/'}${uploadUrl}`;
-    }
-
-    return {
-      ok: true,
-      uploadUrl,
-      token: data.token || null
-    };
-  } catch (err) {
-    console.error('[admin/sign] erro de rede:', err.message);
-    return { ok: false, error: err.message };
-  }
-}
-
-async function objectExists(bucket, path) {
-  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-
-  if (!url || !key || !bucket || !path) return false;
-
-  const clean = String(path)
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/');
-
-  const endpoint = `${url}/storage/v1/object/${encodeURIComponent(bucket)}/${clean}`;
-
-  try {
-    const r = await fetch(endpoint, {
-      method: 'HEAD',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`
-      }
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-
 // ─────────────────────────────────────────────────────────────
 // USERS — GET
 // ─────────────────────────────────────────────────────────────
@@ -1067,41 +921,33 @@ async function handleGetUsers(req, res) {
   const limit = clampLimit(req.query?.limit);
 
   try {
-    const profilesRes = await supabaseAdminRequest(
-      `/rest/v1/profiles?select=id,email,name,created_at&order=created_at.desc&limit=${limit}`,
-      {
-        method: 'GET',
-        headers: { Prefer: 'count=exact' }
-      }
+    const rows = await db
+      .select({
+        id: schema.users.id,
+        email: schema.users.email,
+        name: schema.users.name,
+        createdAt: schema.users.createdAt
+      })
+      .from(schema.users)
+      .orderBy(desc(schema.users.createdAt))
+      .limit(limit);
+
+    const planRows = await db.execute(sql`
+      SELECT user_id, plan FROM effective_plan
+    `);
+    const planMap = new Map(
+      (planRows.rows || planRows).map((r) => [r.user_id, r.plan])
     );
 
-    if (!profilesRes.response.ok) {
-      return sendJson(res, 502, { ok: false, error: 'Falha ao listar usuários.' });
-    }
-
-    const profiles = Array.isArray(profilesRes.body) ? profilesRes.body : [];
-    const totalFromHeader = parseTotalFromHeaders(profilesRes.response.headers);
-    const total = totalFromHeader ?? profiles.length;
-
-    const plansRes = await supabaseAdminRequest(
-      `/rest/v1/effective_plan?select=user_id,plan`,
-      { method: 'GET' }
-    );
-
-    const planMap = new Map();
-    if (plansRes.response.ok && Array.isArray(plansRes.body)) {
-      for (const row of plansRes.body) planMap.set(row.user_id, row.plan);
-    }
-
-    const users = profiles.map((p) => ({
-      id: p.id,
-      email: p.email || '',
-      name: p.name || '',
-      plan: planMap.get(p.id) || 'free',
-      createdAt: p.created_at
+    const users = rows.map((u) => ({
+      id: u.id,
+      email: u.email || '',
+      name: u.name || '',
+      plan: planMap.get(u.id) || 'free',
+      createdAt: u.createdAt
     }));
 
-    return sendJson(res, 200, { ok: true, users, total, limit });
+    return sendJson(res, 200, { ok: true, users, total: users.length, limit });
   } catch (err) {
     console.error('[admin/users] GET:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1124,28 +970,28 @@ async function handlePatchUser(req, res, session) {
   }
 
   try {
-    const userCheck = await supabaseAdminRequest(
-      `/rest/v1/profiles?id=eq.${encodeURIComponent(userId)}&select=id,email&limit=1`,
-      { method: 'GET' }
-    );
-    if (!userCheck.response.ok || !Array.isArray(userCheck.body) || !userCheck.body[0]) {
+    const [targetUser] = await db
+      .select({ id: schema.users.id, email: schema.users.email })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+
+    if (!targetUser) {
       return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
     }
 
-    const targetUser = userCheck.body[0];
-
-    // ═══════════════════════════════════════════════════════════
-    // MUDANÇA PARA "free" — cancelar no MP + banco
-    // ═══════════════════════════════════════════════════════════
     if (plan === 'free') {
-      const subsRes = await supabaseAdminRequest(
-        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}` +
-          `&status=in.(authorized,trialing)` +
-          `&select=id,provider,provider_sub_id`,
-        { method: 'GET' }
-      );
-
-      const activeSubs = Array.isArray(subsRes.body) ? subsRes.body : [];
+      const activeSubs = await db
+        .select({
+          id: schema.subscriptions.id,
+          externalSubscriptionId: schema.subscriptions.externalSubscriptionId,
+          status: schema.subscriptions.status
+        })
+        .from(schema.subscriptions)
+        .where(and(
+          eq(schema.subscriptions.userId, userId),
+          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
+        ));
 
       const mpToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
       let mpCancelledCount = 0;
@@ -1185,21 +1031,17 @@ async function handlePatchUser(req, res, session) {
         }
       }
 
-      const cancelRes = await supabaseAdminRequest(
-        `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)`,
-        {
-          method: 'PATCH',
-          headers: { Prefer: 'return=minimal' },
-          body: JSON.stringify({
-            status: 'canceled',
-            canceled_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-        }
-      );
-      if (!cancelRes.response.ok) {
-        return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
-      }
+      await db
+        .update(schema.subscriptions)
+        .set({
+          status: 'CANCELLED',
+          cancelAtPeriodEnd: true,
+          updatedAt: new Date().toISOString()
+        })
+        .where(and(
+          eq(schema.subscriptions.userId, userId),
+          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
+        ));
 
       await audit('user.plan.change', {
         actor: session.user,
@@ -1215,39 +1057,43 @@ async function handlePatchUser(req, res, session) {
       return sendJson(res, 200, { ok: true, plan });
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // MUDANÇA PARA "premium" / "anual" — assinatura manual
-    // ═══════════════════════════════════════════════════════════
-    const manualId = `manual_${userId}_${Date.now()}`;
-    const insertRes = await supabaseAdminRequest('/rest/v1/subscriptions', {
-      method: 'POST',
-      headers: { Prefer: 'return=minimal,resolution=merge-duplicates' },
-      body: JSON.stringify({
-        user_id: userId,
-        plan,
-        status: 'authorized',
-        provider: 'manual',
-        provider_sub_id: manualId,
-        started_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-    });
-    if (!insertRes.response.ok) {
-      return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar plano.' });
+    const [planRow] = await db
+      .select({ id: schema.plans.id })
+      .from(schema.plans)
+      .where(eq(schema.plans.name, plan))
+      .limit(1);
+
+    if (!planRow) {
+      return sendJson(res, 400, { ok: false, error: 'Plano não encontrado.' });
     }
 
-    await supabaseAdminRequest(
-      `/rest/v1/subscriptions?user_id=eq.${encodeURIComponent(userId)}&status=in.(authorized,trialing)&provider_sub_id=neq.${encodeURIComponent(manualId)}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=minimal' },
-        body: JSON.stringify({
-          status: 'canceled',
-          canceled_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-      }
-    ).catch(() => {});
+    const manualId = `manual_${userId}_${Date.now()}`;
+
+    await db.insert(schema.subscriptions).values({
+      id: crypto.randomUUID(),
+      userId,
+      planId: planRow.id,
+      externalSubscriptionId: manualId,
+      status: 'ACTIVE',
+      currentPeriodStart: new Date().toISOString(),
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    await db
+      .update(schema.subscriptions)
+      .set({
+        status: 'CANCELLED',
+        cancelAtPeriodEnd: true,
+        updatedAt: new Date().toISOString()
+      })
+      .where(and(
+        eq(schema.subscriptions.userId, userId),
+        inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING']),
+        sql`${schema.subscriptions.externalSubscriptionId} IS DISTINCT FROM ${manualId}`
+      )).catch(() => {});
 
     await audit('user.plan.change', {
       actor: session.user,
@@ -1298,33 +1144,52 @@ async function handleGetSales(req, res) {
 }
 
 async function fetchSubscriptions(since) {
-  const filter = since ? `&created_at=gte.${encodeURIComponent(since)}` : '';
-  const r = await supabaseAdminRequest(
-    `/rest/v1/subscriptions?select=id,user_id,plan,status,current_period_end,created_at${filter}&order=created_at.desc&limit=${SALES_LIMIT}`,
-    { method: 'GET' }
-  );
-  if (!r.response.ok) throw new Error('subscriptions fetch failed');
-  return r.body;
+  const base = db.select({
+    id: schema.subscriptions.id,
+    user_id: schema.subscriptions.userId,
+    plan: sql`(SELECT name FROM plans WHERE id = ${schema.subscriptions.planId})`,
+    status: schema.subscriptions.status,
+    current_period_end: schema.subscriptions.currentPeriodEnd,
+    created_at: schema.subscriptions.createdAt
+  }).from(schema.subscriptions);
+
+  if (since) {
+    return base.where(sql`${schema.subscriptions.createdAt} >= ${since}`).orderBy(desc(schema.subscriptions.createdAt)).limit(SALES_LIMIT);
+  }
+  return base.orderBy(desc(schema.subscriptions.createdAt)).limit(SALES_LIMIT);
 }
 
 async function fetchRentals(since) {
-  const filter = since ? `&created_at=gte.${encodeURIComponent(since)}` : '';
-  const r = await supabaseAdminRequest(
-    `/rest/v1/rentals?select=id,user_id,track_id,amount_cents,status,expires_at,created_at${filter}&order=created_at.desc&limit=${SALES_LIMIT}`,
-    { method: 'GET' }
-  );
-  if (!r.response.ok) throw new Error('rentals fetch failed');
-  return r.body;
+  const base = db.select({
+    id: schema.rentals.id,
+    user_id: schema.rentals.userId,
+    track_id: schema.rentals.trackId,
+    amount_cents: sql`0`,
+    status: schema.rentals.status,
+    expires_at: schema.rentals.expiresAt,
+    created_at: schema.rentals.createdAt
+  }).from(schema.rentals);
+
+  if (since) {
+    return base.where(sql`${schema.rentals.createdAt} >= ${since}`).orderBy(desc(schema.rentals.createdAt)).limit(SALES_LIMIT);
+  }
+  return base.orderBy(desc(schema.rentals.createdAt)).limit(SALES_LIMIT);
 }
 
 async function fetchPayments(since) {
-  const filter = since ? `&created_at=gte.${encodeURIComponent(since)}` : '';
-  const r = await supabaseAdminRequest(
-    `/rest/v1/payments_events?select=id,event_type,external_id,processed_at,failure_reason,created_at${filter}&order=created_at.desc&limit=${SALES_LIMIT}`,
-    { method: 'GET' }
-  );
-  if (!r.response.ok) throw new Error('payments fetch failed');
-  return r.body;
+  const base = db.select({
+    id: schema.paymentsEvents.id,
+    event_type: schema.paymentsEvents.eventType,
+    external_id: schema.paymentsEvents.externalId,
+    processed_at: schema.paymentsEvents.processedAt,
+    failure_reason: schema.paymentsEvents.failureReason,
+    created_at: schema.paymentsEvents.createdAt
+  }).from(schema.paymentsEvents);
+
+  if (since) {
+    return base.where(sql`${schema.paymentsEvents.createdAt} >= ${since}`).orderBy(desc(schema.paymentsEvents.createdAt)).limit(SALES_LIMIT);
+  }
+  return base.orderBy(desc(schema.paymentsEvents.createdAt)).limit(SALES_LIMIT);
 }
 
 function buildSummary(subscriptions, rentals, payments) {
@@ -1376,29 +1241,29 @@ function countBy(arr, key) {
 async function handleGetAudit(req, res) {
   const source = String(req.query?.source || 'admin').toLowerCase();
   const isAdminSource = source !== 'auth';
-  const table = isAdminSource ? 'admin_audit' : 'auth_audit_log';
   const limit = clampAuditLimit(req.query?.limit);
 
-  const select = isAdminSource
-    ? 'id,action,actor,target,metadata,ip,user_agent,created_at'
-    : 'id,event,email_hash,user_id,ip,user_agent,success,reason,created_at';
-
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/${table}?select=${select}&order=created_at.desc&limit=${limit}`,
-      { method: 'GET' }
-    );
-
-    if (!r.response.ok) {
-      console.error(`[admin/audit] Supabase erro (${table}):`, r.response.status);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao ler auditoria.' });
+    let events;
+    if (isAdminSource) {
+      events = await db
+        .select()
+        .from(schema.adminAudit)
+        .orderBy(desc(schema.adminAudit.createdAt))
+        .limit(limit);
+    } else {
+      events = await db
+        .select()
+        .from(schema.authAuditLog)
+        .orderBy(desc(schema.authAuditLog.createdAt))
+        .limit(limit);
     }
 
     return sendJson(res, 200, {
       ok: true,
       source: isAdminSource ? 'admin' : 'auth',
       limit,
-      events: Array.isArray(r.body) ? r.body : []
+      events
     });
   } catch (err) {
     console.error('[admin/audit] erro:', err.message);
@@ -1407,24 +1272,62 @@ async function handleGetAudit(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA — ÁLBUNS
+// DISCOGRAFIA — ÁLBUNS (Drizzle/Neon)
 // ─────────────────────────────────────────────────────────────
+function mapAlbumRow(a) {
+  if (!a) return null;
+  return {
+    id: a.id,
+    title: a.title,
+    slug: a.slug,
+    artist: a.artist || a.artistName || 'Joseph Matthos',
+    artist_id: a.artistId,
+    cover_image: a.coverUrl,
+    cover_url: a.coverUrl,
+    cover_initials: a.coverInitials || (a.title ? a.title.charAt(0).toUpperCase() : '♪'),
+    year: a.year,
+    type: a.type || 'album',
+    description: a.description || '',
+    published: a.published === true,
+    order_index: a.orderIndex ?? a.sortOrder ?? 0,
+    release_date: a.releaseDate,
+    sort_order: a.sortOrder,
+    upc: a.upc,
+    created_at: a.createdAt,
+    updated_at: a.updatedAt
+  };
+}
+
+const albumSelectFields = {
+  id: albums.id,
+  title: albums.title,
+  slug: albums.slug,
+  artist: albums.artist,
+  artistId: albums.artistId,
+  artistName: artists.name,
+  coverUrl: albums.coverUrl,
+  coverInitials: albums.coverInitials,
+  year: albums.year,
+  type: albums.type,
+  description: albums.description,
+  published: albums.published,
+  orderIndex: albums.orderIndex,
+  releaseDate: albums.releaseDate,
+  sortOrder: albums.sortOrder,
+  upc: albums.upc,
+  createdAt: albums.createdAt,
+  updatedAt: albums.updatedAt
+};
+
 async function handleListAlbums(req, res) {
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/albums?select=id,title,artist,year,type,cover_initials,cover_image,description,published,order_index,created_at,updated_at&order=order_index.asc,created_at.asc`,
-      { method: 'GET' }
-    );
+    const rows = await db.select(albumSelectFields)
+      .from(albums)
+      .leftJoin(artists, eq(albums.artistId, artists.id))
+      .orderBy(asc(albums.sortOrder), asc(albums.createdAt));
 
-    if (!r.response.ok) {
-      console.error('[admin/albums] Supabase erro:', r.response.status);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao listar álbuns.' });
-    }
-
-    return sendJson(res, 200, {
-      ok: true,
-      albums: Array.isArray(r.body) ? r.body : []
-    });
+    const mapped = rows.map(mapAlbumRow);
+    return sendJson(res, 200, { ok: true, albums: mapped });
   } catch (err) {
     console.error('[admin/albums] erro:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1436,13 +1339,17 @@ async function handleGetAlbum(req, res) {
   if (!id) return sendJson(res, 400, { ok: false, error: 'ID ausente.' });
 
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/albums?id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
-      { method: 'GET' }
-    );
-    const row = Array.isArray(r.body) ? r.body[0] : null;
-    if (!row) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
-    return sendJson(res, 200, { ok: true, album: row });
+    const rows = await db.select(albumSelectFields)
+      .from(albums)
+      .leftJoin(artists, eq(albums.artistId, artists.id))
+      .where(eq(albums.id, id))
+      .limit(1);
+
+    if (!rows.length) {
+      return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+    }
+
+    return sendJson(res, 200, { ok: true, album: mapAlbumRow(rows[0]) });
   } catch (err) {
     console.error('[admin/album] GET:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1451,48 +1358,49 @@ async function handleGetAlbum(req, res) {
 
 async function handleCreateAlbum(req, res, session) {
   const body = parseBody(req);
-  const id = String(body.id || '').trim();
   const title = String(body.title || '').trim();
-
-  if (!id || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(id)) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'ID inválido. Use letras, números e hífens (ex: album-bbb).'
-    });
-  }
   if (!title) return sendJson(res, 400, { ok: false, error: 'Título obrigatório.' });
+
+  const id = String(body.id || crypto.randomUUID());
+
+  let slug = String(body.slug || title)
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || `album-${Date.now()}`;
+
+  try {
+    const existing = await db.select({ slug: albums.slug })
+      .from(albums).where(eq(albums.slug, slug)).limit(1);
+    if (existing.length) slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
+  } catch {}
+
+  const [firstArtist] = await db.select({ id: artists.id }).from(artists).limit(1);
+  const artistId = body.artist_id || firstArtist?.id;
+  if (!artistId) {
+    return sendJson(res, 400, { ok: false, error: 'Nenhum artista cadastrado.' });
+  }
 
   const payload = {
     id,
     title,
+    slug,
+    artistId,
     artist: String(body.artist || 'Joseph Matthos').trim(),
     year: Number.isFinite(Number(body.year)) ? Number(body.year) : null,
     type: VALID_ALBUM_TYPES.has(body.type) ? body.type : 'album',
-    cover_initials: String(body.cover_initials || '').trim().slice(0, 8),
-    cover_image: String(body.cover_image || '').trim(),
+    coverInitials: String(body.cover_initials || title.charAt(0)).trim().slice(0, 8),
+    coverUrl: String(body.cover_image || body.cover_url || '').trim() || null,
     description: String(body.description || '').trim(),
     published: !!body.published,
-    order_index: Number.isFinite(Number(body.order_index)) ? Number(body.order_index) : 0,
-    updated_at: new Date().toISOString()
+    orderIndex: Number.isFinite(Number(body.order_index)) ? Number(body.order_index) : 0,
+    releaseDate: body.release_date || null,
+    upc: body.upc || null
   };
 
   try {
-    const r = await supabaseAdminRequest('/rest/v1/albums', {
-      method: 'POST',
-      headers: { Prefer: 'return=representation' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!r.response.ok) {
-      const errText = r.response.status === 409
-        ? 'Já existe um álbum com este ID.'
-        : 'Falha ao criar álbum.';
-      console.error('[admin/album] POST:', r.response.status, r.body);
-      return sendJson(res, r.response.status === 409 ? 409 : 502, {
-        ok: false,
-        error: errText
-      });
-    }
+    const [created] = await db.insert(albums).values(payload).returning();
 
     await audit('album.create', {
       actor: session.user,
@@ -1500,10 +1408,12 @@ async function handleCreateAlbum(req, res, session) {
       metadata: { title }
     });
 
-    const created = Array.isArray(r.body) ? r.body[0] : null;
-    return sendJson(res, 200, { ok: true, album: created });
+    return sendJson(res, 200, { ok: true, album: mapAlbumRow(created) });
   } catch (err) {
     console.error('[admin/album] POST erro:', err.message);
+    if (String(err.message).includes('duplicate')) {
+      return sendJson(res, 409, { ok: false, error: 'Já existe um álbum com este slug/id.' });
+    }
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
   }
 }
@@ -1515,35 +1425,31 @@ async function handleUpdateAlbum(req, res, session) {
   const body = parseBody(req);
   const patch = {};
 
-  if (typeof body.title === 'string')          patch.title = body.title.trim();
-  if (typeof body.artist === 'string')         patch.artist = body.artist.trim();
-  if (body.year !== undefined)                 patch.year = Number.isFinite(Number(body.year)) ? Number(body.year) : null;
+  if (typeof body.title === 'string')           patch.title = body.title.trim();
+  if (typeof body.slug === 'string')            patch.slug = body.slug.trim();
+  if (typeof body.artist === 'string')          patch.artist = body.artist.trim();
   if (typeof body.type === 'string' && VALID_ALBUM_TYPES.has(body.type)) patch.type = body.type;
-  if (typeof body.cover_initials === 'string') patch.cover_initials = body.cover_initials.trim().slice(0, 8);
-  if (typeof body.cover_image === 'string')    patch.cover_image = body.cover_image.trim();
-  if (typeof body.description === 'string')    patch.description = body.description.trim();
-  if (typeof body.published === 'boolean')     patch.published = body.published;
-  if (body.order_index !== undefined)          patch.order_index = Number.isFinite(Number(body.order_index)) ? Number(body.order_index) : 0;
+  if (typeof body.cover_initials === 'string')  patch.coverInitials = body.cover_initials.trim().slice(0, 8);
+  if (typeof body.cover_image === 'string')     patch.coverUrl = body.cover_image.trim() || null;
+  if (typeof body.cover_url === 'string')       patch.coverUrl = body.cover_url.trim() || null;
+  if (typeof body.description === 'string')     patch.description = body.description.trim();
+  if (typeof body.published === 'boolean')      patch.published = body.published;
+  if (body.year !== undefined)                  patch.year = Number.isFinite(Number(body.year)) ? Number(body.year) : null;
+  if (body.order_index !== undefined)           patch.orderIndex = Number.isFinite(Number(body.order_index)) ? Number(body.order_index) : 0;
+  if (typeof body.release_date === 'string')    patch.releaseDate = body.release_date.trim() || null;
 
   if (Object.keys(patch).length === 0) {
     return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
   }
 
-  patch.updated_at = new Date().toISOString();
-
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/albums?id=eq.${encodeURIComponent(id)}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=representation' },
-        body: JSON.stringify(patch)
-      }
-    );
+    const rows = await db.update(albums)
+      .set(patch)
+      .where(eq(albums.id, id))
+      .returning();
 
-    if (!r.response.ok) {
-      console.error('[admin/album] PATCH:', r.response.status, r.body);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar álbum.' });
+    if (!rows.length) {
+      return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
     }
 
     await audit('album.update', {
@@ -1552,8 +1458,7 @@ async function handleUpdateAlbum(req, res, session) {
       metadata: { fields: Object.keys(patch) }
     });
 
-    const updated = Array.isArray(r.body) ? r.body[0] : null;
-    return sendJson(res, 200, { ok: true, album: updated });
+    return sendJson(res, 200, { ok: true, album: mapAlbumRow(rows[0]) });
   } catch (err) {
     console.error('[admin/album] PATCH erro:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1565,11 +1470,9 @@ async function handleDeleteAlbum(req, res, session) {
   if (!id) return sendJson(res, 400, { ok: false, error: 'ID ausente.' });
 
   try {
-    const tracksRes = await supabaseAdminRequest(
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(id)}&select=id&limit=1`,
-      { method: 'GET' }
-    );
-    const hasTracks = Array.isArray(tracksRes.body) && tracksRes.body.length > 0;
+    const [existing] = await db.select({ id: tracks.id })
+      .from(tracks).where(eq(tracks.albumId, id)).limit(1);
+    const hasTracks = !!existing;
 
     const force = String(req.query?.force || '').toLowerCase() === 'true';
 
@@ -1581,20 +1484,13 @@ async function handleDeleteAlbum(req, res, session) {
     }
 
     if (hasTracks && force) {
-      await supabaseAdminRequest(
-        `/rest/v1/tracks?album_id=eq.${encodeURIComponent(id)}`,
-        { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
-      );
+      await db.delete(tracks).where(eq(tracks.albumId, id));
     }
 
-    const r = await supabaseAdminRequest(
-      `/rest/v1/albums?id=eq.${encodeURIComponent(id)}`,
-      { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
-    );
+    const deleted = await db.delete(albums).where(eq(albums.id, id)).returning();
 
-    if (!r.response.ok) {
-      console.error('[admin/album] DELETE:', r.response.status, r.body);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao excluir álbum.' });
+    if (!deleted.length) {
+      return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
     }
 
     await audit('album.delete', {
@@ -1611,27 +1507,61 @@ async function handleDeleteAlbum(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA — FAIXAS
+// DISCOGRAFIA — FAIXAS (Drizzle/Neon)
 // ─────────────────────────────────────────────────────────────
+function mapTrackRow(t) {
+  if (!t) return null;
+  return {
+    id: t.id,
+    album_id: t.albumId,
+    track_index: t.trackNumber ?? 0,
+    track_number: t.trackNumber ?? 0,
+    title: t.title,
+    slug: t.slug,
+    duration: t.durationSeconds ? String(t.durationSeconds) : '—',
+    duration_seconds: t.durationSeconds,
+    status: t.status,
+    published: t.status === 'PUBLISHED',
+    preview_path: t.previewPath,
+    full_path: t.fullPath,
+    preview_key: t.previewKey,
+    stream_key: t.streamKey,
+    master_key: t.masterKey,
+    created_at: t.createdAt,
+    updated_at: t.updatedAt
+  };
+}
+
+const trackSelectFields = {
+  id: tracks.id,
+  albumId: tracks.albumId,
+  artistId: tracks.artistId,
+  title: tracks.title,
+  slug: tracks.slug,
+  durationSeconds: tracks.durationSeconds,
+  status: tracks.status,
+  previewKey: tracks.previewKey,
+  streamKey: tracks.streamKey,
+  masterKey: tracks.masterKey,
+  trackNumber: tracks.trackNumber,
+  fullPath: tracks.fullPath,
+  previewPath: tracks.previewPath,
+  createdAt: tracks.createdAt,
+  updatedAt: tracks.updatedAt
+};
+
 async function handleListTracks(req, res) {
   const albumId = String(req.query?.albumId || '').trim();
   if (!albumId) return sendJson(res, 400, { ok: false, error: 'albumId ausente.' });
 
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}&select=id,album_id,track_index,title,duration,preview_start,preview_duration,price_cents,for_sale,lyrics,published,preview_path,full_path,created_at,updated_at&order=track_index.asc`,
-      { method: 'GET' }
-    );
+    const rows = await db.select(trackSelectFields)
+      .from(tracks)
+      .where(eq(tracks.albumId, albumId))
+      .orderBy(asc(tracks.trackNumber), asc(tracks.createdAt));
 
-    if (!r.response.ok) {
-      console.error('[admin/tracks] Supabase erro:', r.response.status);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao listar faixas.' });
-    }
-
-    return sendJson(res, 200, {
-      ok: true,
-      tracks: Array.isArray(r.body) ? r.body : []
-    });
+    const mapped = rows.map(mapTrackRow);
+    return sendJson(res, 200, { ok: true, tracks: mapped });
   } catch (err) {
     console.error('[admin/tracks] erro:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1646,45 +1576,52 @@ async function handleCreateTrack(req, res, session) {
   if (!albumId) return sendJson(res, 400, { ok: false, error: 'album_id obrigatório.' });
   if (!title) return sendJson(res, 400, { ok: false, error: 'Título obrigatório.' });
 
-  let nextIndex = 0;
+  let nextIndex = 1;
   try {
-    const maxRes = await supabaseAdminRequest(
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}&select=track_index&order=track_index.desc&limit=1`,
-      { method: 'GET' }
-    );
-    const maxRow = Array.isArray(maxRes.body) ? maxRes.body[0] : null;
-    nextIndex = maxRow ? Number(maxRow.track_index) + 1 : 0;
-  } catch {
-    nextIndex = 0;
+    const [maxRow] = await db.select({ n: tracks.trackNumber })
+      .from(tracks)
+      .where(eq(tracks.albumId, albumId))
+      .orderBy(desc(tracks.trackNumber))
+      .limit(1);
+    nextIndex = (maxRow?.n || 0) + 1;
+  } catch {}
+
+  const slug = String(body.slug || title)
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || `track-${Date.now()}`;
+
+  // Pega artistId do álbum (ou do primeiro artista)
+  const [albumRow] = await db.select({ artistId: albums.artistId })
+    .from(albums).where(eq(albums.id, albumId)).limit(1);
+  let artistId = albumRow?.artistId;
+  if (!artistId) {
+    const [firstArtist] = await db.select({ id: artists.id }).from(artists).limit(1);
+    artistId = firstArtist?.id;
+  }
+  if (!artistId) {
+    return sendJson(res, 400, { ok: false, error: 'Nenhum artista cadastrado.' });
   }
 
   const payload = {
-    album_id: albumId,
-    track_index: nextIndex,
+    id: crypto.randomUUID(),
+    albumId,
+    artistId,
     title,
-    duration: String(body.duration || '—').trim(),
-    preview_start: Number.isFinite(Number(body.preview_start)) ? Number(body.preview_start) : 0,
-    preview_duration: Number.isFinite(Number(body.preview_duration)) ? Number(body.preview_duration) : 30,
-    price_cents: Number.isFinite(Number(body.price_cents)) ? Number(body.price_cents) : 499,
-    for_sale: body.for_sale !== false,
-    lyrics: Array.isArray(body.lyrics) ? body.lyrics : [],
-    published: !!body.published,
-    preview_path: String(body.preview_path || '').trim() || null,
-    full_path: String(body.full_path || '').trim() || null,
-    updated_at: new Date().toISOString()
+    slug,
+    trackNumber: nextIndex,
+    status: body.published ? 'PUBLISHED' : 'DRAFT',
+    durationSeconds: Number.isFinite(Number(body.duration_seconds)) ? Number(body.duration_seconds) : null,
+    previewKey: String(body.preview_path || '').trim() || null,
+    streamKey: String(body.full_path || '').trim() || null,
+    fullPath: String(body.full_path || '').trim() || null,
+    previewPath: String(body.preview_path || '').trim() || null
   };
 
   try {
-    const r = await supabaseAdminRequest('/rest/v1/tracks', {
-      method: 'POST',
-      headers: { Prefer: 'return=representation' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!r.response.ok) {
-      console.error('[admin/track] POST:', r.response.status, r.body);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao criar faixa.' });
-    }
+    const [created] = await db.insert(tracks).values(payload).returning();
 
     await audit('track.create', {
       actor: session.user,
@@ -1692,8 +1629,7 @@ async function handleCreateTrack(req, res, session) {
       metadata: { title }
     });
 
-    const created = Array.isArray(r.body) ? r.body[0] : null;
-    return sendJson(res, 200, { ok: true, track: created });
+    return sendJson(res, 200, { ok: true, track: mapTrackRow(created) });
   } catch (err) {
     console.error('[admin/track] POST erro:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1701,45 +1637,34 @@ async function handleCreateTrack(req, res, session) {
 }
 
 async function handleUpdateTrack(req, res, session) {
-  const id = Number(req.query?.id);
-  if (!Number.isFinite(id) || id <= 0) {
-    return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
-  }
+  const id = String(req.query?.id || '').trim();
+  if (!id) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const body = parseBody(req);
   const patch = {};
 
   if (typeof body.title === 'string')           patch.title = body.title.trim();
-  if (typeof body.duration === 'string')        patch.duration = body.duration.trim();
-  if (body.preview_start !== undefined)         patch.preview_start = Number(body.preview_start) || 0;
-  if (body.preview_duration !== undefined)      patch.preview_duration = Number(body.preview_duration) || 30;
-  if (body.price_cents !== undefined)           patch.price_cents = Number.isFinite(Number(body.price_cents)) ? Number(body.price_cents) : 0;
-  if (typeof body.for_sale === 'boolean')       patch.for_sale = body.for_sale;
-  if (Array.isArray(body.lyrics))               patch.lyrics = body.lyrics;
-  if (typeof body.published === 'boolean')      patch.published = body.published;
-  if (typeof body.preview_path === 'string')    patch.preview_path = body.preview_path.trim() || null;
-  if (typeof body.full_path === 'string')       patch.full_path = body.full_path.trim() || null;
-  if (body.track_index !== undefined)           patch.track_index = Number(body.track_index) || 0;
+  if (typeof body.slug === 'string')            patch.slug = body.slug.trim();
+  if (body.track_index !== undefined)           patch.trackNumber = Number(body.track_index) || 0;
+  if (body.track_number !== undefined)          patch.trackNumber = Number(body.track_number) || 0;
+  if (typeof body.published === 'boolean')      patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
+  if (typeof body.status === 'string' && ['DRAFT','PUBLISHED','ARCHIVED'].includes(body.status)) patch.status = body.status;
+  if (body.duration_seconds !== undefined)      patch.durationSeconds = Number.isFinite(Number(body.duration_seconds)) ? Number(body.duration_seconds) : null;
+  if (typeof body.preview_path === 'string')    { patch.previewPath = body.preview_path.trim() || null; patch.previewKey = body.preview_path.trim() || null; }
+  if (typeof body.full_path === 'string')       { patch.fullPath = body.full_path.trim() || null; patch.streamKey = body.full_path.trim() || null; }
 
   if (Object.keys(patch).length === 0) {
     return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
   }
 
-  patch.updated_at = new Date().toISOString();
-
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?id=eq.${id}`,
-      {
-        method: 'PATCH',
-        headers: { Prefer: 'return=representation' },
-        body: JSON.stringify(patch)
-      }
-    );
+    const rows = await db.update(tracks)
+      .set(patch)
+      .where(eq(tracks.id, id))
+      .returning();
 
-    if (!r.response.ok) {
-      console.error('[admin/track] PATCH:', r.response.status, r.body);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao atualizar faixa.' });
+    if (!rows.length) {
+      return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     }
 
     await audit('track.update', {
@@ -1748,8 +1673,7 @@ async function handleUpdateTrack(req, res, session) {
       metadata: { fields: Object.keys(patch) }
     });
 
-    const updated = Array.isArray(r.body) ? r.body[0] : null;
-    return sendJson(res, 200, { ok: true, track: updated });
+    return sendJson(res, 200, { ok: true, track: mapTrackRow(rows[0]) });
   } catch (err) {
     console.error('[admin/track] PATCH erro:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Serviço indisponível.' });
@@ -1757,20 +1681,14 @@ async function handleUpdateTrack(req, res, session) {
 }
 
 async function handleDeleteTrack(req, res, session) {
-  const id = Number(req.query?.id);
-  if (!Number.isFinite(id) || id <= 0) {
-    return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
-  }
+  const id = String(req.query?.id || '').trim();
+  if (!id) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?id=eq.${id}`,
-      { method: 'DELETE', headers: { Prefer: 'return=minimal' } }
-    );
+    const deleted = await db.delete(tracks).where(eq(tracks.id, id)).returning();
 
-    if (!r.response.ok) {
-      console.error('[admin/track] DELETE:', r.response.status, r.body);
-      return sendJson(res, 502, { ok: false, error: 'Falha ao excluir faixa.' });
+    if (!deleted.length) {
+      return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     }
 
     await audit('track.delete', {
@@ -1792,33 +1710,18 @@ async function handleReorderTracks(req, res, session) {
   if (!Array.isArray(order) || !order.length) {
     return sendJson(res, 400, {
       ok: false,
-      error: 'Payload deve ser { order: [{id, track_index}, ...] }.'
+      error: 'Payload deve ser { order: [{ id, track_number }, ...] }.'
     });
   }
 
   try {
-    const results = await Promise.all(order.map((item) =>
-      supabaseAdminRequest(
-        `/rest/v1/tracks?id=eq.${Number(item.id)}`,
-        {
-          method: 'PATCH',
-          headers: { Prefer: 'return=minimal' },
-          body: JSON.stringify({
-            track_index: Number(item.track_index) || 0,
-            updated_at: new Date().toISOString()
-          })
-        }
-      )
-    ));
-
-    const failed = results.filter((r) => !r.response.ok);
-    if (failed.length) {
-      console.error('[admin/track-order] algumas falharam:', failed.length);
-      return sendJson(res, 502, {
-        ok: false,
-        error: `${failed.length} faixa(s) não puderam ser reordenadas.`
-      });
-    }
+    await Promise.all(order.map((item, i) => {
+      const n = Number(item.track_number) || (i + 1);
+      return db
+        .update(tracks)
+        .set({ trackNumber: n })
+        .where(eq(tracks.id, String(item.id)));
+    }));
 
     await audit('track.reorder', {
       actor: session.user,
@@ -1835,36 +1738,21 @@ async function handleReorderTracks(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 // DOWNLOADS (admin)
 // ─────────────────────────────────────────────────────────────
-
-/**
- * GET /api/admin?action=download-url&id=TRACK_ID
- *
- * Gera URL assinada (1h) para baixar o áudio completo de uma faixa.
- * Usa o service_role no servidor → ignora RLS.
- * O parâmetro `download` do Supabase força Content-Disposition: attachment.
- */
 async function handleDownloadUrl(req, res, session) {
-  const trackId = Number(req.query?.id);
-  if (!Number.isFinite(trackId) || trackId <= 0) {
+  const trackId = String(req.query?.id || '').trim();
+  if (!trackId) {
     return sendJson(res, 400, { ok: false, error: 'ID de faixa inválido.' });
   }
 
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?id=eq.${trackId}&select=id,title,full_path,album_id,track_index&limit=1`,
-      { method: 'GET' }
-    );
+    const [track] = await db.select(trackSelectFields)
+      .from(tracks).where(eq(tracks.id, trackId)).limit(1);
 
-    if (!r.response.ok) {
-      return sendJson(res, 502, { ok: false, error: 'Falha ao buscar faixa.' });
-    }
-
-    const track = Array.isArray(r.body) ? r.body[0] : null;
     if (!track) {
       return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     }
 
-    if (!track.full_path) {
+    if (!track.fullPath) {
       return sendJson(res, 400, {
         ok: false,
         error: 'Esta faixa não tem áudio completo cadastrado.',
@@ -1877,7 +1765,7 @@ async function handleDownloadUrl(req, res, session) {
 
     const signed = await createSignedDownloadUrl(
       'audio-premium',
-      track.full_path,
+      track.fullPath,
       DOWNLOAD_TTL_SEC,
       filename
     );
@@ -1894,7 +1782,7 @@ async function handleDownloadUrl(req, res, session) {
     await audit('download.track', {
       actor: session.user,
       target: String(trackId),
-      metadata: { title: track.title, album: track.album_id }
+      metadata: { title: track.title, album: track.albumId }
     });
 
     return sendJson(res, 200, {
@@ -1909,12 +1797,6 @@ async function handleDownloadUrl(req, res, session) {
   }
 }
 
-/**
- * GET /api/admin?action=download-album&id=ALBUM_ID
- *
- * Gera URLs assinadas (1h) para todas as faixas de um álbum.
- * O frontend itera e baixa uma a uma.
- */
 async function handleDownloadAlbum(req, res, session) {
   const albumId = String(req.query?.id || '').trim();
   if (!albumId) {
@@ -1922,30 +1804,23 @@ async function handleDownloadAlbum(req, res, session) {
   }
 
   try {
-    const r = await supabaseAdminRequest(
-      `/rest/v1/tracks?album_id=eq.${encodeURIComponent(albumId)}` +
-        `&select=id,title,full_path,track_index` +
-        `&order=track_index.asc`,
-      { method: 'GET' }
-    );
+    const rows = await db.select(trackSelectFields)
+      .from(tracks)
+      .where(eq(tracks.albumId, albumId))
+      .orderBy(asc(tracks.trackNumber));
 
-    if (!r.response.ok) {
-      return sendJson(res, 502, { ok: false, error: 'Falha ao buscar faixas.' });
-    }
-
-    const tracks = Array.isArray(r.body) ? r.body : [];
-    if (!tracks.length) {
+    if (!rows.length) {
       return sendJson(res, 404, { ok: false, error: 'Álbum sem faixas.' });
     }
 
     const results = [];
 
-    for (const t of tracks) {
-      if (!t.full_path) {
+    for (const t of rows) {
+      if (!t.fullPath) {
         results.push({
           id: t.id,
           title: t.title,
-          trackIndex: t.track_index,
+          trackIndex: t.trackNumber,
           url: null,
           filename: null,
           error: 'SEM_AUDIO'
@@ -1953,13 +1828,13 @@ async function handleDownloadAlbum(req, res, session) {
         continue;
       }
 
-      const idx = String(t.track_index).padStart(2, '0');
+      const idx = String(t.trackNumber || 0).padStart(2, '0');
       const baseName = sanitizeFilename(t.title);
       const filename = `${idx} - ${baseName}.mp3`;
 
       const signed = await createSignedDownloadUrl(
         'audio-premium',
-        t.full_path,
+        t.fullPath,
         DOWNLOAD_TTL_SEC,
         filename
       );
@@ -1967,7 +1842,7 @@ async function handleDownloadAlbum(req, res, session) {
       results.push({
         id: t.id,
         title: t.title,
-        trackIndex: t.track_index,
+        trackIndex: t.trackNumber,
         url: signed.ok ? signed.url : null,
         filename: signed.ok ? signed.filename : null,
         error: signed.ok ? null : 'SIGN_FAILED'
@@ -1977,7 +1852,7 @@ async function handleDownloadAlbum(req, res, session) {
     await audit('download.album', {
       actor: session.user,
       target: albumId,
-      metadata: { count: tracks.length }
+      metadata: { count: rows.length }
     });
 
     return sendJson(res, 200, {
@@ -1992,68 +1867,6 @@ async function handleDownloadAlbum(req, res, session) {
   }
 }
 
-/**
- * Gera URL assinada com `download` param (força Content-Disposition).
- */
-async function createSignedDownloadUrl(bucket, path, expiresInSec, downloadFilename) {
-  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-
-  if (!url || !key) return { ok: false, error: 'Supabase não configurado.' };
-
-  const clean = String(path)
-    .split('/')
-    .filter(Boolean)
-    .map(encodeURIComponent)
-    .join('/');
-
-  const endpoint = `${url}/storage/v1/object/sign/${encodeURIComponent(bucket)}/${clean}`;
-
-  try {
-    const body = { expiresIn: expiresInSec };
-    if (downloadFilename) body.download = downloadFilename;
-
-    const r = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!r.ok) {
-      const text = await r.text().catch(() => '');
-      console.error('[admin/sign-download] Supabase:', r.status, text.slice(0, 300));
-      return { ok: false, error: `http_${r.status}` };
-    }
-
-    const data = await r.json();
-    if (!data?.signedURL) return { ok: false, error: 'signed_url_missing' };
-
-    let signedUrl = String(data.signedURL);
-    if (!/^https?:\/\//i.test(signedUrl)) {
-      signedUrl = `${url}/storage/v1${signedUrl.startsWith('/') ? '' : '/'}${signedUrl}`;
-    }
-
-    return {
-      ok: true,
-      url: signedUrl,
-      filename: downloadFilename || clean.split('/').pop()
-    };
-  } catch (err) {
-    console.error('[admin/sign-download] erro:', err.message);
-    return { ok: false, error: err.message };
-  }
-}
-
-/**
- * Sanitiza nome de arquivo para download.
- * - Remove acentos
- * - Substitui caracteres não permitidos por _
- * - Limita a 100 caracteres
- */
 function sanitizeFilename(s) {
   return String(s || 'audio')
     .normalize('NFD')
