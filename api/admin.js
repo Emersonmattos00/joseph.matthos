@@ -853,8 +853,8 @@ async function handleUploadConfirm(req, res, session) {
 
     const isFull = kind === 'audio-full';
     const patch = isFull
-      ? { fullPath: path, updatedAt: new Date().toISOString() }
-      : { previewPath: path, updatedAt: new Date().toISOString() };
+      ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
+      : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
 
     const updated = await db
       .update(tracks)
