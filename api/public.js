@@ -1,6 +1,7 @@
 /* ============================================================
    API: /api/public — Catálogo público
    Retorna: content, albums, tracks, plans, rentalPlans
+   ⚠️  Nunca expor streamKey/previewKey (chaves internas do B2).
    ============================================================ */
 
 const { eq, desc, asc } = require('drizzle-orm');
@@ -43,6 +44,7 @@ module.exports = async (req, res) => {
 
     // ============================================
     // 2. BUSCAR FAIXAS PUBLICADAS
+    //    (sem streamKey/previewKey — o cliente não precisa)
     // ============================================
     const tracksRaw = await db
       .select({
@@ -58,8 +60,6 @@ module.exports = async (req, res) => {
         artistId: tracks.artistId,
         artistName: artists.name,
         status: tracks.status,
-        streamKey: tracks.streamKey,
-        previewKey: tracks.previewKey,
       })
       .from(tracks)
       .leftJoin(albums, eq(tracks.albumId, albums.id))
@@ -109,8 +109,6 @@ module.exports = async (req, res) => {
         trackNumber: t.trackNumber,
         trackIndex: t.trackNumber, // compatibilidade com o frontend
         coverUrl: t.coverUrl,
-        streamKey: t.streamKey,
-        previewKey: t.previewKey,
       });
     }
 
@@ -171,12 +169,15 @@ module.exports = async (req, res) => {
 
     // ============================================
     // 8. RESPOSTA FINAL
+    //    tracks no topo sem as chaves internas
     // ============================================
+    const tracksPublic = tracksRaw.map(({ ...rest }) => rest);
+
     return res.status(200).json({
       ok: true,
       content: null, // o site.js usa DEFAULT_CONTENT
       albums: albumsWithTracks,
-      tracks: tracksRaw,
+      tracks: tracksPublic,
       plans: plansNormalized,
       rentalPlans: rentalNormalized,
       stats: {
