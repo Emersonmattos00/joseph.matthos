@@ -1,7 +1,7 @@
-const { eq } = require('drizzle-orm');
+const { eq, and, gt, or } = require('drizzle-orm');
 const { db } = require('./_db');
-const { tracks } = require('../src/schema.js');
-const { getAuthUser, getPlanForUser } = require('./_lib');
+const { tracks, rentals, subscriptions } = require('../src/schema.js');
+const { getAuthUser } = require('./_lib');
 const { getPlaybackUrl } = require('./_storage');
 const { streamRatelimit } = require('./_cache');
 
@@ -24,7 +24,7 @@ module.exports = async (req, res) => {
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
     if (!track) return res.status(404).json({ error: 'Faixa não encontrada' });
 
-    // Verificar usuário (usa getAuthUser do _lib)
+    // Verificar usuário
     let user = null;
     try {
       user = await getAuthUser(req);
@@ -33,17 +33,46 @@ module.exports = async (req, res) => {
     }
 
     // Determinar nível de acesso
+    // full   = assinatura ativa OU aluguel ativo (faixa ou álbum)
+    // preview = qualquer outro caso
     let accessLevel = 'preview';
-    let expiresAt = null;
 
     if (user) {
+      const now = new Date().toISOString();
+
+      // 1) Assinatura ativa vigente
       try {
-        const plan = await getPlanForUser(user.id);
-        if (plan === 'premium' || plan === 'anual') {
-          accessLevel = 'full';
-        }
+        const [sub] = await db.select().from(subscriptions)
+          .where(and(
+            eq(subscriptions.userId, user.id),
+            eq(subscriptions.status, 'ACTIVE'),
+            gt(subscriptions.currentPeriodEnd, now)
+          ))
+          .limit(1);
+        if (sub) accessLevel = 'full';
       } catch (e) {
-        console.warn('[stream] getPlanForUser falhou:', e.message);
+        console.warn('[stream] checagem de assinatura falhou:', e.message);
+      }
+
+      // 2) Aluguel ativo cobrindo a faixa ou o álbum da faixa
+      if (accessLevel !== 'full') {
+        try {
+          const rentalCond = or(
+            eq(rentals.trackId, track.id),
+            track.albumId ? eq(rentals.albumId, track.albumId) : eq(rentals.trackId, track.id)
+          );
+          const [rent] = await db.select().from(rentals)
+            .where(and(
+              eq(rentals.userId, user.id),
+              eq(rentals.status, 'ACTIVE'),
+              gt(rentals.expiresAt, now),
+              rentalCond
+            ))
+            .limit(1);
+          if (rent) accessLevel = 'full';
+        } catch (e) {
+          console.warn('[stream] checagem de aluguel falhou:', e.message);
+        }
       }
     }
 
@@ -53,12 +82,15 @@ module.exports = async (req, res) => {
 
     const audioUrl = await getPlaybackUrl(b2Key, accessLevel === 'full');
 
+    // A URL assinada em _storage.getPlaybackUrl vale 300s (5 min).
+    const expiresAt = new Date(Date.now() + 300 * 1000).toISOString();
+
     return res.status(200).json({
       accessLevel,
       previewDuration: accessLevel === 'preview' ? 30 : null,
       audioUrl,
       expiresAt,
-      requiresPayment: accessLevel === 'preview',
+      requiresPayment: accessLevel !== 'full',
       track: {
         id: track.id,
         title: track.title,

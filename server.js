@@ -31,7 +31,6 @@ for (const dir of possibleDirs) {
 
 // Rota de login do painel admin via Supabase
 app.post('/api/admin', async (req, res) => {
-  console.log('Body recebido:', req.body);
 
   const { email, senha } = req.body;
 
