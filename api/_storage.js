@@ -58,6 +58,11 @@ function getS3Client() {
   return client;
 }
 
+/**
+ * Mapeia o tipo de arquivo para o bucket correto.
+ * O sistema usa um bucket para mídia (B2_MEDIA_BUCKET) e o mesmo para áudio.
+ * O prefixo da chave (previews/ ou josephmatthos/) é o que diferencia.
+ */
 function getBucketForKind(kind) {
   const bucket = String(process.env.B2_MEDIA_BUCKET || '').trim();
   if (!bucket) {
@@ -142,8 +147,10 @@ async function createSignedDownloadUrl(bucket, key, expiresInSec, downloadFilena
 
 /**
  * Gera URL temporária para reprodução de áudio.
- * isFull=true  → bucket audio-premium
- * isFull=false → bucket audio-preview
+ * O sistema usa o mesmo bucket (B2_MEDIA_BUCKET) para prévias e áudios completos.
+ * A diferenciação é feita pelo prefixo da chave:
+ *   - Prévia: prefixo 'previews/'
+ *   - Completo: prefixo 'josephmatthos/'
  */
 async function getPlaybackUrl(key, isFull = false) {
   if (!key || typeof key !== 'string') {
@@ -151,20 +158,27 @@ async function getPlaybackUrl(key, isFull = false) {
   }
 
   const bucket = getBucketForKind(isFull ? 'audio-full' : 'audio-preview');
-
   if (!bucket) {
     throw new Error('Bucket de áudio não configurado.');
   }
 
+  // Define o prefixo correto caso a chave já não o tenha (por segurança)
+  let finalKey = key;
+  if (isFull && !finalKey.startsWith('josephmatthos/')) {
+    finalKey = `josephmatthos/${finalKey}`;
+  } else if (!isFull && !finalKey.startsWith('previews/')) {
+    finalKey = `previews/${finalKey}`;
+  }
+
   // 5 minutos
-  return createSignedDownloadUrl(bucket, key, 300);
+  return createSignedDownloadUrl(bucket, finalKey, 300);
 }
 
 module.exports = {
   createSignedDownloadUrl,
   createSignedUploadUrl,
   getBucketForKind,
-  getPlaybackUrl,          // ← adicione esta linha
+  getPlaybackUrl,
   getPublicUrl,
   getStorageConfig,
   objectExists,
