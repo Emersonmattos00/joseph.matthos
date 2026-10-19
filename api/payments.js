@@ -2,13 +2,14 @@
 
 /* ============================================================
    API: /api/payments — Mercado Pago
-   Contrato público (compatível com js/site.js):
+   Contrato (compatível com js/site.js):
      POST ?type=rental        { albumId, trackIndex, planId, kind }
      POST ?type=subscription  { plan }
      GET  ?type=manage        → { ok, subscription|null }
      POST ?type=manage        { action: 'cancel' }
-     POST ?type=webhook       (MP envia; também aceita GET p/ debug)
+     POST ?type=webhook       (MP envia; GET p/ debug)
    Aliases: ?action=rent|subscribe|manage|webhook
+   ⚠️  Nenhum pedido é marcado PAID sem confirmação do MP.
    ============================================================ */
 
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
@@ -31,7 +32,10 @@ const { sendRentalConfirmation, sendSubscriptionConfirmation } = require('./_ema
 const MP_API = 'https://api.mercadopago.com';
 const ACCESS_TOKEN = () => String(process.env.MP_ACCESS_TOKEN || '').trim();
 const WEBHOOK_SECRET = () => String(process.env.MP_WEBHOOK_SECRET || '').trim();
-const APP_URL = () => String(process.env.APP_URL || process.env.PUBLIC_SITE_URL || '').trim().replace(/\/+$/, '');
+const APP_URL = () =>
+  String(process.env.APP_URL || process.env.PUBLIC_SITE_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
 
 function mpHeaders(extra = {}) {
   const token = ACCESS_TOKEN();
@@ -65,7 +69,7 @@ async function mpFetch(path, options = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WEBHOOK: valida assinatura x-signature do MP
+// WEBHOOK: valida x-signature do MP
 // ─────────────────────────────────────────────────────────────
 function verifyWebhookSignature(req) {
   const secret = WEBHOOK_SECRET();
@@ -75,7 +79,6 @@ function verifyWebhookSignature(req) {
   const requestId = String(req.headers['x-request-id'] || '');
   if (!signature) return false;
 
-  // x-signature: ts=...,v1=...
   const parts = Object.fromEntries(
     signature.split(',').map((p) => {
       const [k, ...rest] = p.trim().split('=');
@@ -122,7 +125,7 @@ async function markOrderPaid(orderId, externalPaymentId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AÇÃO: rental → cria order PENDING + preference MP
+// AÇÃO: rental
 // ─────────────────────────────────────────────────────────────
 async function handleRental(req, res, user) {
   const body = req.body || {};
@@ -153,7 +156,10 @@ async function handleRental(req, res, user) {
     .limit(1);
 
   if (!product) {
-    return res.status(404).json({ ok: false, error: 'Produto de aluguel não encontrado para este item' });
+    return res.status(404).json({
+      ok: false,
+      error: 'Produto de aluguel não encontrado para este item',
+    });
   }
 
   const now = new Date();
@@ -241,7 +247,7 @@ async function handleRental(req, res, user) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AÇÃO: subscription → cria order PENDING + preapproval MP
+// AÇÃO: subscription
 // ─────────────────────────────────────────────────────────────
 async function handleSubscription(req, res, user) {
   const body = req.body || {};
@@ -257,7 +263,11 @@ async function handleSubscription(req, res, user) {
     .where(and(eq(subscriptions.userId, user.id), eq(subscriptions.status, 'ACTIVE')))
     .limit(1);
   if (active) {
-    return res.status(409).json({ ok: false, error: 'Você já tem uma assinatura ativa', subscriptionId: active.id });
+    return res.status(409).json({
+      ok: false,
+      error: 'Você já tem uma assinatura ativa',
+      subscriptionId: active.id,
+    });
   }
 
   const order = await createPendingOrder({
@@ -391,7 +401,6 @@ async function handleManage(req, res, user) {
 // WEBHOOK
 // ─────────────────────────────────────────────────────────────
 async function handleWebhook(req, res) {
-  // Responde 200 cedo para o MP não reenviar por timeout; processa depois.
   if (req.method === 'GET') return res.status(200).json({ ok: true });
 
   if (!verifyWebhookSignature(req)) {
@@ -425,7 +434,6 @@ async function handleWebhook(req, res) {
       if (orderId && status === 'approved') {
         await markOrderPaid(orderId, String(pay.id));
 
-        // Se for aluguel, ativa rental
         const [item] = await db.select().from(orderItems)
           .where(eq(orderItems.orderId, orderId)).limit(1);
         if (item && item.productType === 'RENTAL') {
@@ -507,10 +515,8 @@ module.exports = async (req, res) => {
   const action = String(req.query.action || '');
   const op = type || action;
 
-  // Webhook do MP pode chegar por type=webhook OU pela notification_url.
   if (op === 'webhook') return handleWebhook(req, res);
 
-  // Todas as outras ações exigem usuário autenticado
   let user = null;
   try { user = await getAuthUser(req); } catch (e) { user = null; }
   if (!user) return res.status(401).json({ ok: false, error: 'Não autenticado' });
