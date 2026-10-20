@@ -5431,3 +5431,291 @@ body:has(.player-modal-overlay.open) {
     font-size: 2rem;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT DO TOPO (AVATAR À ESQUERDA)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Inverte a ordem: Avatar primeiro, texto depois */
+.artist-banner-content {
+  display: flex !important;
+  flex-direction: row-reverse !important; /* Isso coloca o avatar à esquerda */
+  align-items: center !important;
+  justify-content: flex-end !important; /* Alinha tudo para a esquerda */
+  gap: 2rem !important;
+  padding: 2rem 0 !important;
+}
+
+/* Estilo do Avatar Redondo */
+#artistAvatar, .artist-avatar {
+  display: block !important;
+  width: 200px !important;
+  height: 200px !important;
+  border-radius: 50% !important;
+  background-size: cover !important;
+  background-position: center !important;
+  border: 4px solid #1a1a1a !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+  flex-shrink: 0 !important;
+}
+
+/* Garante que o texto ocupe o espaço restante e alinhe à esquerda */
+.artist-hero-left {
+  text-align: left !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+
+/* No celular, o avatar fica menor e centralizado */
+@media (max-width: 768px) {
+  .artist-banner-content {
+    flex-direction: column-reverse !important;
+    align-items: flex-start !important;
+    gap: 1rem !important;
+  }
+  #artistAvatar, .artist-avatar {
+    width: 120px !important;
+    height: 120px !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   LAYOUT FINAL: CARROSSEL (Lançamentos/Mais Ouvidos) 
+   E GRADE (Discografia)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────────
+   1. LANÇAMENTOS E MAIS OUVIDOS (CARROSSEL HORIZONTAL)
+   ───────────────────────────────────────────────────────────── */
+#secao-lancamentos .amz-grid,
+#secao-mais-ouvidos .amz-grid {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  overflow-x: auto !important;
+  scroll-snap-type: x mandatory !important;
+  gap: 1.5rem !important;
+  padding-bottom: 1rem !important;
+  width: 100% !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+#secao-lancamentos .album-card,
+#secao-mais-ouvidos .album-card {
+  flex: 0 0 260px !important;
+  width: 260px !important;
+  min-width: 260px !important;
+  max-width: 260px !important;
+  scroll-snap-align: start !important;
+  margin: 0 !important;
+}
+
+#secao-lancamentos .album-card__cover,
+#secao-mais-ouvidos .album-card__cover,
+#secao-lancamentos .album-card img,
+#secao-mais-ouvidos .album-card img {
+  width: 260px !important;
+  height: 260px !important;
+  object-fit: cover !important;
+  border-radius: 12px !important;
+}
+
+/* Esconde a barra de rolagem, mas mantém o scroll */
+#secao-lancamentos .amz-grid::-webkit-scrollbar,
+#secao-mais-ouvidos .amz-grid::-webkit-scrollbar {
+  display: none !important;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   2. DISCOGRAFIA (GRADE LADO A LADO)
+   ───────────────────────────────────────────────────────────── */
+#discographyContainer {
+  display: block !important;
+  width: 100% !important;
+}
+
+#discographyContainer .album-grid,
+#discographyContainer .discography-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)) !important;
+  gap: 2rem !important;
+  width: 100% !important;
+  margin-top: 1.5rem !important;
+}
+
+#discographyContainer .album-card {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  flex: none !important;
+  margin: 0 !important;
+}
+
+#discographyContainer .album-card__cover,
+#discographyContainer .album-card img {
+  width: 100% !important;
+  height: auto !important;
+  aspect-ratio: 1 / 1 !important;
+  object-fit: cover !important;
+  border-radius: 12px !important;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   3. MOBILE
+   ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  #secao-lancamentos .album-card,
+  #secao-mais-ouvidos .album-card {
+    flex: 0 0 160px !important;
+    width: 160px !important;
+    min-width: 160px !important;
+  }
+  #secao-lancamentos .album-card__cover,
+  #secao-mais-ouvidos .album-card__cover {
+    width: 160px !important;
+    height: 160px !important;
+  }
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 1rem !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CAPAS GRANDES (Estilo "Sobre Joseph")
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 1. Aumenta o tamanho dos cards em Lançamentos e Mais Ouvidos */
+#secao-lancamentos .album-card,
+#secao-mais-ouvidos .album-card {
+  width: 320px !important;
+  min-width: 320px !important;
+  max-width: 320px !important;
+  flex: 0 0 320px !important;
+}
+
+#secao-lancamentos .album-card__cover,
+#secao-mais-ouvidos .album-card__cover,
+#secao-lancamentos .album-card img,
+#secao-mais-ouvidos .album-card img {
+  width: 320px !important;
+  height: 320px !important;
+  object-fit: cover !important;
+  border-radius: 16px !important;
+}
+
+/* Ajusta o texto embaixo da capa */
+#secao-lancamentos .album-card__title,
+#secao-mais-ouvidos .album-card__title {
+  font-size: 1.2rem !important;
+  margin-top: 0.8rem !important;
+  font-weight: 700 !important;
+}
+
+/* 2. Aumenta o tamanho na Discografia (Grade) */
+#discographyContainer .album-card {
+  width: 320px !important;
+  min-width: 320px !important;
+  max-width: 320px !important;
+}
+
+#discographyContainer .album-card__cover,
+#discographyContainer .album-card img {
+  width: 320px !important;
+  height: 320px !important;
+  object-fit: cover !important;
+  border-radius: 16px !important;
+}
+
+#discographyContainer .album-card__title {
+  font-size: 1.2rem !important;
+  margin-top: 0.8rem !important;
+  font-weight: 700 !important;
+}
+
+/* 3. Ajusta a grade da discografia para acomodar as capas grandes */
+#discographyContainer .album-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, 320px) !important;
+  gap: 2.5rem !important;
+  justify-content: center !important;
+  width: 100% !important;
+  margin-top: 2rem !important;
+}
+
+/* 4. Ajuste para telas menores (Celular) */
+@media (max-width: 768px) {
+  #secao-lancamentos .album-card,
+  #secao-mais-ouvidos .album-card,
+  #discographyContainer .album-card {
+    width: 180px !important;
+    min-width: 180px !important;
+  }
+  
+  #secao-lancamentos .album-card__cover,
+  #secao-mais-ouvidos .album-card__cover,
+  #discographyContainer .album-card__cover {
+    width: 180px !important;
+    height: 180px !important;
+  }
+
+  #discographyContainer .album-grid {
+    grid-template-columns: repeat(auto-fill, 180px) !important;
+    gap: 1.5rem !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   REDES SOCIAIS ABAIXO DOS BOTÕES
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Garante que a área do perfil seja uma coluna flexível */
+.artist-hero-left {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+}
+
+/* Força a área de redes sociais a vir para baixo dos botões */
+.artist-hero-left .social-links {
+  margin-top: 1.5rem !important;
+  display: flex !important;
+  gap: 0.8rem !important;
+  justify-content: flex-start !important;
+}
+
+/* Estiliza os ícones para ficarem elegantes */
+.artist-hero-left .social-links a,
+.artist-hero-left .social-links .ad-social-icon {
+  width: 40px !important;
+  height: 40px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s ease !important;
+}
+
+.artist-hero-left .social-links a:hover,
+.artist-hero-left .social-links .ad-social-icon:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: var(--accent) !important;
+  transform: translateY(-2px) !important;
+}
+
+.artist-hero-left .social-links svg {
+  width: 20px !important;
+  height: 20px !important;
+  color: #fff !important;
+}
+
+/* Força as redes sociais a ficarem alinhadas à esquerda do perfil */
+.artist-hero-left .social-links {
+  margin-top: 1.2rem !important;
+  display: flex !important;
+  gap: 0.8rem !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+}

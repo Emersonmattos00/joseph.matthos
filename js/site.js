@@ -1,10 +1,11 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v15 FINAL)
+   SITE.JS — Joseph Matthos (v16 FINAL)
    ------------------------------------------------------------
    - Planos: UUID do backend mapeado pra kind (premium/anual)
    - Aluguel: faixa e álbum separados com abas
    - Player: bind sem duplicação, /api/stream?trackId=
    - Painel direito: lista ou letra (alterna)
+   - FIX: Player atualiza o álbum correto ao clicar em outro
    ============================================================ */
 
 import {
@@ -51,7 +52,7 @@ export const SITE = {
   filter: 'all',
   expandedAlbumId: null,
   shopSearch: '',
-  artistTab: 'todos'
+  artistTab: 'lancamentos'
 };
 
 let audio = null;
@@ -1821,7 +1822,7 @@ function bindGlobalEvents() {
         const albId = actionEl.dataset.album;
         const trackIdOrIndex = actionEl.dataset.trackId || actionEl.dataset.trackIndex;
         if (!albId || !trackIdOrIndex) break;
-        playFromDiscography(albId, trackIdOrIndex);
+        playFromDiscography(albId, trackIdOrIndex, { forceRebuild: true });
         break;
       }
       case 'open-player': {
@@ -2648,6 +2649,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   clearRenewTimer();
   isRenewing = false;
 
+  // 🔥 CORREÇÃO: Força a identidade a ser atualizada ANTES de renderizar a lista
   currentTrackIdentity = {
     albumId, trackIndex: realIndex, trackId,
     trackTitle: track.title,
@@ -3025,7 +3027,7 @@ function openExpandedPlayer(albumId, trackIndexOrId) {
 
   bindPlayerControls();
 
-  playFromDiscography(albumId, trackIndexOrId);
+  playFromDiscography(albumId, trackIndexOrId, { forceRebuild: true });
 }
 
 function closeExpandedPlayer() {
@@ -3138,7 +3140,8 @@ function renderTracklistPanel() {
   const panelTitle = document.getElementById('lyricsPanelTitle');
   if (panelTitle) panelTitle.textContent = 'Faixas do álbum';
 
-  const albumId = currentTrackIdentity?.albumId;
+  // 🔥 CORREÇÃO: Tenta pegar o albumId da identidade atual ou da fila.
+  const albumId = currentTrackIdentity?.albumId || (playerQueue[playerQueueIndex]?.albumId);
   const album = albumId ? findAlbum(albumId) : null;
   const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
 

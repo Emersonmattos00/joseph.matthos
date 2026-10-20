@@ -1,0 +1,226 @@
+/* ============================================================
+   ADMIN.CSS — Estilos dedicados ao Painel Administrativo
+   ============================================================ */
+
+#adminSite {
+  background: #0b0a0c;
+  color: #e5e5e5;
+  font-family: 'Inter', sans-serif;
+}
+
+/* Sidebar */
+.admin-sidebar {
+  background: #000;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  width: 260px;
+}
+.admin-sidebar .brand h2 {
+  font-family: 'Playfair Display', serif;
+  color: #fff;
+}
+.admin-nav button {
+  color: #a0a0a0;
+  padding: 12px 20px;
+  transition: all 0.2s;
+  border-left: 3px solid transparent;
+  background: transparent;
+  text-align: left;
+  width: 100%;
+}
+.admin-nav button:hover {
+  background: rgba(255,255,255,0.03);
+  color: #fff;
+}
+.admin-nav button.active {
+  color: #1DB954;
+  border-left-color: #1DB954;
+  background: rgba(29, 185, 84, 0.08);
+}
+
+/* Área Principal */
+.admin-main {
+  padding: 2rem 3rem;
+  background: linear-gradient(135deg, rgba(11,10,12,0.95), rgba(11,10,12,0.8));
+  overflow-y: auto;
+  height: 100vh;
+}
+
+.admin-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.admin-topbar h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: 2rem;
+  color: #fff;
+}
+
+/* Cards (Dashboard, Geral, etc) */
+.admin-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.admin-card h3 {
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+  color: #fff;
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.stat-card {
+  background: linear-gradient(135deg, rgba(255,255,255,0.03), transparent);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 12px;
+  padding: 1.2rem;
+}
+.stat-card .label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #888;
+}
+.stat-card .value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #1DB954;
+  margin: 0.5rem 0;
+}
+
+/* Tabelas (Usuários, Vendas, Discografia) */
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.admin-table th {
+  text-align: left;
+  padding: 1rem;
+  color: #888;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+.admin-table td {
+  padding: 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  color: #ddd;
+}
+.admin-table tr:hover td {
+  background: rgba(255,255,255,0.02);
+}
+
+/* Botões de Ação na Tabela */
+.action-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #fff;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.action-btn:hover {
+  background: rgba(255,255,255,0.1);
+}
+.action-btn.danger {
+  color: #ff4d4d;
+  border-color: rgba(255,77,77,0.3);
+}
+.action-btn.danger:hover {
+  background: rgba(255,77,77,0.1);
+}
+
+/* Formulários (Inputs) */
+.form-group label {
+  display: block;
+  font-size: 0.8rem;
+  color: #888;
+  margin-bottom: 0.5rem;
+}
+.form-group input, 
+.form-group textarea, 
+.form-group select {
+  width: 100%;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid rgba(255,255,255,0.1);
+  color: #fff;
+  padding: 0.8rem;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  transition: border-color 0.2s;
+}
+.form-group input:focus, 
+.form-group textarea:focus, 
+.form-group select:focus {
+  outline: none;
+  border-color: #1DB954;
+  background: rgba(0,0,0,0.5);
+}
+
+/* Discografia (Acordeão de Álbuns) */
+.album-editor-item {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+.album-editor-header {
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  cursor: pointer;
+}
+.album-editor-header:hover {
+  background: rgba(255,255,255,0.03);
+}
+.album-editor-cover {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  background-size: cover;
+  margin-right: 1rem;
+}
+.album-editor-title {
+  flex: 1;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* Modal de Edição */
+.admin-modal-overlay {
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(5px);
+}
+.admin-modal-content {
+  background: #1a1a1a;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  padding: 2rem;
+  max-width: 800px;
+  width: 90%;
+  color: #fff;
+}
+
+/* Ajustes finais */
+.admin-loading {
+  color: #1DB954;
+  text-align: center;
+  padding: 2rem;
+}
