@@ -657,6 +657,17 @@ function checkOrigin(req) {
 
   try {
     const { origin: o } = new URL(origin);
+    
+    // 🔥 LIBERAÇÃO PARA DESENVOLVIMENTO (Codespaces e Localhost)
+    if (
+      o.includes('localhost') || 
+      o.includes('127.0.0.1') || 
+      o.includes('.app.github.dev')
+    ) {
+      return true;
+    }
+
+    // Produção (Vercel)
     return ALLOWED_ORIGINS.has(o);
   } catch {
     return false;

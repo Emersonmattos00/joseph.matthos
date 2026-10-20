@@ -6,6 +6,7 @@
    - Busca com debounce (250ms) por nome/email
    - Paginação configurável (10 / 25 / 50 por página)
    - Modal para alterar plano COM confirmação explícita
+   - Modal para EXCLUIR usuário COM confirmação explícita
    - Proteção contra alteração acidental
    - Refetch automático após alteração (fonte de verdade)
    - Estados: carregando / vazio / erro
@@ -173,10 +174,18 @@ function paint() {
             <td>${badgePlan(u.plan)}</td>
             <td>${formatDate(u.createdAt)}</td>
             <td>
-              <div class="actions">
+              <div class="actions" style="display:flex;gap:0.5rem;align-items:center;">
                 <button class="btn btn-ghost btn-sm"
                         data-action="plan"
                         data-id="${esc(u.id)}">Alterar plano</button>
+                <button class="action-btn danger"
+                        data-action="delete"
+                        data-id="${esc(u.id)}"
+                        data-name="${esc(u.name || u.email)}"
+                        title="Excluir usuário"
+                        aria-label="Excluir usuário">
+                  Excluir
+                </button>
               </div>
             </td>
           </tr>`
@@ -191,6 +200,13 @@ function paint() {
   // Binds dos botões de plano
   wrap.querySelectorAll('[data-action="plan"]').forEach((btn) => {
     btn.addEventListener('click', () => openPlanModal(btn.dataset.id));
+  });
+
+  // Binds dos botões de excluir
+  wrap.querySelectorAll('[data-action="delete"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openDeleteModal(btn.dataset.id, btn.dataset.name);
+    });
   });
 
   bindToolbar();
@@ -281,7 +297,6 @@ function renderPaginationHTML(currentPage, totalPages, totalFiltered) {
   const prevDisabled = currentPage <= 1 ? 'disabled' : '';
   const nextDisabled = currentPage >= totalPages ? 'disabled' : '';
 
-  // Janela de páginas (mostra até 5 números centrais)
   const windowSize = 5;
   let start = Math.max(1, currentPage - Math.floor(windowSize / 2));
   let end = Math.min(totalPages, start + windowSize - 1);
@@ -324,7 +339,6 @@ function bindPagination(totalPages) {
         state.page = Number(val) || 1;
       }
       paint();
-      // Rola pro topo da seção de usuários
       document.getElementById('usersTable')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   });
@@ -336,7 +350,7 @@ function updateCount(shown, total) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal de alteração de plano (com confirmação explícita)
+// Modal de alteração de plano
 // ─────────────────────────────────────────────────────────────
 function openPlanModal(userId) {
   const user = state.all.find((u) => u.id === userId);
@@ -397,7 +411,6 @@ function openPlanModal(userId) {
     const newPlan = select.value;
     const changed = newPlan !== user.plan;
 
-    // Só habilita se realmente mudou
     confirmBtn.disabled = !changed;
 
     if (changed) {
@@ -410,12 +423,10 @@ function openPlanModal(userId) {
   };
 
   select.addEventListener('change', updateConfirmState);
-  updateConfirmState(); // estado inicial
+  updateConfirmState();
 
-  // Cancelar
   document.getElementById('planCancel').addEventListener('click', closeAdminModal);
 
-  // Enter NÃO confirma sozinho (evita acidente)
   select.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -423,12 +434,10 @@ function openPlanModal(userId) {
     }
   });
 
-  // Confirmar → abre modal de confirmação final
   confirmBtn.addEventListener('click', async () => {
     const newPlan = select.value;
     if (newPlan === user.plan) return;
 
-    // Fecha o modal de seleção e abre o de confirmação
     const proceed = await confirmPlanChange(user, newPlan);
     if (proceed) {
       await applyPlanChange(user, newPlan);
@@ -486,10 +495,9 @@ function confirmPlanChange(user, newPlan) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Aplicar alteração de plano + refetch automático
+// Aplicar alteração de plano
 // ─────────────────────────────────────────────────────────────
 async function applyPlanChange(user, plan) {
-  // Reabre o modal como "processando"
   openAdminModal(`
     <h3>Alterando plano…</h3>
     <p style="color:var(--text-dim);">
@@ -510,7 +518,6 @@ async function applyPlanChange(user, plan) {
     closeAdminModal();
     toast(`Plano de ${user.name || user.email} alterado para "${plan}".`, '✓');
 
-    // Refetch automático (fonte de verdade)
     await renderUsersTable({ force: true });
   } catch (err) {
     closeAdminModal();
@@ -522,6 +529,77 @@ async function applyPlanChange(user, plan) {
 
     toast(err?.message || 'Falha ao atualizar plano.', '⚠');
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Modal de EXCLUSÃO de usuário
+// ─────────────────────────────────────────────────────────────
+function openDeleteModal(userId, userName) {
+  openAdminModal(`
+    <h3 style="color:var(--danger);">Excluir usuário</h3>
+
+    <p style="color:var(--text-dim);margin-bottom:1.5rem;">
+      Esta ação é <strong>permanente</strong> e apagará todas as assinaturas,
+      aluguéis e dados vinculados a este usuário.
+    </p>
+
+    <div class="plan-change-header" style="border-left:3px solid var(--danger);">
+      <strong>${esc(userName)}</strong>
+      <span>ID: ${esc(userId)}</span>
+    </div>
+
+    <div class="form-group" style="margin-top:1.5rem;">
+      <label for="deleteConfirmInput" style="color:var(--text-dim);">
+        Digite <strong style="color:var(--danger);">EXCLUIR</strong> para confirmar:
+      </label>
+      <input type="text" id="deleteConfirmInput" autocomplete="off" placeholder="EXCLUIR">
+    </div>
+
+    <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
+      <button class="btn btn-outline btn-sm" id="deleteCancel" type="button">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="deleteProceed" type="button" disabled
+              style="background:var(--danger);color:#fff;">
+        Excluir permanentemente
+      </button>
+    </div>
+  `);
+
+  const input = document.getElementById('deleteConfirmInput');
+  const proceedBtn = document.getElementById('deleteProceed');
+  const cancelBtn = document.getElementById('deleteCancel');
+
+  input.addEventListener('input', () => {
+    proceedBtn.disabled = input.value.trim().toUpperCase() !== 'EXCLUIR';
+  });
+
+  cancelBtn.addEventListener('click', closeAdminModal);
+
+  proceedBtn.addEventListener('click', async () => {
+    if (input.value.trim().toUpperCase() !== 'EXCLUIR') return;
+
+    proceedBtn.disabled = true;
+    proceedBtn.textContent = 'Excluindo…';
+
+    try {
+      await apiFetch(`users&id=${encodeURIComponent(userId)}`, {
+        method: 'DELETE'
+      });
+
+      closeAdminModal();
+      toast(`Usuário "${userName}" excluído com sucesso.`, '🗑️');
+
+      await renderUsersTable({ force: true });
+    } catch (err) {
+      closeAdminModal();
+
+      if (err && (err.status === 401 || err.status === 403)) {
+        toast('Sessão expirada. Faça login novamente.', '⚠');
+        throw err;
+      }
+
+      toast(err?.message || 'Falha ao excluir usuário.', '⚠');
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
