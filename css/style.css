@@ -5449,8 +5449,8 @@ body:has(.player-modal-overlay.open) {
 /* Estilo do Avatar Redondo */
 #artistAvatar, .artist-avatar {
   display: block !important;
-  width: 200px !important;
-  height: 200px !important;
+  width: 350px !important;
+  height: 350px !important;
   border-radius: 50% !important;
   background-size: cover !important;
   background-position: center !important;
@@ -5776,4 +5776,424 @@ body:has(.player-modal-overlay.open) {
     font-size: 0.75rem !important;
     color: var(--text-dim) !important;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PLAYER EXPANDIDO — LAYOUT DEFINITIVO (BASEADO NO PLAYERFULL)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Overlay (Fundo do Modal) */
+#expandedPlayerModal {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background: #05080c !important;
+  z-index: 9999 !important;
+  display: none;
+  overflow: hidden;
+}
+
+#expandedPlayerModal.open {
+  display: flex !important;
+}
+
+#expandedPlayerModal .music-player {
+  width: 100% !important;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  position: relative !important;
+}
+
+/* Fundo com Imagem Borrada */
+#expandedPlayerModal .player-cover-bg {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 0 !important;
+  background-size: cover !important;
+  background-position: center !important;
+  opacity: 0.15 !important;
+  filter: blur(5px) !important;
+  pointer-events: none !important;
+}
+
+/* Gradiente escuro sobre o fundo para dar contraste */
+#expandedPlayerModal .music-player::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: radial-gradient(ellipse at 30% 20%, rgba(201,151,62,0.15), transparent 60%),
+              radial-gradient(ellipse at 80% 80%, rgba(50,105,128,0.15), transparent 60%);
+  pointer-events: none;
+}
+
+/* Container principal (Fica acima do fundo) */
+#expandedPlayerModal .player-grid {
+  position: relative !important;
+  z-index: 10 !important;
+  display: flex !important;
+  flex: 1 !important;
+  width: 100% !important;
+  max-width: 1200px !important;
+  margin: 0 auto !important;
+  padding: 2rem !important;
+  gap: 2rem !important;
+  overflow: hidden !important;
+}
+
+/* Coluna Esquerda (Capa e Controles) */
+#expandedPlayerModal .player-col--music {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: center !important; /* Centraliza a capa */
+}
+
+/* CAPA DO ÁLBUM */
+#expandedPlayerModal .player-cover-wrap {
+  width: 100% !important;
+  max-width: 500px !important;
+  aspect-ratio: 1 / 1 !important;
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.6) !important;
+  margin-bottom: 2rem !important;
+  background: transparent !important;
+  border: 1px solid rgba(255,255,255,0.1) !important;
+}
+
+#expandedPlayerModal .album-cover {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#expandedPlayerModal .album-cover img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important; /* Preenche o quadrado sem distorcer */
+  display: block !important;
+}
+
+/* Título e Artista */
+#expandedPlayerModal .player-track-head {
+  text-align: center !important;
+  margin-bottom: 1.5rem !important;
+  width: 100% !important;
+}
+
+#expandedPlayerModal .track-title {
+  font-size: 2rem !important;
+  font-weight: 900 !important;
+  color: #fff !important;
+  margin-bottom: 0.3rem !important;
+}
+
+#expandedPlayerModal .track-artist {
+  font-size: 1rem !important;
+  color: #aaa !important;
+}
+
+/* Barra de Progresso */
+#expandedPlayerModal .progress-container {
+  width: 100% !important;
+  max-width: 380px !important;
+  margin-bottom: 1rem !important;
+}
+
+#expandedPlayerModal .progress-bar {
+  background: rgba(255,255,255,0.2) !important;
+  height: 4px !important;
+  border-radius: 2px !important;
+}
+
+#expandedPlayerModal .progress {
+  background: #e7b95f !important; /* Dourado */
+  height: 100% !important;
+}
+
+#expandedPlayerModal .time-info {
+  color: #888 !important;
+  font-size: 0.8rem !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  margin-top: 0.5rem !important;
+}
+
+/* Controles (Play, Next, Prev) */
+#expandedPlayerModal .controls {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 1.5rem !important;
+  margin-bottom: 1.5rem !important;
+}
+
+#expandedPlayerModal .control-btn {
+  color: #aaa !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+}
+
+#expandedPlayerModal .control-btn.play-btn {
+  width: 72px !important;
+  height: 72px !important;
+  background: #e7b95f !important; /* Dourado */
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #000 !important;
+}
+
+#expandedPlayerModal .control-btn.play-btn svg {
+  fill: #000 !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+/* Botões de Ação (Rodapé) */
+#expandedPlayerModal .player-bottom-actions {
+  display: flex !important;
+  justify-content: center !important;
+  gap: 2rem !important;
+  width: 100% !important;
+}
+
+#expandedPlayerModal .player-bottom-btn {
+  color: #aaa !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+  font-size: 1.2rem !important;
+}
+
+/* Coluna Direita (Letra e Fila) */
+#expandedPlayerModal .lyrics-col {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: rgba(255,255,255,0.03) !important;
+  border-radius: 16px !important;
+  padding: 1.5rem !important;
+  border: 1px solid rgba(255,255,255,0.05) !important;
+  max-height: 100% !important;
+}
+
+/* Abas de Navegação (Topo) */
+#expandedPlayerModal .player-top {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  padding: 1rem 2rem !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  z-index: 20 !important;
+}
+
+/* Mobile (Esconde a coluna da direita e alterna via abas) */
+@media (max-width: 900px) {
+  #expandedPlayerModal .player-grid {
+    flex-direction: column !important;
+    padding: 5rem 1.5rem 2rem !important; /* Espaço pras abas */
+  }
+  
+  #expandedPlayerModal .lyrics-col {
+    display: none !important; /* Esconde por padrão */
+    position: absolute !important;
+    inset: 5rem 1.5rem 2rem !important;
+    z-index: 30 !important;
+  }
+
+  #expandedPlayerModal .player-col--music {
+    flex: 1 !important;
+    justify-content: flex-start !important;
+  }
+
+  #expandedPlayerModal .player-cover-wrap {
+    max-width: 300px !important;
+  }
+
+  #expandedPlayerModal .track-title {
+    font-size: 1.5rem !important;
+  }
+}
+
+@media (max-width: 900px) {
+  #expandedPlayerModal .lyrics-col[style*="display: flex"] {
+    display: flex !important;
+    position: absolute !important;
+    inset: 5rem 1.5rem 2rem !important;
+    z-index: 30 !important;
+    background: #0b0a0c !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CONTROLE DE ABAS (MÚSICA / LETRA) NO MOBILE
+   ═══════════════════════════════════════════════════════════════ */
+@media (max-width: 900px) {
+  /* Por padrão, esconde a letra no mobile */
+  #expandedPlayerModal .lyrics-col {
+    display: none !important;
+  }
+
+  /* Quando a classe mobile-lyrics está ativa, esconde a capa e mostra a letra */
+  #expandedPlayerModal .music-player.mobile-lyrics .player-col--music {
+    display: none !important;
+  }
+
+  #expandedPlayerModal .music-player.mobile-lyrics .lyrics-col {
+    display: flex !important;
+    position: absolute !important;
+    inset: 5rem 1.5rem 2rem !important;
+    z-index: 30 !important;
+    background: #0b0a0c !important;
+    overflow-y: auto !important;
+    border-radius: 12px !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FUNDO DO PLAYER — CAPA DESFOCADA (FORÇADO)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* O container principal recebe a imagem */
+#expandedPlayerModal .music-player {
+  position: relative !important;
+  background-color: #0b0a0c !important;
+  background-size: cover !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  isolation: isolate !important;
+}
+
+/* Camada escura por cima do fundo para o texto ficar legível */
+#expandedPlayerModal .music-player::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(11,10,12,0.6) 0%,
+    rgba(11,10,12,0.85) 50%,
+    rgba(11,10,12,0.95) 100%
+  );
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Todo o conteúdo fica acima do fundo */
+#expandedPlayerModal .music-player > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* Esconde a div antiga que não estava funcionando */
+#expandedPlayerModal .player-cover-bg {
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FUNDO DO PLAYER (MARCA D'ÁGUA) — VERSÃO FINAL
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 1. O container principal recebe a imagem de fundo (via CSS var) */
+#expandedPlayerModal .music-player {
+  position: relative !important;
+  background-color: #0b0a0c !important;
+  /* Usa a variável --player-bg que o JS define */
+  background-image: var(--player-bg) !important;
+  background-size: cover !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
+  isolation: isolate !important;
+}
+
+/* 2. Camada escura por cima para o texto ficar legível */
+#expandedPlayerModal .music-player::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(11,10,12,0.6) 0%,
+    rgba(11,10,12,0.85) 50%,
+    rgba(11,10,12,0.95) 100%
+  );
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 3. Todo o conteúdo fica acima do fundo */
+#expandedPlayerModal .music-player > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 4. Esconde a div antiga que não estava funcionando */
+#expandedPlayerModal .player-cover-bg {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  /* Força o modal a ser flexível */
+  #expandedPlayerModal .music-player {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 4rem !important;
+    padding: 2rem 4rem !important;
+  }
+
+  /* Aumenta a capa */
+  #expandedPlayerModal .album-cover,
+  #expandedPlayerModal #expandedPlayerCover {
+    width: 500px !important;
+    height: 500px !important;
+    max-width: 45vw !important;
+    max-height: 45vw !important;
+    flex-shrink: 0 !important;
+  }
+
+  #expandedPlayerModal .album-cover img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+  }
+
+  /* Centraliza o texto abaixo da capa */
+  #expandedPlayerModal .player-track-head {
+    text-align: center !important;
+    width: 100% !important;
+    margin-top: 1.5rem !important;
+  }
+
+  /* Deixa a letra ao lado */
+  #expandedPlayerModal .lyrics-col {
+    flex: 1 !important;
+    max-width: 40vw !important;
+    max-height: 80vh !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* Força o avatar a ser visível e redondo */
+#artistAvatar {
+  display: block !important; /* Remove o display: none */
+  width: 350px !important;
+  height: 350px !important;
+  border-radius: 50% !important;
+  background-size: cover !important;
+  background-position: center !important;
+  border: 4px solid #1a1a1a !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5) !important;
+  margin-bottom: 1rem !important;
 }

@@ -486,15 +486,27 @@ function renderArtistHero() {
   const c = SITE.content;
 
   if (avatar) {
-    const img = c?.sobre?.image || 'assets/img/josephmatthos.webp';
-    const safe = safeMediaUrl(img);
-    if (safe) avatar.style.backgroundImage = `url('${safe}')`;
+    // 🔥 FORÇA A URL EXATA DO AVATAR
+    const imageUrl = 'https://f005.backblazeb2.com/file/joseph.matthos/assets/img/avatarjm.jpg';
+    const safe = safeMediaUrl(imageUrl);
+    
+    if (safe) {
+      avatar.style.display = 'block';
+      avatar.style.backgroundImage = `url('${safe}')`;
+      avatar.style.backgroundSize = 'cover';
+      avatar.style.backgroundPosition = 'center';
+      avatar.classList.add('visible');
+    } else {
+      // Fallback se a imagem não carregar
+      avatar.style.display = 'none';
+    }
   }
 
   if (banner) {
     banner.style.backgroundImage = 'transparent';
   }
 
+  // ... resto da função (estatísticas, seguidores, etc.)
   const statsEl = document.getElementById('statPlays');
   if (statsEl) {
     const totalTracks = SITE.albums.reduce(
@@ -2327,7 +2339,7 @@ function bindPlayerControls() {
   bind('expandedMuteBtn', toggleMute);
   bind('expandedShuffleBtn', toggleShuffle);
 
-  // Coração do player
+  // Coração do player (grande)
   bind('expandedLikeBtn', () => {
     const info = getTrackKeyFromCurrent();
     if (!info) return;
@@ -2343,9 +2355,12 @@ function bindPlayerControls() {
       el.classList.toggle('liked', liked);
       el.setAttribute('aria-pressed', liked ? 'true' : 'false');
     });
+
+    const bottomLike = document.getElementById('bottomLikeBtn');
+    if (bottomLike) bottomLike.classList.toggle('liked', localStorage.getItem(info.key) === '1');
   });
 
-  // Fullscreen (botão topo)
+  // Tela cheia
   bind('expandedFullscreenBtn', async () => {
     const player = document.querySelector('#expandedPlayerModal .music-player');
     if (!player) return;
@@ -2361,7 +2376,7 @@ function bindPlayerControls() {
     } catch (e) { console.warn('[fullscreen]', e); }
   });
 
-  // Bars
+  // Barras
   bindProgressBar('progressBar');
   bindProgressBar('expandedProgressBar');
   bindVolumeBar('volumeBar');
@@ -2369,22 +2384,33 @@ function bindPlayerControls() {
   // Abas mobile
   bindMobileTabs();
 
-  // 👇 Botões do rodapé (mobile)
-  bind('bottomDevicesBtn', async () => {
-    const player = document.querySelector('#expandedPlayerModal .music-player');
-    if (!player) return;
-    const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-    try {
-      if (fsEl) {
-        if (document.exitFullscreen) await document.exitFullscreen();
-        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
-      } else {
-        if (player.requestFullscreen) await player.requestFullscreen();
-        else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
-      }
-    } catch (e) { console.warn('[fullscreen]', e); }
+  // ─── BOTÕES DO RODAPÉ ───────────────────────────────
+
+  // 1. Coração
+  bind('bottomLikeBtn', () => {
+    const info = getTrackKeyFromCurrent();
+    if (!info) return;
+    const isLiked = localStorage.getItem(info.key) === '1';
+    if (isLiked) localStorage.removeItem(info.key);
+    else localStorage.setItem(info.key, '1');
+
+    updateExpandedLikeButton(null);
+
+    const btn = document.getElementById('bottomLikeBtn');
+    if (btn) btn.classList.toggle('liked', !isLiked);
+
+    document.querySelectorAll(
+      `[data-action="like-track"][data-album="${info.albumId}"][data-track-index="${info.trackIndex}"]`
+    ).forEach((el) => {
+      const liked = localStorage.getItem(info.key) === '1';
+      el.classList.toggle('liked', liked);
+      el.setAttribute('aria-pressed', liked ? 'true' : 'false');
+    });
+
+    toast(isLiked ? 'Removido dos curtidos' : 'Curtido!', '❤️');
   });
 
+  // 2. Letra
   bind('bottomLyricsBtn', () => {
     const modal = document.getElementById('expandedPlayerModal');
     const player = modal?.querySelector('.music-player');
@@ -2398,10 +2424,10 @@ function bindPlayerControls() {
     });
 
     player.classList.add('mobile-lyrics');
-
     renderLyricsPanel();
   });
 
+  // 3. Compartilhar
   bind('bottomShareBtn', () => {
     if (currentTrackIdentity) {
       shareTrack(currentTrackIdentity.albumId, currentTrackIdentity.trackIndex);
@@ -2410,6 +2436,7 @@ function bindPlayerControls() {
     }
   });
 
+  // 4. Fila
   bind('bottomQueueBtn', () => {
     const modal = document.getElementById('expandedPlayerModal');
     const player = modal?.querySelector('.music-player');
@@ -2423,7 +2450,6 @@ function bindPlayerControls() {
     });
 
     player.classList.remove('mobile-lyrics');
-
     renderTracklistPanel();
   });
 }
@@ -2649,7 +2675,6 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   clearRenewTimer();
   isRenewing = false;
 
-  // 🔥 CORREÇÃO: Força a identidade a ser atualizada ANTES de renderizar a lista
   currentTrackIdentity = {
     albumId, trackIndex: realIndex, trackId,
     trackTitle: track.title,
@@ -2742,12 +2767,17 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   document.getElementById('previewBadge')?.classList.toggle('visible', source === 'preview');
   document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', source === 'preview');
 
+  // 🔥 APLICA O FUNDO APENAS APÓS O ÁUDIO SER CARREGADO COM SUCESSO
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
-  const isLyricsTab = playerEl && playerEl.classList.contains('mobile-lyrics');
-  if (isLyricsTab) {
-    renderLyricsPanel();
-  } else {
-    renderTracklistPanel();
+  if (playerEl) {
+    const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
+    const safeCover = safeMediaUrl(coverImg);
+    if (safeCover) {
+      playerEl.style.backgroundImage = `url('${safeCover}')`;
+      playerEl.style.backgroundSize = 'cover';
+      playerEl.style.backgroundPosition = 'center';
+      playerEl.setAttribute('data-has-bg', '1');
+    }
   }
 
   syncExpandedPlayer(track, album, unlocked);
@@ -3069,7 +3099,6 @@ function syncExpandedPlayer(track, album, unlocked) {
   const title = document.getElementById('expandedPlayerTitle');
   const albumEl = document.getElementById('expandedPlayerAlbum');
   const cover = document.getElementById('expandedPlayerCover');
-  const coverBg = document.getElementById('expandedPlayerCoverBg');
   const badge = document.getElementById('expandedPreviewBadge');
 
   if (title) title.textContent = track.title;
@@ -3078,28 +3107,24 @@ function syncExpandedPlayer(track, album, unlocked) {
   const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
   const safeCover = safeMediaUrl(coverImg);
 
+  // 1. Preenche a capa principal (tag img)
   if (cover) {
-    cover.style.backgroundImage = '';
     cover.innerHTML = '';
     if (safeCover) {
       const img = document.createElement('img');
       img.src = safeCover;
-      img.alt = album.title || 'Capa do álbum';
-      img.loading = 'eager';
+      img.alt = album.title || 'Capa';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.objectFit = 'cover';
+      img.style.borderRadius = '12px';
       cover.appendChild(img);
     } else {
       cover.textContent = album.coverInitials || album.cover || '♪';
     }
   }
 
-  if (coverBg) {
-    if (safeCover) {
-      coverBg.style.backgroundImage = `url('${safeCover}')`;
-    } else {
-      coverBg.style.backgroundImage = '';
-    }
-  }
-
+  // 2. Define a variável CSS para o fundo
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     if (safeCover) {
@@ -3112,7 +3137,6 @@ function syncExpandedPlayer(track, album, unlocked) {
   }
 
   if (badge) badge.classList.toggle('visible', !unlocked);
-
   updateExpandedLikeButton(track);
 }
 
