@@ -2815,6 +2815,11 @@ function nextTrack() {
   playerQueueIndex++;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
+  
+  // 🔥 ATUALIZA A LISTA DE FAIXAS DO PAINEL LATERAL
+  setTimeout(() => {
+    renderTracklistPanel();
+  }, 100);
 }
 
 function prevTrack() {
@@ -2824,6 +2829,11 @@ function prevTrack() {
   playerQueueIndex--;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
+  
+  // 🔥 ATUALIZA A LISTA DE FAIXAS DO PAINEL LATERAL
+  setTimeout(() => {
+    renderTracklistPanel();
+  }, 100);
 }
 
 function onEnded() {
