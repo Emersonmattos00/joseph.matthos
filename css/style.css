@@ -5719,3 +5719,61 @@ body:has(.player-modal-overlay.open) {
   justify-content: flex-start !important;
   width: 100% !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   DISCOGRAFIA MOBILE — CAPAS GRANDES E GRADE DE 2 COLUNAS
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  /* Força a grade da discografia a ter 2 colunas */
+  #discographyContainer .album-grid,
+  #discographyContainer .discography-grid,
+  #discografiaContainer .album-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important; /* 2 colunas */
+    gap: 1rem !important;
+    width: 100% !important;
+  }
+
+  /* Ajusta o card para ocupar 100% da coluna */
+  #discographyContainer .album-card,
+  #discographyContainer .album-card__cover,
+  #discographyContainer .album-card img {
+    width: 100% !important;
+    height: auto !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    flex: none !important;
+    margin: 0 !important;
+  }
+
+  /* Força a imagem a ser quadrada e não cortar */
+  #discographyContainer .album-card__cover {
+    aspect-ratio: 1 / 1 !important;
+    overflow: hidden !important;
+    border-radius: 8px !important;
+    position: relative !important;
+  }
+
+  #discographyContainer .album-card img {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    object-position: center !important;
+  }
+
+  /* Ajusta o texto embaixo da capa */
+  #discographyContainer .album-card__title {
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    margin-top: 0.5rem !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  #discographyContainer .album-card__meta {
+    font-size: 0.75rem !important;
+    color: var(--text-dim) !important;
+  }
+}
