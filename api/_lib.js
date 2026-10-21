@@ -650,24 +650,27 @@ function checkOrigin(req) {
   const method = (req.method || 'GET').toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
 
-  if (ALLOWED_ORIGINS.size === 0) return true;
-
   const origin = req.headers.origin || req.headers.referer;
-  if (!origin) return false;
+
+  // Se não houver origin (ex: curl), permite (para testes de API)
+  if (!origin) return true;
 
   try {
     const { origin: o } = new URL(origin);
-    
-    // 🔥 LIBERAÇÃO PARA DESENVOLVIMENTO (Codespaces e Localhost)
+
+    // 🔓 LIBERAÇÃO AUTOMÁTICA PARA PRODUÇÃO E DESENVOLVIMENTO
     if (
-      o.includes('localhost') || 
-      o.includes('127.0.0.1') || 
-      o.includes('.app.github.dev')
+      o === 'https://josephmatthos.vercel.app' ||
+      o === 'http://localhost:3000' ||
+      o === 'http://127.0.0.1:3000' ||
+      o.endsWith('.vercel.app') // previews da Vercel
     ) {
       return true;
     }
 
-    // Produção (Vercel)
+    // Se ALLOWED_ORIGINS estiver vazio, libera tudo
+    if (ALLOWED_ORIGINS.size === 0) return true;
+
     return ALLOWED_ORIGINS.has(o);
   } catch {
     return false;
