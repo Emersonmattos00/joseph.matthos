@@ -67,7 +67,7 @@ const prismaMigrations = (0, import_pg_core.pgTable)("_prisma_migrations", {
   appliedStepsCount: (0, import_pg_core.integer)("applied_steps_count").default(0).notNull()
 });
 const paymentEvents = (0, import_pg_core.pgTable)("payment_events", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   provider: (0, import_pg_core.text)().notNull(),
   externalEventId: (0, import_pg_core.text)("external_event_id").notNull(),
   eventType: (0, import_pg_core.text)("event_type").notNull(),
@@ -79,7 +79,7 @@ const paymentEvents = (0, import_pg_core.pgTable)("payment_events", {
   (0, import_pg_core.uniqueIndex)("payment_events_provider_external_event_id_key").using("btree", table.provider.asc().nullsLast().op("text_ops"), table.externalEventId.asc().nullsLast().op("text_ops"))
 ]);
 const refreshTokens = (0, import_pg_core.pgTable)("refresh_tokens", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   tokenHash: (0, import_pg_core.text)("token_hash").notNull(),
   expiresAt: (0, import_pg_core.timestamp)("expires_at", { withTimezone: true, mode: "string" }).notNull(),
@@ -95,7 +95,7 @@ const refreshTokens = (0, import_pg_core.pgTable)("refresh_tokens", {
   }).onUpdate("cascade").onDelete("cascade")
 ]);
 const plans = (0, import_pg_core.pgTable)("plans", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   name: (0, import_pg_core.text)().notNull(),
   priceCents: (0, import_pg_core.integer)("price_cents").notNull(),
   currency: (0, import_pg_core.char)({ length: 3 }).default("BRL").notNull(),
@@ -108,7 +108,7 @@ const plans = (0, import_pg_core.pgTable)("plans", {
   (0, import_pg_core.uniqueIndex)("plans_name_key").using("btree", table.name.asc().nullsLast().op("text_ops"))
 ]);
 const orders = (0, import_pg_core.pgTable)("orders", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   status: orderStatus().default("PENDING").notNull(),
   totalCents: (0, import_pg_core.integer)("total_cents").notNull(),
@@ -147,7 +147,7 @@ const playbackEvents = (0, import_pg_core.pgTable)("playback_events", {
   }).onUpdate("cascade").onDelete("restrict")
 ]);
 const orderItems = (0, import_pg_core.pgTable)("order_items", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   orderId: (0, import_pg_core.uuid)("order_id").notNull(),
   productType: productType("product_type").notNull(),
   productId: (0, import_pg_core.uuid)("product_id"),
@@ -162,7 +162,7 @@ const orderItems = (0, import_pg_core.pgTable)("order_items", {
   }).onUpdate("cascade").onDelete("cascade")
 ]);
 const tracks = (0, import_pg_core.pgTable)("tracks", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   albumId: (0, import_pg_core.uuid)("album_id"),
   artistId: (0, import_pg_core.uuid)("artist_id").notNull(),
   title: (0, import_pg_core.text)().notNull(),
@@ -199,7 +199,7 @@ const tracks = (0, import_pg_core.pgTable)("tracks", {
   }).onUpdate("cascade").onDelete("restrict")
 ]);
 const users = (0, import_pg_core.pgTable)("users", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   email: (0, import_pg_core.text)().notNull(),
   passwordHash: (0, import_pg_core.text)("password_hash"),
   name: (0, import_pg_core.text)().notNull(),
@@ -211,7 +211,7 @@ const users = (0, import_pg_core.pgTable)("users", {
   (0, import_pg_core.uniqueIndex)("users_email_key").using("btree", table.email.asc().nullsLast().op("text_ops"))
 ]);
 const subscriptions = (0, import_pg_core.pgTable)("subscriptions", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   planId: (0, import_pg_core.uuid)("plan_id").notNull(),
   externalSubscriptionId: (0, import_pg_core.text)("external_subscription_id"),
@@ -241,7 +241,7 @@ const subscriptions = (0, import_pg_core.pgTable)("subscriptions", {
   }).onUpdate("cascade").onDelete("restrict")
 ]);
 const albums = (0, import_pg_core.pgTable)("albums", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   title: (0, import_pg_core.text)().notNull(),
   slug: (0, import_pg_core.text)().notNull(),
   releaseDate: (0, import_pg_core.date)("release_date"),
@@ -269,7 +269,7 @@ const albums = (0, import_pg_core.pgTable)("albums", {
   }).onUpdate("cascade").onDelete("restrict")
 ]);
 const artists = (0, import_pg_core.pgTable)("artists", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   name: (0, import_pg_core.text)().notNull(),
   bio: (0, import_pg_core.text)(),
   createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).default(import_drizzle_orm.sql`CURRENT_TIMESTAMP`).notNull(),
@@ -280,7 +280,7 @@ const artists = (0, import_pg_core.pgTable)("artists", {
   (0, import_pg_core.uniqueIndex)("artists_slug_key").using("btree", table.slug.asc().nullsLast().op("text_ops"))
 ]);
 const socialLinks = (0, import_pg_core.pgTable)("social_links", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   platform: (0, import_pg_core.text)().notNull(),
   label: (0, import_pg_core.text)().notNull(),
   url: (0, import_pg_core.text)().notNull(),
@@ -291,7 +291,7 @@ const socialLinks = (0, import_pg_core.pgTable)("social_links", {
   (0, import_pg_core.uniqueIndex)("social_links_platform_key").using("btree", table.platform.asc().nullsLast().op("text_ops"))
 ]);
 const newsletterSubscribers = (0, import_pg_core.pgTable)("newsletter_subscribers", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   email: (0, import_pg_core.text)().notNull(),
   name: (0, import_pg_core.text)(),
   createdAt: (0, import_pg_core.timestamp)("created_at", { withTimezone: true, mode: "string" }).default(import_drizzle_orm.sql`CURRENT_TIMESTAMP`).notNull()
@@ -299,7 +299,7 @@ const newsletterSubscribers = (0, import_pg_core.pgTable)("newsletter_subscriber
   (0, import_pg_core.uniqueIndex)("newsletter_subscribers_email_key").using("btree", table.email.asc().nullsLast().op("text_ops"))
 ]);
 const rentalProducts = (0, import_pg_core.pgTable)("rental_products", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   trackId: (0, import_pg_core.uuid)("track_id"),
   albumId: (0, import_pg_core.uuid)("album_id"),
   name: (0, import_pg_core.text)().notNull(),
@@ -323,7 +323,7 @@ const rentalProducts = (0, import_pg_core.pgTable)("rental_products", {
   }).onUpdate("cascade").onDelete("cascade")
 ]);
 const passwordResetTokens = (0, import_pg_core.pgTable)("password_reset_tokens", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   tokenHash: (0, import_pg_core.text)("token_hash").notNull(),
   expiresAt: (0, import_pg_core.timestamp)("expires_at", { withTimezone: true, mode: "string" }).notNull(),
@@ -339,7 +339,7 @@ const passwordResetTokens = (0, import_pg_core.pgTable)("password_reset_tokens",
   }).onUpdate("cascade").onDelete("cascade")
 ]);
 const rentals = (0, import_pg_core.pgTable)("rentals", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   rentalCode: (0, import_pg_core.text)("rental_code").notNull(),
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   trackId: (0, import_pg_core.uuid)("track_id"),
@@ -377,7 +377,7 @@ const rentals = (0, import_pg_core.pgTable)("rentals", {
   }).onUpdate("cascade").onDelete("set null")
 ]);
 const emailVerificationTokens = (0, import_pg_core.pgTable)("email_verification_tokens", {
-  id: (0, import_pg_core.uuid)().primaryKey().notNull(),
+  id: (0, import_pg_core.uuid)().primaryKey().defaultRandom(), // CORREÇÃO
   userId: (0, import_pg_core.uuid)("user_id").notNull(),
   tokenHash: (0, import_pg_core.text)("token_hash").notNull(),
   expiresAt: (0, import_pg_core.timestamp)("expires_at", { withTimezone: true, mode: "string" }).notNull(),
