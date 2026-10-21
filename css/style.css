@@ -6365,3 +6365,79 @@ body:has(.player-modal-overlay.open) {
   width: 0 !important;
   height: 0 !important;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CORREÇÃO GLOBAL — SEM VAZAMENTO LATERAL NO CELULAR
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (max-width: 899px) {
+  /* 1. Impede a rolagem horizontal no site inteiro */
+  html, body {
+    max-width: 100% !important;
+    overflow-x: hidden !important;
+    position: relative !important;
+    width: 100% !important;
+  }
+
+  /* 2. Garante que todos os containers principais não passem da tela */
+  .amz-main,
+  .section-amz,
+  .section-amz-discografia,
+  .amz-discografia-wrap,
+  .artist-spotify,
+  #sobre,
+  #filosofia,
+  #contato {
+    width: 100% !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  /* 3. Corrige a grade da discografia para não vazar */
+  #discographyContainer .album-grid,
+  #discographyContainer .album-grid * {
+    box-sizing: border-box !important;
+  }
+
+  /* 4. Corrige o carrossel de lançamentos */
+  #gridLancamentos,
+  #gridAlbunsRecentes {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 5. Corrige a seção "Sobre" (texto e imagem) */
+  .sobre-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .sobre-img,
+  .sobre-text {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  /* 6. Corrige o player (sem barras de rolagem) */
+  #expandedPlayerModal,
+  #expandedPlayerModal * {
+    scrollbar-width: none !important;
+    -ms-overflow-style: none !important;
+  }
+
+  #expandedPlayerModal::-webkit-scrollbar,
+  #expandedPlayerModal *::-webkit-scrollbar {
+    display: none !important;
+  }
+}
