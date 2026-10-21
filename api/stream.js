@@ -71,7 +71,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // O banco já tem o caminho completo: "josephmatthos/pesodacaneta/..."
+        // O banco já tem o caminho relativo (ex: "pesodacaneta/A Mente é Livre.mp3")
     const b2Key = track.streamKey || track.fullPath;
     if (!b2Key) return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
 
