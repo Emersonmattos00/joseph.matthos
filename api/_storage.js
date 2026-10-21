@@ -60,24 +60,14 @@ function getS3Client() {
 
 /**
  * Mapeia o tipo de arquivo para o bucket correto.
- * O sistema usa um bucket para mídia (B2_MEDIA_BUCKET) e o mesmo para áudio.
- * O prefixo da chave (previews/ ou josephmatthos/) é o que diferencia.
  */
 function getBucketForKind(kind) {
-  const bucket = String(process.env.B2_MEDIA_BUCKET || '').trim();
-  if (!bucket) {
-    throw new Error('B2_MEDIA_BUCKET não configurado.');
-  }
+  const imageBucket = String(process.env.B2_IMAGE_BUCKET || 'joseph.matthos').trim();
+  const audioBucket = String(process.env.B2_AUDIO_BUCKET || 'josephmatthos').trim();
 
-  const valid = new Set([
-    'image',
-    'site-assets',
-    'audio-preview',
-    'audio-full',
-    'audio-premium'
-  ]);
-
-  return valid.has(kind) ? bucket : null;
+  if (kind === 'image' || kind === 'site-assets') return imageBucket;
+  if (kind === 'audio-preview' || kind === 'audio-full' || kind === 'audio-premium') return audioBucket;
+  return null;
 }
 
 function getPublicUrl(bucket, key) {
@@ -147,10 +137,8 @@ async function createSignedDownloadUrl(bucket, key, expiresInSec, downloadFilena
 
 /**
  * Gera URL temporária para reprodução de áudio.
- * O sistema usa o mesmo bucket (B2_MEDIA_BUCKET) para prévias e áudios completos.
- * A diferenciação é feita pelo prefixo da chave:
- *   - Prévia: prefixo 'previews/'
- *   - Completo: prefixo 'josephmatthos/'
+ * O banco armazena o caminho completo (ex: "josephmatthos/pesodacaneta/...").
+ * Portanto, NENHUM prefixo adicional deve ser adicionado aqui.
  */
 async function getPlaybackUrl(key, isFull = false) {
   if (!key || typeof key !== 'string') {
@@ -158,20 +146,10 @@ async function getPlaybackUrl(key, isFull = false) {
   }
 
   const bucket = getBucketForKind(isFull ? 'audio-full' : 'audio-preview');
-  if (!bucket) {
-    throw new Error('Bucket de áudio não configurado.');
-  }
+  if (!bucket) throw new Error('Bucket de áudio não configurado.');
 
-  // Define o prefixo correto caso a chave já não o tenha (por segurança)
-  let finalKey = key;
-  if (isFull && !finalKey.startsWith('josephmatthos/')) {
-    finalKey = `josephmatthos/${finalKey}`;
-  } else if (!isFull && !finalKey.startsWith('previews/')) {
-    finalKey = `previews/${finalKey}`;
-  }
-
-  // 5 minutos
-  return createSignedDownloadUrl(bucket, finalKey, 300);
+  // Usa a chave exatamente como está no banco
+  return createSignedDownloadUrl(bucket, key, 300);
 }
 
 module.exports = {
