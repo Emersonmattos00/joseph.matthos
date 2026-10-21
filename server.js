@@ -1,66 +1,51 @@
+'use strict';
+
 const express = require('express');
 const path = require('path');
-const fs = require('fs');
-const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// Middlewares
+// Middlewares básicos
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 
-// Cliente Supabase
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+// Servir arquivos estáticos (frontend)
+app.use(express.static(path.join(__dirname), {
+  extensions: ['html'],
+  index: 'index.html',
+  dotfiles: 'deny',
+}));
 
-// Detecta automaticamente onde está o index.html
-const possibleDirs = [__dirname, 'public', 'dist', 'src', 'www', 'site', 'build'];
-let staticDir = __dirname;
+// Rotas de API (serverless functions)
+const apiFiles = ['public', 'auth', 'stream', 'payments', 'admin'];
 
-for (const dir of possibleDirs) {
-  const fullPath = path.join(__dirname, dir);
-  if (fs.existsSync(path.join(fullPath, 'index.html'))) {
-    staticDir = fullPath;
-    console.log(`Servindo arquivos de: ${staticDir}`);
-    break;
+for (const name of apiFiles) {
+  try {
+    const handler = require('./api/' + name + '.js');
+    app.all('/api/' + name, async (req, res) => {
+      try {
+        await handler(req, res);
+      } catch (err) {
+        console.error(`Erro em /api/${name}:`, err);
+        if (!res.headersSent) {
+          res.status(500).json({ ok: false, error: 'Erro interno do servidor.' });
+        }
+      }
+    });
+    console.log(`✅ Rota /api/${name} carregada`);
+  } catch (err) {
+    console.warn(`⚠️  Falha ao carregar /api/${name}:`, err.message);
   }
 }
 
-// Rota de login do painel admin via Supabase
-app.post('/api/admin', async (req, res) => {
-
-  const { email, senha } = req.body;
-
-  if (!email || !senha) {
-    return res.status(400).json({ error: 'Email e senha são obrigatórios' });
-  }
-
-  // Autentica no Supabase
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: email,
-    password: senha
-  });
-
-  if (error) {
-    console.log('Erro Supabase:', error.message);
-    return res.status(401).json({ error: 'Credenciais inválidas' });
-  }
-
-  console.log('Usuário autenticado:', data.user.email);
-  return res.json({ ok: true, user: { email: data.user.email, id: data.user.id } });
+// Fallback SPA: qualquer rota não-API serve o index.html
+app.get('*', (req, res, next) => {
+  if (req.url.startsWith('/api/')) return next();
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Arquivos estáticos
-app.use(express.static(staticDir));
-
-// Fallback SPA
-app.get('*', (req, res) => {
-  res.sendFile(path.join(staticDir, 'index.html'));
-});
-
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Servidor rodando na porta ${port}`);
+// Iniciar servidor
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Servidor rodando em http://0.0.0.0:${PORT}`);
 });
