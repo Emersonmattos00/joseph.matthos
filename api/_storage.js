@@ -148,8 +148,13 @@ async function getPlaybackUrl(key, isFull = false) {
   const bucket = getBucketForKind(isFull ? 'audio-full' : 'audio-preview');
   if (!bucket) throw new Error('Bucket de áudio não configurado.');
 
-  // Usa a chave exatamente como está no banco
-  return createSignedDownloadUrl(bucket, key, 300);
+  // Adiciona o prefixo apenas se não existir
+  let finalKey = key;
+  if (!finalKey.startsWith('josephmatthos/')) {
+    finalKey = `josephmatthos/${finalKey}`;
+  }
+
+  return createSignedDownloadUrl(bucket, finalKey, 300);
 }
 
 module.exports = {
