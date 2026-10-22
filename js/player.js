@@ -61,21 +61,25 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO (RETRÁTIL) ───
 function ativarModoImersivo() {
-  // Só ativa se a música estiver tocando e a aba ativa for a "Player"
   if (sound && sound.playing() && document.getElementById('tab-player').classList.contains('active')) {
-    els.container.classList.add('immersive-mode');
+    document.body.classList.add('immersive-mode');
   }
 }
+
 function desativarModoImersivo() {
-  els.container.classList.remove('immersive-mode');
-  resetImmersiveTimer();
+  document.body.classList.remove('immersive-mode');
+  // Só reinicia o timer se a música estiver tocando
+  if (sound && sound.playing()) {
+    resetImmersiveTimer();
+  }
 }
+
 function resetImmersiveTimer() {
   clearTimeout(immersiveTimeout);
-  // 4 segundos após a última interação, ativa o modo imersivo
   immersiveTimeout = setTimeout(ativarModoImersivo, 4000);
 }
-// Qualquer toque na tela reseta o timer e mostra os menus de volta
+
+// Detectores de toque (apenas UMA vez, no container)
 els.container.addEventListener('touchstart', desativarModoImersivo, { passive: true });
 els.container.addEventListener('mousemove', desativarModoImersivo, { passive: true });
 els.container.addEventListener('click', desativarModoImersivo, { passive: true });
