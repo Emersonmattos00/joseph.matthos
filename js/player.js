@@ -41,9 +41,6 @@ let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
 
-// Força o ícone de play inicial (para não ficar dessincronizado)
-els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
@@ -54,6 +51,7 @@ tabs.forEach(tab => {
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    // Sempre mostra os menus ao trocar de aba
     document.body.classList.remove('immersive-mode');
   });
 });
@@ -63,20 +61,36 @@ function switchTab(tabName) {
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO ───
+// ─── MODO IMERSIVO (TOGGLE) ───
 function toggleModoImersivo() {
-  // Só ativa se estiver na aba Player E o áudio estiver tocando (não pausado)
+  // Só ativa se estiver na aba Player
   if (!document.getElementById('tab-player').classList.contains('active')) return;
+  // Só ativa se a música estiver tocando
   if (!audio.src || audio.paused) return;
   
   document.body.classList.toggle('immersive-mode');
 }
 
-// Evento de clique na tela (ignora botões)
-els.container.addEventListener('click', (e) => {
-  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
-    return;
+// Tratamento unificado para toque e clique (evita o "pisca-pisca")
+let touchStartTime = 0;
+
+els.container.addEventListener('touchstart', (e) => {
+  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  touchStartTime = Date.now();
+}, { passive: true });
+
+els.container.addEventListener('touchend', (e) => {
+  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  // Se o toque foi rápido (menos de 300ms), considera como um clique
+  if (Date.now() - touchStartTime < 300) {
+    toggleModoImersivo();
   }
+});
+
+els.container.addEventListener('click', (e) => {
+  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  // No celular, o touchend já cuidou. Isso evita duplo toggle.
+  if (Date.now() - touchStartTime < 500) return;
   toggleModoImersivo();
 });
 
@@ -123,7 +137,7 @@ function renderLyrics(lyricsArray) {
   }));
   els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!audio) return;
+      if (!audio.src) return;
       audio.currentTime = Number(btn.dataset.time);
       highlightLyricLine(Number(btn.dataset.index));
     });
@@ -219,18 +233,12 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. Configura a tag de áudio (Preparada, mas não auto-tocada)
+  // 4. Configura a tag de áudio nativa
   audio.pause();
   audio.removeAttribute('src');
   audio.src = stream.audioUrl;
   audio.load();
 
-  // Resetando a barra de progresso
-  els.currentTime.textContent = '0:00';
-  els.duration.textContent = '0:00';
-  els.progressFill.style.width = '0%';
-
-  // Eventos
   audio.onplay = () => {
     els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
     clearInterval(updateInterval);
@@ -246,7 +254,6 @@ async function initPlayer(trackId) {
   audio.onpause = () => {
     els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
     clearInterval(updateInterval);
-    document.body.classList.remove('immersive-mode'); // Se pausar, mostra as abas
   };
 
   audio.onloadedmetadata = () => {
@@ -257,6 +264,10 @@ async function initPlayer(trackId) {
     console.error('[player] Erro no áudio:', audio.error);
     els.title.textContent = 'Erro ao carregar áudio';
   };
+
+  audio.play().catch(err => {
+    console.warn('[player] Autoplay bloqueado:', err);
+  });
 }
 
 // ─── CONTROLES GLOBAIS ───
