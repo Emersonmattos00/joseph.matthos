@@ -32,12 +32,11 @@ const els = {
   albumHeaderTitle: document.getElementById('albumHeaderTitle'),
   albumHeaderArtist: document.getElementById('albumHeaderArtist'),
   albumHeaderCount: document.getElementById('albumHeaderCount'),
-  fullscreenBtn: document.getElementById('fullscreenBtn') // Novo botão
+  fullscreenBtn: document.getElementById('fullscreenBtn')
 };
 
 let sound = null;
 let updateInterval = null;
-let immersiveTimeout = null;
 let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
@@ -51,7 +50,8 @@ tabs.forEach(tab => {
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    desativarModoImersivo();
+    // Se trocar de aba, sempre mostra os menus (desativa imersivo)
+    document.body.classList.remove('immersive-mode');
   });
 });
 function switchTab(tabName) {
@@ -59,52 +59,39 @@ function switchTab(tabName) {
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO (RETRÁTIL) ───
-function ativarModoImersivo() {
-  console.log('[imersivo] Tentando ativar...');
-  console.log('[imersivo] sound existe?', !!sound);
-  console.log('[imersivo] sound tocando?', sound ? sound.playing() : false);
-  console.log('[imersivo] aba player ativa?', document.getElementById('tab-player').classList.contains('active'));
+// ─── MODO IMERSIVO (TOGGLE POR CLIQUE) ───
+function toggleModoImersivo() {
+  // Não ativa se estiver na aba de músicas ou letra
+  if (!document.getElementById('tab-player').classList.contains('active')) return;
   
-  if (sound && sound.playing() && document.getElementById('tab-player').classList.contains('active')) {
-    document.body.classList.add('immersive-mode');
-    console.log('[imersivo] CLASSE ADICIONADA!');
-  } else {
-    console.log('[imersivo] Condições não atendidas, não ativou.');
+  // Não ativa se a música não estiver tocando
+  if (!sound || !sound.playing()) return;
+  
+  document.body.classList.toggle('immersive-mode');
+}
+
+// O evento de clique no container principal (mas ignora os botões)
+els.container.addEventListener('click', (e) => {
+  // Se clicar em um botão, controle, ou aba, não faz toggle
+  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
+    return;
   }
-}
-
-function desativarModoImersivo() {
-  document.body.classList.remove('immersive-mode');
-  if (sound && sound.playing()) {
-    resetImmersiveTimer();
-  }
-}
-
-function resetImmersiveTimer() {
-  console.log('[imersivo] Timer resetado para 4s');
-  clearTimeout(immersiveTimeout);
-  immersiveTimeout = setTimeout(ativarModoImersivo, 4000);
-}
-
-// Detectores de toque (apenas UMA vez, no container)
-els.container.addEventListener('touchstart', desativarModoImersivo, { passive: true });
-els.container.addEventListener('mousemove', desativarModoImersivo, { passive: true });
-els.container.addEventListener('click', desativarModoImersivo, { passive: true });
+  
+  // Se clicar no fundo/capa, faz o toggle
+  toggleModoImersivo();
+});
 
 
 // ─── TELA CHEIA (MAXIMIZAR) ───
 if (els.fullscreenBtn) {
   els.fullscreenBtn.addEventListener('click', () => {
     if (!document.fullscreenElement) {
-      // Se não está em tela cheia, tenta ativar
       if (els.container.requestFullscreen) {
         els.container.requestFullscreen();
       } else if (els.container.webkitRequestFullscreen) { /* Safari */
         els.container.webkitRequestFullscreen();
       }
     } else {
-      // Se já está em tela cheia, sai
       if (document.exitFullscreen) {
         document.exitFullscreen();
       }
@@ -176,6 +163,7 @@ function syncLyrics() {
 async function initPlayer(trackId) {
   currentTrackId = trackId;
   currentLyricIndex = -1;
+  document.body.classList.remove('immersive-mode'); // Sempre começa com os menus visíveis
 
   let meta;
   try { meta = await fetchMetadata(trackId); }
@@ -186,8 +174,6 @@ async function initPlayer(trackId) {
   els.artist.textContent = `${meta.artist} · ${meta.albumTitle}`;
   
   if (meta.coverUrl) {
-    // Se a imagem for um <img>, usamos src. Se for <div> com background, usamos background-image.
-    // O código abaixo cobre os dois casos, garantindo que apareça.
     if (els.cover.tagName === 'IMG') {
       els.cover.src = meta.coverUrl;
     } else {
@@ -252,12 +238,12 @@ async function initPlayer(trackId) {
         els.currentTime.textContent = formatTime(seek);
         syncLyrics();
       }, 250);
-      resetImmersiveTimer(); // Começa a contar os 4 segundos
+      // A linha resetImmersiveTimer() foi REMOVIDA daqui
     },
     onpause: () => {
       els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
       clearInterval(updateInterval);
-      desativarModoImersivo(); // Mostra os menus de volta
+      // A linha desativarModoImersivo() foi REMOVIDA daqui
     },
     onload: () => { els.duration.textContent = formatTime(sound.duration()); }
   });

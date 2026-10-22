@@ -289,17 +289,17 @@ body.player-page {
   }
 }
 
-/* MODO IMERSIVO - Esconde o topo e o rodapé */
-.music-player--fullscreen.immersive-mode .player-top { 
-  transform: translateY(-150%); 
-  opacity: 0; 
-  pointer-events: none; 
+/* ─── MODO IMERSIVO ─── */
+body.immersive-mode .player-top {
+  transform: translateY(-150%);
+  opacity: 0;
+  pointer-events: none;
   transition: all 0.4s ease;
 }
 
-.music-player--fullscreen.immersive-mode .player-footer-actions { 
-  transform: translateY(150%); 
-  opacity: 0; 
-  pointer-events: none; 
+body.immersive-mode .player-footer-actions {
+  transform: translateY(150%);
+  opacity: 0;
+  pointer-events: none;
   transition: all 0.4s ease;
 }
