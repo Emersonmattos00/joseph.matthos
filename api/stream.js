@@ -2,9 +2,9 @@ const { eq, and, gt, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
-const { getStorageConfig } = require('./_storage');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { streamRatelimit } = require('./_cache');
+const { Readable } = require('stream');
 
 const s3Client = new S3Client({
   region: process.env.B2_MEDIA_REGION || 'us-east-005',
@@ -74,32 +74,48 @@ module.exports = async (req, res) => {
       : (track.previewKey || track.streamKey || track.fullPath);
     
     if (!b2Key) {
-      return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
+      return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    // EM VEZ DE RETORNAR A URL, FAZ O DOWNLOAD E ENVIA COM O TIPO CORRETO
     const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
     
-    // Normaliza a chave para garantir que comece com o prefixo do bucket se necessário
+    // Garante que a chave tenha o prefixo correto. 
+    // Se a chave salva já tem o nome da pasta (ex: pesodacaneta/...), adicionamos o bucket se necessário.
+    // A lógica do seu `_storage.js` adicionava 'josephmatthos/'. Vamos manter a mesma lógica.
     const keyToFetch = b2Key.startsWith('josephmatthos/') ? b2Key : `josephmatthos/${b2Key}`;
 
     console.log(`[stream] Buscando ${keyToFetch} no bucket ${bucket}...`);
 
     const command = new GetObjectCommand({ Bucket: bucket, Key: keyToFetch });
-    const s3Response = await s3Client.send(command);
+    
+    let s3Response;
+    try {
+      s3Response = await s3Client.send(command);
+    } catch (s3Err) {
+      console.error('[stream] Erro no S3:', s3Err.message);
+      return res.status(404).json({ error: 'Arquivo não encontrado no Backblaze B2', details: s3Err.message });
+    }
 
-    // Define o cabeçalho correto
+    // Define os cabeçalhos para o navegador entender que é um áudio
     res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache de 1h
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
 
-    // Transmite o áudio
-    s3Response.Body.pipe(res);
+    // Converte o fluxo do S3 (WebStream) para Node Stream
+    const stream = Readable.fromWeb(s3Response.Body);
+    
+    // Se o cliente fechar a conexão, encerra o download do S3 para economizar recursos
+    req.on('close', () => {
+      stream.destroy();
+    });
+
+    // Transmite o áudio para o navegador
+    stream.pipe(res);
 
   } catch (error) {
     console.error('[stream] erro detalhado:', error);
-    return res.status(500).json({
-      error: 'Erro interno do servidor',
-      message: process.env.NODE_ENV !== 'production' ? error.message : undefined,
-    });
+    if (!res.headersSent) {
+      return res.status(500).json({ error: 'Erro interno no servidor', message: error.message });
+    }
   }
 };
