@@ -73,10 +73,21 @@ module.exports = async (req, res) => {
       }
     }
 
-    const b2Key = accessLevel === 'full' 
-      ? (track.streamKey || track.fullPath) 
-      : (track.previewKey || track.streamKey || track.fullPath);
-    
+    // LÓGICA DE SEGURANÇA: NUNCA entrega o full para quem não tem permissão
+    let b2Key;
+    if (accessLevel === 'full') {
+      b2Key = track.streamKey || track.fullPath;
+    } else {
+      // Se não tem previewKey, retorna 403 (não entrega o áudio completo)
+      b2Key = track.previewKey;
+      if (!b2Key) {
+        return res.status(403).json({ 
+          error: 'Prévia não disponível', 
+          message: 'Esta faixa não tem preview configurada. Alugue ou assine para ouvir o áudio completo.' 
+        });
+      }
+    }
+
     if (!b2Key) {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
@@ -84,13 +95,11 @@ module.exports = async (req, res) => {
     const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
     const keyToFetch = b2Key.startsWith('josephmatthos/') ? b2Key : `josephmatthos/${b2Key}`;
 
-    console.log(`[stream] Buscando ${keyToFetch} no bucket ${bucket}...`);
+    console.log(`[stream] Buscando ${keyToFetch} (acesso: ${accessLevel})...`);
 
-    // Prepara a requisição para o B2
     const rangeHeader = req.headers.range;
     const commandParams = { Bucket: bucket, Key: keyToFetch };
     
-    // Se o navegador pedir um pedaço (Range), repassa para o B2
     if (rangeHeader) {
       commandParams.Range = rangeHeader;
     }
@@ -109,7 +118,6 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Configura os cabeçalhos baseados na resposta do B2
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
@@ -121,7 +129,6 @@ module.exports = async (req, res) => {
       res.setHeader('Content-Length', s3Response.ContentLength);
     }
 
-    // Se o B2 retornou um status de Range (206), retorna 206 para o navegador
     if (s3Response.$metadata && s3Response.$metadata.httpStatusCode === 206) {
       res.status(206);
     }
