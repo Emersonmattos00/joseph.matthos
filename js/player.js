@@ -63,17 +63,13 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO (TOGGLE) ───
 function toggleModoImersivo() {
-  // Só ativa se estiver na aba Player
   if (!document.getElementById('tab-player').classList.contains('active')) return;
-  // Só ativa se a música estiver tocando
   if (!audio.src || audio.paused) return;
-  
   document.body.classList.toggle('immersive-mode');
 }
 
-// Tratamento unificado para toque e clique (evita o "pisca-pisca")
+// Toque no celular (evita o delay de 300ms)
 let touchStartTime = 0;
-
 els.container.addEventListener('touchstart', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
   touchStartTime = Date.now();
@@ -81,16 +77,15 @@ els.container.addEventListener('touchstart', (e) => {
 
 els.container.addEventListener('touchend', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
-  // Se o toque foi rápido (menos de 300ms), considera como um clique
   if (Date.now() - touchStartTime < 300) {
     toggleModoImersivo();
   }
 });
 
+// Clique no desktop
 els.container.addEventListener('click', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
-  // No celular, o touchend já cuidou. Isso evita duplo toggle.
-  if (Date.now() - touchStartTime < 500) return;
+  if (Date.now() - touchStartTime < 500) return; // ignora o clique disparado após o toque
   toggleModoImersivo();
 });
 
@@ -110,14 +105,6 @@ if (els.fullscreenBtn) {
 async function fetchMetadata(trackId) {
   const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { credentials: 'same-origin' });
   if (!r.ok) throw new Error('Faixa não encontrada');
-  return await r.json();
-}
-
-async function fetchStreamUrl(trackId) {
-  const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}`, {
-    credentials: 'same-origin', cache: 'no-store'
-  });
-  if (!r.ok) throw new Error(`Falha no áudio (${r.status})`);
   return await r.json();
 }
 
@@ -226,17 +213,12 @@ async function initPlayer(trackId) {
     `;
   }).join('');
 
-  // 3. Busca o Áudio
-  let stream;
-  try { stream = await fetchStreamUrl(trackId); }
-  catch (err) { els.title.textContent = 'Áudio indisponível'; return; }
+  // 3. Passa a URL DIRETA para a tag <audio> (sem fetch)
+  const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
 
-  if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
-
-  // 4. Configura a tag de áudio nativa
   audio.pause();
   audio.removeAttribute('src');
-  audio.src = stream.audioUrl;
+  audio.src = streamUrl;
   audio.load();
 
   audio.onplay = () => {
@@ -265,9 +247,9 @@ async function initPlayer(trackId) {
     els.title.textContent = 'Erro ao carregar áudio';
   };
 
-    // Em vez de tentar tocar automaticamente, apenas carregue a música.
-  // O usuário vai clicar no botão de Play para iniciar.
-  console.log('[player] Faixa carregada e pronta para o Play.');
+  audio.play().catch(err => {
+    console.warn('[player] Autoplay bloqueado:', err);
+  });
 }
 
 // ─── CONTROLES GLOBAIS ───

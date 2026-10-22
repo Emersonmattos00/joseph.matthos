@@ -1,5 +1,5 @@
 require('dotenv').config({ path: '.env.local' });
-const { S3Client, ListObjectsV2Command, CopyObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, ListObjectsV2Command, CopyObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 
 const client = new S3Client({
   region: process.env.B2_MEDIA_REGION || 'us-east-005',
@@ -30,7 +30,7 @@ async function listAll(prefix) {
 
 async function main() {
   console.log('🔧 Corrigindo Content-Type dos áudios no Backblaze B2...');
-  const files = await listAll(''); // Lista TUDO
+  const files = await listAll(''); 
   
   const audioFiles = files.filter(f => 
     f.toLowerCase().endsWith('.mp3') || 
@@ -44,23 +44,34 @@ async function main() {
     const ext = key.split('.').pop().toLowerCase();
     const contentType = ext === 'wav' ? 'audio/wav' : (ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg');
     
-    console.log(`Corrigindo ${key} → ${contentType}`);
+    // O CopySource no B2 precisa ser URL-encoded e usar o formato /bucket/key
+    const copySource = `/${BUCKET}/${encodeURIComponent(key)}`;
     
     try {
-      // Copia o arquivo para ele mesmo, forçando a atualização do metadata
+      // Verifica o tipo atual antes de tentar mudar
+      const head = await client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+      if (head.ContentType === contentType) {
+        console.log(`✅ Já está correto: ${key} (${contentType})`);
+        continue;
+      }
+
+      console.log(`🔄 Corrigindo ${key} (${head.ContentType} -> ${contentType})...`);
+      
       await client.send(new CopyObjectCommand({
         Bucket: BUCKET,
-        CopySource: `${BUCKET}/${key}`,
+        CopySource: copySource,
         Key: key,
         MetadataDirective: 'REPLACE',
         ContentType: contentType
       }));
+      
+      console.log(`✅ Corrigido: ${key}`);
     } catch (err) {
-      console.error(`Erro ao corrigir ${key}:`, err.message);
+      console.error(`❌ Erro ao corrigir ${key}:`, err.message);
     }
   }
 
-  console.log('✅ Todos os arquivos corrigidos!');
+  console.log('🎉 Fim do processo.');
 }
 
 main().catch(console.error);
