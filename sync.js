@@ -1,3 +1,5 @@
+/* sinc.js - Script para sincronizar o banco de dados com os álbuns no Backblaze B2 */
+
 require('dotenv').config({ path: '.env.local' });
 const { neon } = require('@neondatabase/serverless');
 const { S3Client, ListObjectsV2Command } = require('@aws-sdk/client-s3');
