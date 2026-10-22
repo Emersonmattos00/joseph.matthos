@@ -35,12 +35,14 @@ const els = {
   fullscreenBtn: document.getElementById('fullscreenBtn')
 };
 
-// Variável global do áudio (tag nativa)
 let audio = new Audio();
 let updateInterval = null;
 let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
+
+// Força o ícone de play inicial (para não ficar dessincronizado)
+els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
 
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
@@ -63,11 +65,14 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO ───
 function toggleModoImersivo() {
+  // Só ativa se estiver na aba Player E o áudio estiver tocando (não pausado)
   if (!document.getElementById('tab-player').classList.contains('active')) return;
-  if (!audio || audio.paused) return;
+  if (!audio.src || audio.paused) return;
+  
   document.body.classList.toggle('immersive-mode');
 }
 
+// Evento de clique na tela (ignora botões)
 els.container.addEventListener('click', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
     return;
@@ -214,13 +219,18 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. Configura a tag de áudio nativa
+  // 4. Configura a tag de áudio (Preparada, mas não auto-tocada)
   audio.pause();
   audio.removeAttribute('src');
   audio.src = stream.audioUrl;
   audio.load();
 
-  // Eventos da tag de áudio
+  // Resetando a barra de progresso
+  els.currentTime.textContent = '0:00';
+  els.duration.textContent = '0:00';
+  els.progressFill.style.width = '0%';
+
+  // Eventos
   audio.onplay = () => {
     els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
     clearInterval(updateInterval);
@@ -236,6 +246,7 @@ async function initPlayer(trackId) {
   audio.onpause = () => {
     els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
     clearInterval(updateInterval);
+    document.body.classList.remove('immersive-mode'); // Se pausar, mostra as abas
   };
 
   audio.onloadedmetadata = () => {
