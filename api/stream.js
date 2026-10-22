@@ -23,7 +23,7 @@ const s3Client = new S3Client({
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -86,7 +86,16 @@ module.exports = async (req, res) => {
 
     console.log(`[stream] Buscando ${keyToFetch} no bucket ${bucket}...`);
 
-    const command = new GetObjectCommand({ Bucket: bucket, Key: keyToFetch });
+    // Prepara a requisição para o B2
+    const rangeHeader = req.headers.range;
+    const commandParams = { Bucket: bucket, Key: keyToFetch };
+    
+    // Se o navegador pedir um pedaço (Range), repassa para o B2
+    if (rangeHeader) {
+      commandParams.Range = rangeHeader;
+    }
+
+    const command = new GetObjectCommand(commandParams);
     
     let s3Response;
     try {
@@ -100,11 +109,21 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Configura os cabeçalhos baseados na resposta do B2
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
+
+    if (s3Response.ContentRange) {
+      res.setHeader('Content-Range', s3Response.ContentRange);
+    }
     if (s3Response.ContentLength) {
       res.setHeader('Content-Length', s3Response.ContentLength);
+    }
+
+    // Se o B2 retornou um status de Range (206), retorna 206 para o navegador
+    if (s3Response.$metadata && s3Response.$metadata.httpStatusCode === 206) {
+      res.status(206);
     }
 
     const body = s3Response.Body;
