@@ -61,20 +61,28 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO (RETRÁTIL) ───
 function ativarModoImersivo() {
+  console.log('[imersivo] Tentando ativar...');
+  console.log('[imersivo] sound existe?', !!sound);
+  console.log('[imersivo] sound tocando?', sound ? sound.playing() : false);
+  console.log('[imersivo] aba player ativa?', document.getElementById('tab-player').classList.contains('active'));
+  
   if (sound && sound.playing() && document.getElementById('tab-player').classList.contains('active')) {
     document.body.classList.add('immersive-mode');
+    console.log('[imersivo] CLASSE ADICIONADA!');
+  } else {
+    console.log('[imersivo] Condições não atendidas, não ativou.');
   }
 }
 
 function desativarModoImersivo() {
   document.body.classList.remove('immersive-mode');
-  // Só reinicia o timer se a música estiver tocando
   if (sound && sound.playing()) {
     resetImmersiveTimer();
   }
 }
 
 function resetImmersiveTimer() {
+  console.log('[imersivo] Timer resetado para 4s');
   clearTimeout(immersiveTimeout);
   immersiveTimeout = setTimeout(ativarModoImersivo, 4000);
 }
