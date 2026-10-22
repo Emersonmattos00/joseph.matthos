@@ -326,3 +326,14 @@ body.immersive-mode .player-footer-actions {
     border: 1px solid rgba(255, 255, 255, 0.1);
   }
 }
+
+/* Garante que o container receba os toques */
+.music-player--fullscreen {
+  touch-action: manipulation; /* Otimiza o toque no celular */
+  user-select: none; /* Evita que o texto seja selecionado ao tocar */
+}
+
+/* Garante que a capa não bloqueie o toque */
+.player-cover-wrap, .album-cover {
+  pointer-events: auto;
+}

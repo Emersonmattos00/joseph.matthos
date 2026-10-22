@@ -29,9 +29,14 @@ async function listAll(prefix) {
 }
 
 async function main() {
-  console.log('🔧 Corrigindo Content-Type dos áudios...');
-  const files = await listAll('josephmatthos/');
-  const audioFiles = files.filter(f => f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.m4a'));
+  console.log('🔧 Corrigindo Content-Type dos áudios no Backblaze B2...');
+  const files = await listAll(''); // Lista TUDO
+  
+  const audioFiles = files.filter(f => 
+    f.toLowerCase().endsWith('.mp3') || 
+    f.toLowerCase().endsWith('.wav') || 
+    f.toLowerCase().endsWith('.m4a')
+  );
   
   console.log(`Encontrados ${audioFiles.length} arquivos de áudio.`);
 
@@ -41,14 +46,18 @@ async function main() {
     
     console.log(`Corrigindo ${key} → ${contentType}`);
     
-    // Copia o arquivo para ele mesmo, substituindo o Content-Type
-    await client.send(new CopyObjectCommand({
-      Bucket: BUCKET,
-      CopySource: `${BUCKET}/${key}`,
-      Key: key,
-      MetadataDirective: 'REPLACE', // Substitui os metadados
-      ContentType: contentType
-    }));
+    try {
+      // Copia o arquivo para ele mesmo, forçando a atualização do metadata
+      await client.send(new CopyObjectCommand({
+        Bucket: BUCKET,
+        CopySource: `${BUCKET}/${key}`,
+        Key: key,
+        MetadataDirective: 'REPLACE',
+        ContentType: contentType
+      }));
+    } catch (err) {
+      console.error(`Erro ao corrigir ${key}:`, err.message);
+    }
   }
 
   console.log('✅ Todos os arquivos corrigidos!');
