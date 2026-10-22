@@ -93,7 +93,9 @@ module.exports = async (req, res) => {
     }
 
     const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
-    const keyToFetch = b2Key.startsWith('josephmatthos/') ? b2Key : `josephmatthos/${b2Key}`;
+    const keyToFetch = (b2Key.startsWith('josephmatthos/') || b2Key.startsWith('previews/')) 
+      ? b2Key 
+      : `josephmatthos/${b2Key}`;
 
     console.log(`[stream] Buscando ${keyToFetch} (acesso: ${accessLevel})...`);
 
