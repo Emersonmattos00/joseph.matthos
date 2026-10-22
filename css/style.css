@@ -6440,3 +6440,27 @@ body:has(.player-modal-overlay.open) {
     display: none !important;
   }
 }
+
+/* Correção para as abas do artista no celular */
+.artist-tabs-bar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch; /* Rolagem suave no iOS */
+  scrollbar-width: none; /* Esconde a barra de rolagem no Firefox */
+}
+
+.artist-tabs-bar::-webkit-scrollbar {
+  display: none; /* Esconde a barra de rolagem no Chrome/Safari */
+}
+
+.artist-tabs {
+  display: flex;
+  gap: 2rem;
+  padding: 0 1rem; /* Dá um respiro nas bordas */
+  white-space: nowrap; /* Impede que o texto quebre */
+  width: max-content; /* Faz a barra ocupar apenas o necessário e permitir o scroll */
+}
+
+.artist-tab {
+  font-size: 0.85rem; /* Ajuste o tamanho da fonte se necessário */
+}
