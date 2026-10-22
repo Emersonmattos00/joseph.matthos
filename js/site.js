@@ -3049,25 +3049,17 @@ function updatePlayingHighlight() {
 }
 
 function openExpandedPlayer(albumId, trackIndexOrId) {
-  closeAlbumModal();
-  const modal = document.getElementById('expandedPlayerModal');
-  if (!modal) return;
-  modal.classList.add('open');
-  document.body.style.overflow = 'hidden';
-  const player = modal.querySelector('.music-player');
-  const musicTab = modal.querySelector('.mobile-tab[data-tab="music"]');
-  if (player && musicTab) {
-    player.classList.remove('mobile-lyrics');
-    modal.querySelectorAll('.mobile-tab').forEach((t) => {
-      const isMusic = t.dataset.tab === 'music';
-      t.classList.toggle('active', isMusic);
-      t.setAttribute('aria-selected', isMusic ? 'true' : 'false');
-    });
+  // Busca a faixa para garantir que temos um ID válido
+  const track = findTrackByIndex(albumId, trackIndexOrId);
+  
+  if (!track || !track.id) {
+    console.warn('[player] faixa sem id:', albumId, trackIndexOrId);
+    toast('Faixa indisponível.', '⚠');
+    return;
   }
-
-  bindPlayerControls();
-
-  playFromDiscography(albumId, trackIndexOrId, { forceRebuild: true });
+  
+  // Redireciona para a página dedicada do player
+  window.location.href = `/player.html?id=${encodeURIComponent(track.id)}`;
 }
 
 function closeExpandedPlayer() {

@@ -20,7 +20,6 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { eq, and, gt } = require('drizzle-orm');
 
-const { db } = require('./_db');
 const { users, rentals, tracks } = require('../src/schema.js');
 
 const {
@@ -54,9 +53,9 @@ const COMMON_PASSWORDS = new Set([
 ]);
 
 const MAX_EMAILS_PER_HOUR = 3;
-const MAX_LOGIN_ATTEMPTS_PER_IP = 30;
+const MAX_LOGIN_ATTEMPTS_PER_IP = 1000;
 const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 10;
-const MAX_SIGNUPS_PER_IP = 5;
+const MAX_SIGNUPS_PER_IP = 1000;
 const MIN_RESPONSE_MS = 350;
 
 const MAX_RENTALS = 100;
@@ -65,6 +64,7 @@ const GENERIC_AUTH_ERROR = 'E-mail ou senha incorretos.';
 const GENERIC_SIGNUP_ERROR = 'Não foi possível concluir o cadastro.';
 const GENERIC_RATE_ERROR = 'Muitas tentativas. Tente novamente mais tarde.';
 const GENERIC_ERROR = 'Serviço indisponível.';
+const { db, sql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -301,12 +301,11 @@ async function handleSignup(req, res) {
 
     const passwordHash = await hashPassword(password);
 
-    const [user] = await db.insert(users).values({
-      name,
-      email,
-      passwordHash,
-      role: 'CUSTOMER',
-    }).returning();
+    const [user] = await sql`
+    INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
+    VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
+    RETURNING id, email, name, role, created_at, updated_at
+  `;
 
     const token = signToken(user);
     setAuthCookies(res, { access_token: token });

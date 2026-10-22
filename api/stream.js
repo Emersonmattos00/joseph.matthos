@@ -24,32 +24,23 @@ module.exports = async (req, res) => {
     if (!track) return res.status(404).json({ error: 'Faixa não encontrada' });
 
     let user = null;
-    try {
-      user = await getAuthUser(req);
-    } catch (e) {
-      console.warn('[stream] getAuthUser falhou:', e.message);
-    }
+    try { user = await getAuthUser(req); } catch (e) {}
 
     let accessLevel = 'preview';
 
     if (user) {
       const now = new Date().toISOString();
 
-      // 1) Assinatura ativa vigente
       try {
         const [sub] = await db.select().from(subscriptions)
           .where(and(
             eq(subscriptions.userId, user.id),
             eq(subscriptions.status, 'ACTIVE'),
             gt(subscriptions.currentPeriodEnd, now)
-          ))
-          .limit(1);
+          )).limit(1);
         if (sub) accessLevel = 'full';
-      } catch (e) {
-        console.warn('[stream] checagem de assinatura falhou:', e.message);
-      }
+      } catch (e) {}
 
-      // 2) Aluguel ativo cobrindo a faixa ou o álbum da faixa
       if (accessLevel !== 'full') {
         try {
           const rentalCond = or(
@@ -62,21 +53,21 @@ module.exports = async (req, res) => {
               eq(rentals.status, 'ACTIVE'),
               gt(rentals.expiresAt, now),
               rentalCond
-            ))
-            .limit(1);
+            )).limit(1);
           if (rent) accessLevel = 'full';
-        } catch (e) {
-          console.warn('[stream] checagem de aluguel falhou:', e.message);
-        }
+        } catch (e) {}
       }
     }
 
-        // O banco já tem o caminho relativo (ex: "pesodacaneta/A Mente é Livre.mp3")
-    const b2Key = track.streamKey || track.fullPath;
-    if (!b2Key) return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
+    const b2Key = accessLevel === 'full' 
+      ? (track.streamKey || track.fullPath) 
+      : (track.previewKey || track.streamKey || track.fullPath);
+    
+    if (!b2Key) {
+      return res.status(404).json({ error: 'Arquivo de áudio não configurado' });
+    }
 
     const audioUrl = await getPlaybackUrl(b2Key, accessLevel === 'full');
-
     const expiresAt = new Date(Date.now() + 300 * 1000).toISOString();
 
     return res.status(200).json({
@@ -93,20 +84,7 @@ module.exports = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[stream] erro detalhado:', {
-      message: error.message,
-      name: error.name,
-      code: error.code,
-      stack: error.stack?.split('\n').slice(0, 8)
-    });
-    const isDev = process.env.NODE_ENV !== 'production';
-    return res.status(500).json({
-      error: 'Erro interno do servidor',
-      ...(isDev && {
-        message: error.message,
-        name: error.name,
-        stack: error.stack?.split('\n').slice(0, 5),
-      }),
-    });
+    console.error('[stream] erro:', error);
+    return res.status(500).json({ error: 'Erro interno do servidor' });
   }
 };

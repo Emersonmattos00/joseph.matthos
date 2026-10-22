@@ -1,16 +1,19 @@
 /* ============================================================
    api/_lib.js — Módulos internos consolidados
    ------------------------------------------------------------
-   Substitui: _supabase.js, _audit.js, _rate-limit.js,
+      Substitui: módulos legados de auth, audit, rate-limit e plan.
               _plan.js, _csrf-guard.js
 
    ⚠️  NUNCA importar no cliente. Só serverless functions.
 
    Dependências obrigatórias (produção):
+     - @neondatabase/serverless
+     - jsonwebtoken
      - @upstash/redis (opcional, mas recomendado para rate limit)
 
    Variáveis de ambiente esperadas:
-     - SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+     - DATABASE_URL (Neon PostgreSQL)
+     - JWT_SECRET
      - UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN  (opcional)
        (ou KV_REST_API_URL / KV_REST_API_TOKEN para Vercel KV)
      - ALLOWED_ORIGINS (CSV)
@@ -29,11 +32,15 @@
    2. getPlanForUser() mantida como wrapper simples (string),
       retrocompatível com o código existente.
    3. Cache KV só guarda planos confirmados (não cacheia fallback).
+   4. Migração Supabase → Neon: getAuthUser usa JWT próprio;
+      getPlanForUserDetailed consulta a view effective_plan no Neon.
    ============================================================ */
 
 'use strict';
 
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { neon } = require('@neondatabase/serverless');
 
 // ─────────────────────────────────────────────────────────────
 // Guard: impede importação no cliente
@@ -45,8 +52,6 @@ if (typeof window !== 'undefined') {
 // ═════════════════════════════════════════════════════════════
 // CONSTANTES GLOBAIS
 // ═════════════════════════════════════════════════════════════
-const FETCH_TIMEOUT = 10000;
-
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 const AUTH_COOKIE_PROD = '__Host-jm_auth_access';
@@ -68,32 +73,6 @@ const ALLOWED_ORIGINS = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
 );
-
-// ═════════════════════════════════════════════════════════════
-// 1. CONFIGURAÇÃO
-// ═════════════════════════════════════════════════════════════
-function getConfig() {
-  const url = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const anonKey = String(process.env.SUPABASE_ANON_KEY || '').trim();
-
-  if (!url || !anonKey) {
-    const err = new Error('Supabase não configurado.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
-  }
-
-  return { url, anonKey };
-}
-
-function getAdminKey() {
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
-  if (!key) {
-    const err = new Error('SUPABASE_SERVICE_ROLE_KEY ausente.');
-    err.code = 'NOT_CONFIGURED';
-    throw err;
-  }
-  return key;
-}
 
 // ═════════════════════════════════════════════════════════════
 // 2. HTTP — helpers
@@ -158,71 +137,6 @@ function clientIp(req) {
     h['x-forwarded-for'];
   return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
     .split(',')[0].trim();
-}
-
-// ═════════════════════════════════════════════════════════════
-// 3. SUPABASE — fetch base
-// ═════════════════════════════════════════════════════════════
-async function fetchWithTimeout(url, options = {}) {
-  const { timeoutMs = FETCH_TIMEOUT, signal: extSignal, ...rest } = options;
-  const controller = new AbortController();
-
-  if (extSignal) {
-    if (extSignal.aborted) controller.abort();
-    else extSignal.addEventListener('abort', () => controller.abort(), { once: true });
-  }
-
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    return await fetch(url, { ...rest, signal: controller.signal });
-  } catch (error) {
-    if (error && error.name === 'AbortError') {
-      const err = new Error('Timeout ao contactar Supabase.');
-      err.code = 'TIMEOUT';
-      throw err;
-    }
-    const err = new Error('Falha de rede ao contactar Supabase.');
-    err.code = 'NETWORK_ERROR';
-    err.cause = error;
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function supabaseFetch(path, options = {}, key, useBearer = false) {
-  const { url } = getConfig();
-
-  if (!path || typeof path !== 'string') {
-    throw new Error('Caminho inválido para Supabase.');
-  }
-
-  const headers = {
-    apikey: key,
-    'Content-Type': 'application/json',
-    ...(useBearer ? { Authorization: 'Bearer ' + key } : {}),
-    ...(options.headers || {})
-  };
-
-  const response = await fetchWithTimeout(url + path, { ...options, headers });
-
-  const text = await response.text();
-  let body = null;
-  try { body = text ? JSON.parse(text) : null; }
-  catch { body = text || null; }
-
-  return { response, body };
-}
-
-function supabaseRequest(path, options = {}) {
-  const { anonKey } = getConfig();
-  return supabaseFetch(path, options, anonKey, false);
-}
-
-function supabaseAdminRequest(path, options = {}) {
-  const adminKey = getAdminKey();
-  return supabaseFetch(path, options, adminKey, true);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -297,13 +211,13 @@ async function getAuthUser(req) {
   if (!accessToken) return null;
 
   try {
-    const result = await supabaseRequest('/auth/v1/user', {
-      method: 'GET',
-      headers: { Authorization: 'Bearer ' + accessToken }
-    });
+    const secret = String(process.env.JWT_SECRET || '').trim();
+    if (!secret) return null;
 
-    if (!result.response.ok || !result.body || !result.body.id) return null;
-    return result.body;
+    const payload = jwt.verify(accessToken, secret);
+    if (!payload || !payload.id) return null;
+
+    return { id: payload.id, email: payload.email, role: payload.role };
   } catch (error) {
     console.error('[_lib] getAuthUser:', error.code || error.message);
     return null;
@@ -567,26 +481,26 @@ async function getPlanForUserDetailed(userId) {
     } catch { /* cache miss ou KV off */ }
   }
 
-  // 2) Banco
+  // 2) Banco (Neon)
   let plan = 'free';
   let degraded = false;
   let reason = null;
 
   try {
-    const result = await supabaseAdminRequest(
-      `/rest/v1/effective_plan?user_id=eq.${encodeURIComponent(userId)}&select=plan&limit=1`,
-      { method: 'GET' }
-    );
+    const sql = neon(process.env.DATABASE_URL);
+    const rows = await sql`
+      SELECT plan
+      FROM effective_plan
+      WHERE user_id = ${userId}
+      LIMIT 1
+    `;
 
-    if (!result.response.ok) {
-      // 5xx, 4xx → não conseguimos confirmar
-      degraded = true;
-      reason = `http_${result.response.status}`;
-      console.warn(
-        `[_lib] getPlanForUserDetailed: HTTP ${result.response.status} para user ${userId}`
-      );
-    } else if (Array.isArray(result.body) && result.body[0]) {
-      const candidate = result.body[0].plan;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      // Sem linha → usuário realmente free (não é degradação)
+      plan = 'free';
+      reason = 'no_row';
+    } else {
+      const candidate = rows[0].plan;
       if (VALID_PLANS.has(candidate)) {
         plan = candidate;
         reason = 'ok';
@@ -594,19 +508,11 @@ async function getPlanForUserDetailed(userId) {
         degraded = true;
         reason = 'invalid_plan_value';
       }
-    } else {
-      // Sem linha → usuário realmente free (não é degradação)
-      plan = 'free';
-      reason = 'no_row';
     }
   } catch (err) {
-    // Erro de rede, timeout, etc.
     degraded = true;
     reason = err.code || 'query_error';
-    console.warn(
-      '[_lib] getPlanForUserDetailed query falhou:',
-      reason
-    );
+    console.warn('[_lib] getPlanForUserDetailed query falhou:', reason);
   }
 
   // 3) Cacheia APENAS se foi confirmado com sucesso
@@ -647,7 +553,8 @@ async function invalidatePlanCache(userId) {
 // 8. CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
 function checkOrigin(req) {
-  // 🔓 TEMPORÁRIO: libera todas as origens para testes de migração
+  // 🔓 TEMPORÁRIO: libera todas as origens para testes de migração.
+  //    Reativar antes da produção (usar ALLOWED_ORIGINS).
   return true;
 }
 
@@ -735,20 +642,12 @@ module.exports = {
   VALID_PLANS,
   ALLOWED_ORIGINS,
 
-  // Config
-  getConfig,
-  getAdminKey,
-
   // HTTP
   sendJson,
   methodNotAllowed,
   parseBody,
   parseCookies,
   clientIp,
-
-  // Supabase
-  supabaseRequest,
-  supabaseAdminRequest,
 
   // Cookies
   setAuthCookies,
@@ -766,7 +665,7 @@ module.exports = {
 
   // Plano efetivo
   getPlanForUser,
-  getPlanForUserDetailed,   // ← NOVO
+  getPlanForUserDetailed,
   invalidatePlanCache,
 
   // CSRF

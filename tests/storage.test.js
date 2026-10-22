@@ -1,7 +1,5 @@
 // @vitest-environment node
 
-
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
@@ -12,17 +10,17 @@ function setB2Env({
   region = 'us-east-005',
   keyId = 'key-id',
   appKey = 'application-key',
-  mediaBucket = 'media-images',
+  imageBucket = 'joseph.matthos',
+  audioBucket = 'josephmatthos',
   endpoint = 'https://s3.us-east-005.backblazeb2.com',
-  imagePublicUrl = 'https://f005.backblazeb2.com/file/media-images'
+  imagePublicUrl = 'https://f005.backblazeb2.com/file/joseph.matthos'
 } = {}) {
   vi.stubEnv('B2_MEDIA_REGION', region);
   vi.stubEnv('B2_KEY_ID', keyId);
   vi.stubEnv('B2_APPLICATION_KEY', appKey);
-  vi.stubEnv('B2_MEDIA_BUCKET', mediaBucket);
-  vi.stubEnv('B2_BUCKET_SITE_ASSETS', '');
-  vi.stubEnv('B2_BUCKET_AUDIO_PREVIEW', '');
-  vi.stubEnv('B2_BUCKET_AUDIO_PREMIUM', 'audio-premium');
+  vi.stubEnv('B2_IMAGE_BUCKET', imageBucket);
+  vi.stubEnv('B2_AUDIO_BUCKET', audioBucket);
+  vi.stubEnv('B2_MEDIA_BUCKET', audioBucket); // fallback legado, lido por getPublicUrl e scripts de sync
   vi.stubEnv('B2_MEDIA_ENDPOINT', endpoint);
   vi.stubEnv('B2_IMAGE_PUBLIC_URL', imagePublicUrl);
 }
@@ -41,21 +39,19 @@ describe('B2 storage configuration', () => {
   });
 
   it('uses the regional B2 endpoints and configured bucket names', () => {
-    vi.stubEnv('B2_BUCKET_SITE_ASSETS', 'assets/img');
     setB2Env({
       region: 'us-east-005',
       keyId: 'key-id',
-      appKey: 'application-key',
-      mediaBucket: 'media-images'
+      appKey: 'application-key'
     });
 
     expect(storage.getStorageConfig()).toMatchObject({
       endpoint: 'https://s3.us-east-005.backblazeb2.com',
       publicBaseUrl: 'https://f005.backblazeb2.com/file'
     });
-    expect(storage.getBucketForKind('image')).toBe('media-images');
-    expect(storage.getBucketForKind('audio-preview')).toBe('media-images');
-    expect(storage.getBucketForKind('audio-full')).toBe('media-images');
+    expect(storage.getBucketForKind('image')).toBe('joseph.matthos');
+    expect(storage.getBucketForKind('audio-preview')).toBe('josephmatthos');
+    expect(storage.getBucketForKind('audio-full')).toBe('josephmatthos');
   });
 
   it('uses the configured image URL and preserves nested object paths', () => {
@@ -63,7 +59,6 @@ describe('B2 storage configuration', () => {
       region: 'us-east-005',
       keyId: 'key-id',
       appKey: 'application-key',
-      mediaBucket: 'josephmatthos',
       imagePublicUrl: 'https://f005.backblazeb2.com/file/josephmatthos'
     });
 

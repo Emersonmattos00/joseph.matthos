@@ -18,16 +18,13 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname), {
   extensions: ['html'],
   index: 'index.html',
-  // Impede que arquivos ocultos (como .env, .git) sejam servidos
   dotfiles: 'deny',
-  // Bloqueia a listagem de diretórios
   setHeaders: (res, filePath) => {
-    // Adiciona cabeçalhos de segurança básicos para dev
     res.setHeader('X-Content-Type-Options', 'nosniff');
   }
 }));
 
-// Rota explícita para o Service Worker (precisa ser servido da raiz)
+// Rota explícita para o Service Worker
 app.get('/sw.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'sw.js'));
 });
@@ -40,6 +37,7 @@ const apiFiles = ['public', 'auth', 'stream', 'payments', 'admin'];
 for (const name of apiFiles) {
   try {
     const handler = require('./api/' + name + '.js');
+    
     app.all('/api/' + name, async (req, res) => {
       try {
         await handler(req, res);
@@ -51,8 +49,25 @@ for (const name of apiFiles) {
       }
     });
     console.log('✅ Rota /api/' + name + ' carregada');
+    
   } catch (err) {
-    console.warn('⚠️  Falha ao carregar /api/' + name + ':', err.message);
+    if (err.message.includes('require() cannot be used on an ESM graph')) {
+      app.all('/api/' + name, async (req, res) => {
+        try {
+          const module = await import('./api/' + name + '.js');
+          const handler = module.default || module;
+          await handler(req, res);
+        } catch (e) {
+          console.error('Erro em /api/' + name + ':', e);
+          if (!res.headersSent) {
+            res.status(500).json({ ok: false, error: e.message });
+          }
+        }
+      });
+      console.log('✅ Rota /api/' + name + ' carregada (via ESM)');
+    } else {
+      console.warn('⚠️  Falha ao carregar /api/' + name + ':', err.message);
+    }
   }
 }
 
@@ -61,13 +76,15 @@ for (const name of apiFiles) {
 // ─────────────────────────────────────────────────────────────
 app.get('*', (req, res, next) => {
   if (req.url.startsWith('/api/')) return next();
-  // Não serve arquivos que começam com ponto (ex: .env)
   if (path.basename(req.path).startsWith('.')) {
     return res.status(403).send('Acesso negado');
   }
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// ─────────────────────────────────────────────────────────────
+// START SERVER
+// ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Dev server rodando em http://0.0.0.0:${PORT}`);

@@ -58,9 +58,6 @@ function getS3Client() {
   return client;
 }
 
-/**
- * Mapeia o tipo de arquivo para o bucket correto.
- */
 function getBucketForKind(kind) {
   const imageBucket = String(process.env.B2_IMAGE_BUCKET || 'joseph.matthos').trim();
   const audioBucket = String(process.env.B2_AUDIO_BUCKET || 'josephmatthos').trim();
@@ -77,6 +74,7 @@ function getPublicUrl(bucket, key) {
     .trim()
     .replace(/\/+$/, '');
   const mediaBucket = String(process.env.B2_MEDIA_BUCKET || '').trim();
+  
   if (imagePublicUrl && bucket === mediaBucket) {
     return `${imagePublicUrl}/${encodeKey(key)}`;
   }
@@ -137,8 +135,8 @@ async function createSignedDownloadUrl(bucket, key, expiresInSec, downloadFilena
 
 /**
  * Gera URL temporária para reprodução de áudio.
- * O banco armazena o caminho completo (ex: "josephmatthos/pesodacaneta/...").
- * Portanto, NENHUM prefixo adicional deve ser adicionado aqui.
+ * O banco armazena o caminho completo (ex: "pesodacaneta/...").
+ * NENHUM prefixo adicional deve ser adicionado aqui.
  */
 async function getPlaybackUrl(key, isFull = false) {
   if (!key || typeof key !== 'string') {
@@ -148,13 +146,8 @@ async function getPlaybackUrl(key, isFull = false) {
   const bucket = getBucketForKind(isFull ? 'audio-full' : 'audio-preview');
   if (!bucket) throw new Error('Bucket de áudio não configurado.');
 
-  // Adiciona o prefixo apenas se não existir
-  let finalKey = key;
-  if (!finalKey.startsWith('josephmatthos/')) {
-    finalKey = `josephmatthos/${finalKey}`;
-  }
-
-  return createSignedDownloadUrl(bucket, finalKey, 300);
+  // O B2 espera o caminho relativo dentro do bucket (a chave que já está no banco)
+  return createSignedDownloadUrl(bucket, key, 300);
 }
 
 module.exports = {

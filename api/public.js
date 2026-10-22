@@ -1,18 +1,23 @@
 /* ============================================================
-   API: /api/public — Catálogo público
-   Retorna: content, albums, tracks, plans, rentalPlans
-   ⚠️  Nunca expor streamKey/previewKey (chaves internas do B2).
+   API: /api/public — Catálogo público e Metadados do Player
    ============================================================ */
 
 const { eq, desc, asc } = require('drizzle-orm');
 const { db } = require('./_db');
-const {
-  tracks,
-  albums,
-  artists,
-  plans,
-  rentalProducts,
-} = require('../src/schema.js');
+const { tracks, albums, artists, plans, rentalProducts } = require('../src/schema.js');
+
+// Função auxiliar para garantir que a URL da capa seja sempre pública
+function getPublicCoverUrl(coverUrl, albumSlug) {
+  if (!coverUrl) {
+    return `https://f005.backblazeb2.com/file/joseph.matthos/assets/img/${albumSlug || 'default'}.webp`;
+  }
+  // Se já for uma URL completa, retorna como está
+  if (coverUrl.startsWith('http')) {
+    return coverUrl;
+  }
+  // Se for apenas o caminho, monta a URL do B2
+  return `https://f005.backblazeb2.com/file/joseph.matthos/${coverUrl.replace(/^\/+/, '')}`;
+}
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -23,43 +28,90 @@ module.exports = async (req, res) => {
 
   try {
     // ============================================
-    // 1. BUSCAR ÁLBUNS COM ARTISTA
+    // ROTA DO PLAYER: METADADOS DA FAIXA E LETRA
+    // ============================================
+    if (req.query.track) {
+      const trackId = req.query.track;
+
+      const trackResult = await db
+        .select({
+          id: tracks.id,
+          title: tracks.title,
+          durationSeconds: tracks.durationSeconds,
+          trackNumber: tracks.trackNumber,
+          albumId: tracks.albumId,
+          albumTitle: albums.title,
+          albumSlug: albums.slug,
+          coverUrl: albums.coverUrl,
+          artistName: artists.name,
+          lyrics: tracks.lyrics, // JSONB: [{ time, text }]
+        })
+        .from(tracks)
+        .leftJoin(albums, eq(tracks.albumId, albums.id))
+        .leftJoin(artists, eq(tracks.artistId, artists.id))
+        .where(eq(tracks.id, trackId))
+        .limit(1);
+
+      if (trackResult.length === 0) {
+        return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
+      }
+
+      const track = trackResult[0];
+      const finalCoverUrl = getPublicCoverUrl(track.coverUrl, track.albumSlug);
+
+      const albumTracksResult = await db
+        .select({
+          id: tracks.id,
+          title: tracks.title,
+          durationSeconds: tracks.durationSeconds,
+          trackNumber: tracks.trackNumber,
+          status: tracks.status,
+        })
+        .from(tracks)
+        .where(eq(tracks.albumId, track.albumId))
+        .orderBy(asc(tracks.trackNumber));
+
+      const albumTracksFormatted = albumTracksResult.map(t => ({
+        id: t.id,
+        title: t.title,
+        durationSeconds: t.durationSeconds,
+        duration: t.durationSeconds
+          ? `${Math.floor(t.durationSeconds / 60)}:${String(t.durationSeconds % 60).padStart(2, '0')}`
+          : '--:--',
+        locked: t.status !== 'PUBLISHED',
+      }));
+
+      return res.status(200).json({
+        ok: true,
+        id: track.id,
+        title: track.title,
+        artist: track.artistName || 'Joseph Matthos',
+        albumTitle: track.albumTitle || 'Álbum',
+        coverUrl: finalCoverUrl,
+        lyrics: track.lyrics || [],
+        albumTracks: albumTracksFormatted,
+      });
+    }
+
+    // ============================================
+    // CATÁLOGO COMPLETO (SITE)
     // ============================================
     const albumsRaw = await db
       .select({
-        id: albums.id,
-        title: albums.title,
-        slug: albums.slug,
-        releaseDate: albums.releaseDate,
-        coverUrl: albums.coverUrl,
-        sortOrder: albums.sortOrder,
-        upc: albums.upc,
-        artistId: albums.artistId,
-        artistName: artists.name,
-        artistSlug: artists.slug,
+        id: albums.id, title: albums.title, slug: albums.slug, releaseDate: albums.releaseDate,
+        coverUrl: albums.coverUrl, sortOrder: albums.sortOrder, upc: albums.upc,
+        artistId: albums.artistId, artistName: artists.name, artistSlug: artists.slug,
       })
       .from(albums)
       .leftJoin(artists, eq(albums.artistId, artists.id))
       .orderBy(asc(albums.sortOrder), desc(albums.releaseDate));
 
-    // ============================================
-    // 2. BUSCAR FAIXAS PUBLICADAS
-    //    (sem streamKey/previewKey — o cliente não precisa)
-    // ============================================
     const tracksRaw = await db
       .select({
-        id: tracks.id,
-        title: tracks.title,
-        slug: tracks.slug,
-        durationSeconds: tracks.durationSeconds,
-        trackNumber: tracks.trackNumber,
-        albumId: tracks.albumId,
-        albumTitle: albums.title,
-        albumSlug: albums.slug,
-        coverUrl: albums.coverUrl,
-        artistId: tracks.artistId,
-        artistName: artists.name,
-        status: tracks.status,
+        id: tracks.id, title: tracks.title, slug: tracks.slug, durationSeconds: tracks.durationSeconds,
+        trackNumber: tracks.trackNumber, albumId: tracks.albumId, albumTitle: albums.title,
+        albumSlug: albums.slug, coverUrl: albums.coverUrl, artistId: tracks.artistId,
+        artistName: artists.name, status: tracks.status,
       })
       .from(tracks)
       .leftJoin(albums, eq(tracks.albumId, albums.id))
@@ -67,132 +119,63 @@ module.exports = async (req, res) => {
       .where(eq(tracks.status, 'PUBLISHED'))
       .orderBy(asc(tracks.albumId), asc(tracks.trackNumber));
 
-    // ============================================
-    // 3. BUSCAR PLANOS ATIVOS
-    // ============================================
     let plansRaw = [];
     try {
-      plansRaw = await db
-        .select()
-        .from(plans)
-        .where(eq(plans.active, true));
-    } catch (err) {
-      console.warn('[public] planos indisponíveis:', err.message);
-    }
+      plansRaw = await db.select().from(plans).where(eq(plans.active, true));
+    } catch (err) { console.warn('[public] planos indisponíveis:', err.message); }
 
-    // ============================================
-    // 4. BUSCAR PRODUTOS DE ALUGUEL ATIVOS
-    // ============================================
     let rentalRaw = [];
     try {
-      rentalRaw = await db
-        .select()
-        .from(rentalProducts)
-        .where(eq(rentalProducts.active, true))
-        .orderBy(asc(rentalProducts.sortOrder));
-    } catch (err) {
-      console.warn('[public] aluguéis indisponíveis:', err.message);
-    }
+      rentalRaw = await db.select().from(rentalProducts).where(eq(rentalProducts.active, true)).orderBy(asc(rentalProducts.sortOrder));
+    } catch (err) { console.warn('[public] aluguéis indisponíveis:', err.message); }
 
-    // ============================================
-    // 5. MONTAR ÁLBUNS COM FAIXAS AGRUPADAS
-    // ============================================
     const tracksByAlbum = new Map();
     for (const t of tracksRaw) {
       if (!t.albumId) continue;
       if (!tracksByAlbum.has(t.albumId)) tracksByAlbum.set(t.albumId, []);
       tracksByAlbum.get(t.albumId).push({
-        id: t.id,
-        title: t.title,
-        slug: t.slug,
-        durationSeconds: t.durationSeconds,
-        trackNumber: t.trackNumber,
-        trackIndex: t.trackNumber, // compatibilidade com o frontend
-        coverUrl: t.coverUrl,
+        id: t.id, title: t.title, slug: t.slug, durationSeconds: t.durationSeconds,
+        trackNumber: t.trackNumber, trackIndex: t.trackNumber, coverUrl: getPublicCoverUrl(t.coverUrl, t.albumSlug),
       });
     }
 
     const albumsWithTracks = albumsRaw.map((a) => {
       const albumTracks = tracksByAlbum.get(a.id) || [];
       return {
-        id: a.id,
-        title: a.title,
-        slug: a.slug,
-        year: a.releaseDate ? String(a.releaseDate).slice(0, 4) : '',
-        releaseDate: a.releaseDate,
-        coverUrl: a.coverUrl,
-        coverImage: a.coverUrl, // compatibilidade
-        coverInitials: a.title ? a.title.charAt(0) : '♪',
-        type: 'album',
-        artistId: a.artistId,
-        artistName: a.artistName,
-        artistSlug: a.artistSlug,
-        tracks: albumTracks,
+        id: a.id, title: a.title, slug: a.slug, year: a.releaseDate ? String(a.releaseDate).slice(0, 4) : '',
+        releaseDate: a.releaseDate, coverUrl: getPublicCoverUrl(a.coverUrl, a.slug), coverImage: getPublicCoverUrl(a.coverUrl, a.slug),
+        coverInitials: a.title ? a.title.charAt(0) : '♪', type: 'album',
+        artistId: a.artistId, artistName: a.artistName, artistSlug: a.artistSlug, tracks: albumTracks,
       };
     });
 
-    // ============================================
-    // 6. NORMALIZAR PLANOS (formato do frontend)
-    // ============================================
     const plansNormalized = plansRaw.map((p) => ({
-      id: p.id,
-      name: p.name,
-      priceCents: p.priceCents,
-      currency: p.currency,
-      interval: p.intervalUnit === 'MONTH' ? 'month'
-              : p.intervalUnit === 'YEAR'  ? 'year'
-              : p.intervalUnit === 'DAY'   ? 'day'
-              : null,
-      intervalCount: p.intervalCount,
-      available: true,
+      id: p.id, name: p.name, priceCents: p.priceCents, currency: p.currency,
+      interval: p.intervalUnit === 'MONTH' ? 'month' : p.intervalUnit === 'YEAR' ? 'year' : p.intervalUnit === 'DAY' ? 'day' : null,
+      intervalCount: p.intervalCount, available: true,
     }));
 
-    // ============================================
-    // 7. NORMALIZAR ALUGUÉIS
-    // ============================================
     const rentalNormalized = rentalRaw.map((r) => {
       const hours = r.durationHours || 24;
       const days = Math.max(1, Math.floor(hours / 24));
       return {
-        id: r.id,
-        label: r.name,
-        days,
-        hours,
-        price: (r.priceCents || 0) / 100,
-        priceCents: r.priceCents,
-        popular: false,
-        available: r.active !== false && (r.priceCents || 0) > 0,
-        trackId: r.trackId,
-        albumId: r.albumId,
+        id: r.id, label: r.name, days, hours, price: (r.priceCents || 0) / 100, priceCents: r.priceCents,
+        popular: false, available: r.active !== false && (r.priceCents || 0) > 0, trackId: r.trackId, albumId: r.albumId,
       };
     });
 
-    // ============================================
-    // 8. RESPOSTA FINAL
-    //    tracks no topo sem as chaves internas
-    // ============================================
     const tracksPublic = tracksRaw.map(({ ...rest }) => rest);
 
     return res.status(200).json({
-      ok: true,
-      content: null, // o site.js usa DEFAULT_CONTENT
-      albums: albumsWithTracks,
-      tracks: tracksPublic,
-      plans: plansNormalized,
-      rentalPlans: rentalNormalized,
+      ok: true, content: null, albums: albumsWithTracks, tracks: tracksPublic,
+      plans: plansNormalized, rentalPlans: rentalNormalized,
       stats: {
-        totalAlbums: albumsWithTracks.length,
-        totalTracks: tracksRaw.length,
-        totalPlans: plansNormalized.length,
-        totalRentals: rentalNormalized.length,
+        totalAlbums: albumsWithTracks.length, totalTracks: tracksRaw.length,
+        totalPlans: plansNormalized.length, totalRentals: rentalNormalized.length,
       },
     });
   } catch (error) {
     console.error('Erro em /api/public:', error);
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro ao buscar catálogo',
-      message: error.message,
-    });
+    return res.status(500).json({ ok: false, error: 'Erro ao buscar catálogo', message: error.message });
   }
 };
