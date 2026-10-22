@@ -246,12 +246,6 @@ async function initPlayer(trackId) {
     console.error('[player] Erro no áudio:', audio.error);
     els.title.textContent = 'Erro ao carregar áudio';
   };
-
-  // Tenta tocar (precisa de interação do usuário no mobile)
-  audio.play().catch(err => {
-    console.warn('[player] Autoplay bloqueado:', err);
-    // Se falhar, o usuário precisa clicar no play manualmente
-  });
 }
 
 // ─── CONTROLES GLOBAIS ───
