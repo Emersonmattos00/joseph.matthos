@@ -178,7 +178,7 @@ function syncLyrics() {
 async function initPlayer(trackId) {
   currentTrackId = trackId;
   currentLyricIndex = -1;
-  document.body.classList.remove('immersive-mode'); // Sempre começa com os menus visíveis
+  document.body.classList.remove('immersive-mode');
 
   let meta;
   try { meta = await fetchMetadata(trackId); }
@@ -238,30 +238,35 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. Inicia o Howler
-  if (sound) sound.unload();
-  sound = new Howl({
-    src: [stream.audioUrl],
-    html5: true,
-    onplay: () => {
-      els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-      updateInterval = setInterval(() => {
-        const seek = sound.seek() || 0;
-        const duration = sound.duration() || 0;
-        els.progressFill.style.width = `${(seek / duration) * 100}%`;
-        els.currentTime.textContent = formatTime(seek);
-        syncLyrics();
-      }, 250);
-      // A linha resetImmersiveTimer() foi REMOVIDA daqui
-    },
-    onpause: () => {
-      els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-      // A linha desativarModoImersivo() foi REMOVIDA daqui
-    },
-    onload: () => { els.duration.textContent = formatTime(sound.duration()); }
-  });
+  // 4. REAPROVEITA O HOWL (Não cria um novo a cada música)
+  if (!sound) {
+    // Se for a primeira vez, cria o Howl
+    sound = new Howl({
+      src: [stream.audioUrl],
+      html5: true,
+      onplay: () => {
+        els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
+        clearInterval(updateInterval);
+        updateInterval = setInterval(() => {
+          const seek = sound.seek() || 0;
+          const duration = sound.duration() || 0;
+          els.progressFill.style.width = `${(seek / duration) * 100}%`;
+          els.currentTime.textContent = formatTime(seek);
+          syncLyrics();
+        }, 250);
+      },
+      onpause: () => {
+        els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+        clearInterval(updateInterval);
+      },
+      onload: () => { els.duration.textContent = formatTime(sound.duration()); }
+    });
+  } else {
+    // Se já existe, apenas troca a música e dá play
+    sound.unload(); // Limpa o buffer antigo
+    sound.src = [stream.audioUrl];
+    sound.load();
+  }
 
   sound.play();
 }
