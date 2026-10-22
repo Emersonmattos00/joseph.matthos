@@ -3,6 +3,7 @@ const { db } = require('./_db');
 const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { streamRatelimit } = require('./_cache');
 
 const s3Client = new S3Client({
@@ -12,7 +13,12 @@ const s3Client = new S3Client({
   credentials: {
     accessKeyId: process.env.B2_KEY_ID,
     secretAccessKey: process.env.B2_APPLICATION_KEY
-  }
+  },
+  // Timeout curto para não travar o servidor se o B2 não responder
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: 5000,
+    requestTimeout: 15000
+  })
 });
 
 module.exports = async (req, res) => {
@@ -87,35 +93,41 @@ module.exports = async (req, res) => {
     try {
       s3Response = await s3Client.send(command);
     } catch (s3Err) {
-      console.error('[stream] Erro no S3:', s3Err.message);
-      return res.status(404).json({ error: 'Arquivo não encontrado no Backblaze B2', details: s3Err.message });
+      console.error('[stream] Erro no S3:', s3Err.name, s3Err.message);
+      return res.status(404).json({ 
+        error: 'Arquivo não encontrado no Backblaze B2', 
+        details: s3Err.message,
+        code: s3Err.name
+      });
     }
 
-    // Define os cabeçalhos para o navegador
+    // Cabeçalhos para o navegador
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
+    if (s3Response.ContentLength) {
+      res.setHeader('Content-Length', s3Response.ContentLength);
+    }
 
-    // TRATAMENTO UNIVERSAL DO STREAM DO S3
+    // Tratamento universal do Body (Node Stream, Web Stream ou Blob)
     const body = s3Response.Body;
     
     if (!body) {
       return res.status(500).json({ error: 'Corpo do arquivo vazio no B2' });
     }
 
-    // Se o Body for um Readable do Node (o mais comum no SDK v3 rodando no Node)
     if (typeof body.pipe === 'function') {
+      // Node Stream (padrão no ambiente Node.js)
       body.pipe(res);
     } 
-    // Se o Body for um Web ReadableStream (padrão do SDK v3 no navegador, mas às vezes no Node também)
     else if (typeof body.getReader === 'function') {
+      // Web ReadableStream
       const { Readable } = require('stream');
       Readable.fromWeb(body).pipe(res);
     }
-    // Se for um Blob (fallback)
     else if (typeof body.arrayBuffer === 'function') {
+      // Blob (fallback)
       const buffer = Buffer.from(await body.arrayBuffer());
-      res.setHeader('Content-Length', buffer.length);
       res.end(buffer);
     } 
     else {
