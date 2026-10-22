@@ -1,6 +1,5 @@
 // js/player.js
 
-// ─── UTILITÁRIOS ─────────────────────────────────────
 function formatTime(secs) {
   if (isNaN(secs) || secs < 0) return '0:00';
   const m = Math.floor(secs / 60);
@@ -14,7 +13,6 @@ function esc(s) {
   }[c]));
 }
 
-// ─── ELEMENTOS DA UI ─────────────────────────────────
 const els = {
   container: document.getElementById('playerContainer'),
   cover: document.getElementById('playerCover'),
@@ -22,6 +20,8 @@ const els = {
   artist: document.getElementById('playerArtist'),
   playBtn: document.getElementById('playBtn'),
   playIcon: document.getElementById('playIcon'),
+  nextBtn: document.getElementById('nextBtn'),
+  prevBtn: document.getElementById('prevBtn'),
   progressBar: document.getElementById('progressBar'),
   progressFill: document.getElementById('progressFill'),
   currentTime: document.getElementById('currentTime'),
@@ -31,7 +31,8 @@ const els = {
   albumHeaderCover: document.getElementById('albumHeaderCover'),
   albumHeaderTitle: document.getElementById('albumHeaderTitle'),
   albumHeaderArtist: document.getElementById('albumHeaderArtist'),
-  albumHeaderCount: document.getElementById('albumHeaderCount')
+  albumHeaderCount: document.getElementById('albumHeaderCount'),
+  fullscreenBtn: document.getElementById('fullscreenBtn') // Novo botão
 };
 
 let sound = null;
@@ -41,10 +42,9 @@ let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
 
-// ─── ABAS ────────────────────────────────────────────
+// ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
-
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
     tabs.forEach(t => t.classList.remove('active'));
@@ -54,14 +54,14 @@ tabs.forEach(tab => {
     desativarModoImersivo();
   });
 });
-
 function switchTab(tabName) {
   const btn = document.querySelector(`.mobile-tab[data-tab="${tabName}"]`);
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO ───────────────────────────────────
+// ─── MODO IMERSIVO (RETRÁTIL) ───
 function ativarModoImersivo() {
+  // Só ativa se a música estiver tocando e a aba ativa for a "Player"
   if (sound && sound.playing() && document.getElementById('tab-player').classList.contains('active')) {
     els.container.classList.add('immersive-mode');
   }
@@ -72,18 +72,40 @@ function desativarModoImersivo() {
 }
 function resetImmersiveTimer() {
   clearTimeout(immersiveTimeout);
+  // 4 segundos após a última interação, ativa o modo imersivo
   immersiveTimeout = setTimeout(ativarModoImersivo, 4000);
 }
+// Qualquer toque na tela reseta o timer e mostra os menus de volta
 els.container.addEventListener('touchstart', desativarModoImersivo, { passive: true });
+els.container.addEventListener('mousemove', desativarModoImersivo, { passive: true });
 els.container.addEventListener('click', desativarModoImersivo, { passive: true });
 
-// ─── FETCHES ─────────────────────────────────────────
+
+// ─── TELA CHEIA (MAXIMIZAR) ───
+if (els.fullscreenBtn) {
+  els.fullscreenBtn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      // Se não está em tela cheia, tenta ativar
+      if (els.container.requestFullscreen) {
+        els.container.requestFullscreen();
+      } else if (els.container.webkitRequestFullscreen) { /* Safari */
+        els.container.webkitRequestFullscreen();
+      }
+    } else {
+      // Se já está em tela cheia, sai
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  });
+}
+
+// ─── FETCHES ───
 async function fetchMetadata(trackId) {
   const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { credentials: 'same-origin' });
   if (!r.ok) throw new Error('Faixa não encontrada');
   return await r.json();
 }
-
 async function fetchStreamUrl(trackId) {
   const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}`, {
     credentials: 'same-origin', cache: 'no-store'
@@ -92,7 +114,7 @@ async function fetchStreamUrl(trackId) {
   return await r.json();
 }
 
-// ─── LETRA ───────────────────────────────────────────
+// ─── LETRA ───
 function renderLyrics(lyricsArray) {
   if (!lyricsArray || !lyricsArray.length) {
     els.lyricsContent.innerHTML = '<p class="lyrics-empty">Esta faixa não tem letra cadastrada.</p>';
@@ -114,7 +136,6 @@ function renderLyrics(lyricsArray) {
     });
   });
 }
-
 function highlightLyricLine(index) {
   if (index < 0 || index >= parsedLyrics.length) return;
   parsedLyrics.forEach((l, i) => l.element.classList.toggle('active', i === index));
@@ -125,7 +146,6 @@ function highlightLyricLine(index) {
     container.scrollTo({ top: scrollPos, behavior: 'smooth' });
   }
 }
-
 function syncLyrics() {
   if (!sound || !parsedLyrics.length) return;
   const seek = sound.seek() || 0;
@@ -140,7 +160,7 @@ function syncLyrics() {
   }
 }
 
-// ─── INIT ────────────────────────────────────────────
+// ─── INIT ───
 async function initPlayer(trackId) {
   currentTrackId = trackId;
   currentLyricIndex = -1;
@@ -153,25 +173,30 @@ async function initPlayer(trackId) {
   els.title.textContent = meta.title;
   els.artist.textContent = `${meta.artist} · ${meta.albumTitle}`;
   
-  // Força a capa e o fundo (se a URL for válida)
-  if (meta.coverUrl && meta.coverUrl.startsWith('http')) {
-    els.cover.src = meta.coverUrl;
-    els.cover.alt = meta.albumTitle;
+  if (meta.coverUrl) {
+    // Se a imagem for um <img>, usamos src. Se for <div> com background, usamos background-image.
+    // O código abaixo cobre os dois casos, garantindo que apareça.
+    if (els.cover.tagName === 'IMG') {
+      els.cover.src = meta.coverUrl;
+    } else {
+      els.cover.style.backgroundImage = `url('${meta.coverUrl}')`;
+    }
     els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
-    els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
   }
   
   renderLyrics(meta.lyrics);
 
   // 2. Atualiza a Lista
+  if (meta.coverUrl) {
+    els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
+  }
   els.albumHeaderTitle.textContent = meta.albumTitle;
   els.albumHeaderArtist.textContent = meta.artist;
   els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
 
   els.musicList.innerHTML = meta.albumTracks.map((t, index) => {
     const isPlaying = t.id === trackId;
-    // Se o backend não enviou durationSeconds, usa o fallback
-    const dur = t.duration || '--:--';
+    const dur = t.durationSeconds ? formatTime(t.durationSeconds) : '--:--';
     
     return `
       <div class="music-item ${isPlaying ? 'playing' : ''}" onclick="window.tocarMusicaDaLista('${t.id}')">
@@ -215,12 +240,12 @@ async function initPlayer(trackId) {
         els.currentTime.textContent = formatTime(seek);
         syncLyrics();
       }, 250);
-      resetImmersiveTimer();
+      resetImmersiveTimer(); // Começa a contar os 4 segundos
     },
     onpause: () => {
       els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
       clearInterval(updateInterval);
-      desativarModoImersivo();
+      desativarModoImersivo(); // Mostra os menus de volta
     },
     onload: () => { els.duration.textContent = formatTime(sound.duration()); }
   });
@@ -228,17 +253,15 @@ async function initPlayer(trackId) {
   sound.play();
 }
 
-// ─── CONTROLES GLOBAIS (Chamados pelo HTML) ───
+// ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
   if (!sound) return;
   sound.playing() ? sound.pause() : sound.play();
 };
-
 window.playerNext = () => {
   if (!sound) return;
   sound.seek(Math.min(sound.duration(), sound.seek() + 10));
 };
-
 window.playerPrev = () => {
   if (!sound) return;
   sound.seek(Math.max(0, sound.seek() - 10));
@@ -260,7 +283,7 @@ window.tocarMusicaDaLista = async (id) => {
 window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
 window.abrirModalAluguel = () => { if (currentTrackId) alert(`Abrindo aluguel: ${currentTrackId}`); };
 
-// ─── BOOT ────────────────────────────────────────────
+// ─── BOOT ───
 window.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
