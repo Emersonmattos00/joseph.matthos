@@ -2,7 +2,6 @@
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { db } = require('./_db');
 const { users } = require('../src/schema.js');
 const { eq } = require('drizzle-orm');
 

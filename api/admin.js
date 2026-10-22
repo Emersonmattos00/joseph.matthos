@@ -12,16 +12,20 @@ const {
   signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-const { db } = require('./_db');
-const schema = require('../src/schema.js');
+// Importa o db e os operadores via _db.js (que já tem build CJS funcional)
+const { db, eq, and, or, asc, desc, sql, inArray } = require('./_db');
+
+// Importa o schema via _db.js (que já tem o schema carregado em CJS)
+const schema = require('./_db').schema;
+
 const { tracks, albums, artists } = schema;
-const { eq, and, asc, desc, sql, inArray } = require('drizzle-orm');
 
 const {
   uploadObject, createSignedUploadUrl: b2CreateSignedUploadUrl,
   createSignedDownloadUrl: b2CreateSignedDownloadUrl,
   getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists
 } = require('./_storage');
+
 
 // Constantes
 const SESSION_COOKIE_PROD = '__Host-jm_admin';
@@ -277,6 +281,17 @@ async function handleUploadConfirm(req, res, session) {
   const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
   return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
 }
+
+const expectedUser = String(process.env.ADMIN_USER || '').trim();
+const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
+console.log('[admin/login] expectedUser:', expectedUser);
+console.log('[admin/login] user recebido:', user);
+console.log('[admin/login] hash prefix:', hash.slice(0, 10));
+console.log('[admin/login] hash len:', hash.length);
+
+const userOk = timingSafeEq(user, expectedUser);
+const passOk = await verifyScrypt(pass, hash);
+console.log('[admin/login] userOk:', userOk, 'passOk:', passOk);
 
 // ─────────────────────────────────────────────────────────────
 // USUÁRIOS
