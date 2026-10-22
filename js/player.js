@@ -1,6 +1,5 @@
 // js/player.js
 
-// ─── UTILITÁRIOS ─────────────────────────────────────
 function formatTime(secs) {
   if (isNaN(secs) || secs < 0) return '0:00';
   const m = Math.floor(secs / 60);
@@ -14,7 +13,6 @@ function esc(s) {
   }[c]));
 }
 
-// ─── ELEMENTOS DA UI ─────────────────────────────────
 const els = {
   container: document.getElementById('playerContainer'),
   cover: document.getElementById('playerCover'),
@@ -22,6 +20,8 @@ const els = {
   artist: document.getElementById('playerArtist'),
   playBtn: document.getElementById('playBtn'),
   playIcon: document.getElementById('playIcon'),
+  nextBtn: document.getElementById('nextBtn'),
+  prevBtn: document.getElementById('prevBtn'),
   progressBar: document.getElementById('progressBar'),
   progressFill: document.getElementById('progressFill'),
   currentTime: document.getElementById('currentTime'),
@@ -31,17 +31,20 @@ const els = {
   albumHeaderCover: document.getElementById('albumHeaderCover'),
   albumHeaderTitle: document.getElementById('albumHeaderTitle'),
   albumHeaderArtist: document.getElementById('albumHeaderArtist'),
-  albumHeaderCount: document.getElementById('albumHeaderCount')
+  albumHeaderCount: document.getElementById('albumHeaderCount'),
+  fullscreenBtn: document.getElementById('fullscreenBtn')
 };
 
-let sound = null;
+let audio = new Audio();
 let updateInterval = null;
-let immersiveTimeout = null;
 let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
 
-// ─── ABAS ────────────────────────────────────────────
+// Força o ícone de play inicial (para não ficar dessincronizado)
+els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+
+// ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
 
@@ -51,7 +54,7 @@ tabs.forEach(tab => {
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    desativarModoImersivo();
+    document.body.classList.remove('immersive-mode');
   });
 });
 
@@ -60,24 +63,36 @@ function switchTab(tabName) {
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO ───────────────────────────────────
-function ativarModoImersivo() {
-  if (sound && sound.playing() && document.getElementById('tab-player').classList.contains('active')) {
-    els.container.classList.add('immersive-mode');
-  }
+// ─── MODO IMERSIVO ───
+function toggleModoImersivo() {
+  // Só ativa se estiver na aba Player E o áudio estiver tocando (não pausado)
+  if (!document.getElementById('tab-player').classList.contains('active')) return;
+  if (!audio.src || audio.paused) return;
+  
+  document.body.classList.toggle('immersive-mode');
 }
-function desativarModoImersivo() {
-  els.container.classList.remove('immersive-mode');
-  resetImmersiveTimer();
-}
-function resetImmersiveTimer() {
-  clearTimeout(immersiveTimeout);
-  immersiveTimeout = setTimeout(ativarModoImersivo, 4000);
-}
-els.container.addEventListener('touchstart', desativarModoImersivo, { passive: true });
-els.container.addEventListener('click', desativarModoImersivo, { passive: true });
 
-// ─── FETCHES ─────────────────────────────────────────
+// Evento de clique na tela (ignora botões)
+els.container.addEventListener('click', (e) => {
+  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
+    return;
+  }
+  toggleModoImersivo();
+});
+
+// ─── TELA CHEIA ───
+if (els.fullscreenBtn) {
+  els.fullscreenBtn.addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      if (els.container.requestFullscreen) els.container.requestFullscreen();
+      else if (els.container.webkitRequestFullscreen) els.container.webkitRequestFullscreen();
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen();
+    }
+  });
+}
+
+// ─── FETCHES ───
 async function fetchMetadata(trackId) {
   const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { credentials: 'same-origin' });
   if (!r.ok) throw new Error('Faixa não encontrada');
@@ -92,7 +107,7 @@ async function fetchStreamUrl(trackId) {
   return await r.json();
 }
 
-// ─── LETRA ───────────────────────────────────────────
+// ─── LETRA ───
 function renderLyrics(lyricsArray) {
   if (!lyricsArray || !lyricsArray.length) {
     els.lyricsContent.innerHTML = '<p class="lyrics-empty">Esta faixa não tem letra cadastrada.</p>';
@@ -108,8 +123,8 @@ function renderLyrics(lyricsArray) {
   }));
   els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!sound) return;
-      sound.seek(Number(btn.dataset.time));
+      if (!audio) return;
+      audio.currentTime = Number(btn.dataset.time);
       highlightLyricLine(Number(btn.dataset.index));
     });
   });
@@ -127,8 +142,8 @@ function highlightLyricLine(index) {
 }
 
 function syncLyrics() {
-  if (!sound || !parsedLyrics.length) return;
-  const seek = sound.seek() || 0;
+  if (!audio || !parsedLyrics.length) return;
+  const seek = audio.currentTime || 0;
   let newIndex = -1;
   for (let i = 0; i < parsedLyrics.length; i++) {
     if (parsedLyrics[i].time <= seek) newIndex = i;
@@ -140,10 +155,11 @@ function syncLyrics() {
   }
 }
 
-// ─── INIT ────────────────────────────────────────────
+// ─── INIT ───
 async function initPlayer(trackId) {
   currentTrackId = trackId;
   currentLyricIndex = -1;
+  document.body.classList.remove('immersive-mode');
 
   let meta;
   try { meta = await fetchMetadata(trackId); }
@@ -153,25 +169,28 @@ async function initPlayer(trackId) {
   els.title.textContent = meta.title;
   els.artist.textContent = `${meta.artist} · ${meta.albumTitle}`;
   
-  // Força a capa e o fundo (se a URL for válida)
-  if (meta.coverUrl && meta.coverUrl.startsWith('http')) {
-    els.cover.src = meta.coverUrl;
-    els.cover.alt = meta.albumTitle;
+  if (meta.coverUrl) {
+    if (els.cover.tagName === 'IMG') {
+      els.cover.src = meta.coverUrl;
+    } else {
+      els.cover.style.backgroundImage = `url('${meta.coverUrl}')`;
+    }
     els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
-    els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
   }
   
   renderLyrics(meta.lyrics);
 
   // 2. Atualiza a Lista
+  if (meta.coverUrl) {
+    els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
+  }
   els.albumHeaderTitle.textContent = meta.albumTitle;
   els.albumHeaderArtist.textContent = meta.artist;
   els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
 
   els.musicList.innerHTML = meta.albumTracks.map((t, index) => {
     const isPlaying = t.id === trackId;
-    // Se o backend não enviou durationSeconds, usa o fallback
-    const dur = t.duration || '--:--';
+    const dur = t.durationSeconds ? formatTime(t.durationSeconds) : '--:--';
     
     return `
       <div class="music-item ${isPlaying ? 'playing' : ''}" onclick="window.tocarMusicaDaLista('${t.id}')">
@@ -200,55 +219,71 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. Inicia o Howler
-  if (sound) sound.unload();
-  sound = new Howl({
-    src: [stream.audioUrl],
-    html5: true,
-    onplay: () => {
-      els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-      updateInterval = setInterval(() => {
-        const seek = sound.seek() || 0;
-        const duration = sound.duration() || 0;
-        els.progressFill.style.width = `${(seek / duration) * 100}%`;
-        els.currentTime.textContent = formatTime(seek);
-        syncLyrics();
-      }, 250);
-      resetImmersiveTimer();
-    },
-    onpause: () => {
-      els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-      desativarModoImersivo();
-    },
-    onload: () => { els.duration.textContent = formatTime(sound.duration()); }
-  });
+  // 4. Configura a tag de áudio (Preparada, mas não auto-tocada)
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.src = stream.audioUrl;
+  audio.load();
 
-  sound.play();
+  // Resetando a barra de progresso
+  els.currentTime.textContent = '0:00';
+  els.duration.textContent = '0:00';
+  els.progressFill.style.width = '0%';
+
+  // Eventos
+  audio.onplay = () => {
+    els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
+    clearInterval(updateInterval);
+    updateInterval = setInterval(() => {
+      const seek = audio.currentTime || 0;
+      const duration = audio.duration || 0;
+      els.progressFill.style.width = `${(seek / duration) * 100}%`;
+      els.currentTime.textContent = formatTime(seek);
+      syncLyrics();
+    }, 250);
+  };
+
+  audio.onpause = () => {
+    els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+    clearInterval(updateInterval);
+    document.body.classList.remove('immersive-mode'); // Se pausar, mostra as abas
+  };
+
+  audio.onloadedmetadata = () => {
+    els.duration.textContent = formatTime(audio.duration);
+  };
+
+  audio.onerror = (e) => {
+    console.error('[player] Erro no áudio:', audio.error);
+    els.title.textContent = 'Erro ao carregar áudio';
+  };
 }
 
-// ─── CONTROLES GLOBAIS (Chamados pelo HTML) ───
+// ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
-  if (!sound) return;
-  sound.playing() ? sound.pause() : sound.play();
+  if (!audio.src) return;
+  if (audio.paused) {
+    audio.play().catch(err => console.error('[player] play() falhou:', err));
+  } else {
+    audio.pause();
+  }
 };
 
 window.playerNext = () => {
-  if (!sound) return;
-  sound.seek(Math.min(sound.duration(), sound.seek() + 10));
+  if (!audio.duration) return;
+  audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
 };
 
 window.playerPrev = () => {
-  if (!sound) return;
-  sound.seek(Math.max(0, sound.seek() - 10));
+  if (!audio.duration) return;
+  audio.currentTime = Math.max(0, audio.currentTime - 10);
 };
 
 els.progressBar.addEventListener('click', (e) => {
-  if (!sound) return;
+  if (!audio.duration) return;
   const rect = els.progressBar.getBoundingClientRect();
   const pos = (e.clientX - rect.left) / rect.width;
-  sound.seek(sound.duration() * pos);
+  audio.currentTime = audio.duration * pos;
 });
 
 window.tocarMusicaDaLista = async (id) => {
@@ -260,7 +295,7 @@ window.tocarMusicaDaLista = async (id) => {
 window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
 window.abrirModalAluguel = () => { if (currentTrackId) alert(`Abrindo aluguel: ${currentTrackId}`); };
 
-// ─── BOOT ────────────────────────────────────────────
+// ─── BOOT ───
 window.addEventListener('DOMContentLoaded', async () => {
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: josephmatthos
+    runtime: node
+    buildCommand: npm install
+    startCommand: node --env-file=.env.local dev-server.js
+    plan: free
+    envVars:
+      - key: NODE_VERSION
+        value: 24.21.0
+      - key: NODE_ENV
+        value: production
