@@ -44,16 +44,18 @@ let currentLyricIndex = -1;
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
+
 tabs.forEach(tab => {
   tab.addEventListener('click', () => {
     tabs.forEach(t => t.classList.remove('active'));
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    // Se trocar de aba, sempre mostra os menus (desativa imersivo)
+    // Sempre mostra os menus ao trocar de aba
     document.body.classList.remove('immersive-mode');
   });
 });
+
 function switchTab(tabName) {
   const btn = document.querySelector(`.mobile-tab[data-tab="${tabName}"]`);
   if (btn) btn.click();
@@ -61,58 +63,37 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO (TOGGLE POR CLIQUE) ───
 function toggleModoImersivo() {
-  console.log('[imersivo] Função chamada');
-  
-  // Não ativa se estiver na aba de músicas ou letra
-  if (!document.getElementById('tab-player').classList.contains('active')) {
-    console.log('[imersivo] Aba player não está ativa');
-    return;
-  }
-  
-  // Não ativa se a música não estiver tocando
-  if (!sound) {
-    console.log('[imersivo] sound é nulo');
-    return;
-  }
-  
-  if (!sound.playing()) {
-    console.log('[imersivo] Música não está tocando');
-    return;
-  }
-  
-  const isImmersive = document.body.classList.toggle('immersive-mode');
-  console.log('[imersivo] Modo imersivo:', isImmersive ? 'ATIVADO' : 'DESATIVADO');
+  if (!document.getElementById('tab-player').classList.contains('active')) return;
+  if (!sound || !sound.playing()) return;
+  document.body.classList.toggle('immersive-mode');
 }
 
-// O evento de clique no container principal (mas ignora os botões)
+// Clique no container (ignora botões, abas e barra de progresso)
 els.container.addEventListener('click', (e) => {
-  // Se clicar em um botão, controle, ou aba, não faz toggle
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
-    console.log('[imersivo] Clique em botão/aba, ignorando');
     return;
   }
-  
-  // Se clicar no fundo/capa, faz o toggle
   toggleModoImersivo();
 });
-
 
 // ─── TELA CHEIA (MAXIMIZAR) ───
 if (els.fullscreenBtn) {
   els.fullscreenBtn.addEventListener('click', () => {
     if (!document.fullscreenElement) {
-      if (els.container.requestFullscreen) {
-        els.container.requestFullscreen();
-      } else if (els.container.webkitRequestFullscreen) { /* Safari */
-        els.container.webkitRequestFullscreen();
-      }
+      if (els.container.requestFullscreen) els.container.requestFullscreen();
+      else if (els.container.webkitRequestFullscreen) els.container.webkitRequestFullscreen();
     } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
+      if (document.exitFullscreen) document.exitFullscreen();
     }
   });
 }
+
+// ─── DESBLOQUEIO DE ÁUDIO (iOS) ───
+document.body.addEventListener('touchstart', () => {
+  if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
+    Howler.ctx.resume();
+  }
+}, { once: true, passive: true });
 
 // ─── FETCHES ───
 async function fetchMetadata(trackId) {
@@ -120,6 +101,7 @@ async function fetchMetadata(trackId) {
   if (!r.ok) throw new Error('Faixa não encontrada');
   return await r.json();
 }
+
 async function fetchStreamUrl(trackId) {
   const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}`, {
     credentials: 'same-origin', cache: 'no-store'
@@ -150,6 +132,7 @@ function renderLyrics(lyricsArray) {
     });
   });
 }
+
 function highlightLyricLine(index) {
   if (index < 0 || index >= parsedLyrics.length) return;
   parsedLyrics.forEach((l, i) => l.element.classList.toggle('active', i === index));
@@ -160,6 +143,7 @@ function highlightLyricLine(index) {
     container.scrollTo({ top: scrollPos, behavior: 'smooth' });
   }
 }
+
 function syncLyrics() {
   if (!sound || !parsedLyrics.length) return;
   const seek = sound.seek() || 0;
@@ -238,35 +222,37 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. REAPROVEITA O HOWL (Não cria um novo a cada música)
-  if (!sound) {
-    // Se for a primeira vez, cria o Howl
-    sound = new Howl({
-      src: [stream.audioUrl],
-      html5: true,
-      onplay: () => {
-        els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-        clearInterval(updateInterval);
-        updateInterval = setInterval(() => {
-          const seek = sound.seek() || 0;
-          const duration = sound.duration() || 0;
-          els.progressFill.style.width = `${(seek / duration) * 100}%`;
-          els.currentTime.textContent = formatTime(seek);
-          syncLyrics();
-        }, 250);
-      },
-      onpause: () => {
-        els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-        clearInterval(updateInterval);
-      },
-      onload: () => { els.duration.textContent = formatTime(sound.duration()); }
-    });
-  } else {
-    // Se já existe, apenas troca a música e dá play
-    sound.unload(); // Limpa o buffer antigo
-    sound.src = [stream.audioUrl];
-    sound.load();
+  // 4. Inicia o Howler (SEM html5: true)
+  if (sound) {
+    sound.unload();
+    sound = null;
   }
+
+  sound = new Howl({
+    src: [stream.audioUrl],
+    // html5: true,  <-- Removido para evitar o "HTML5 Audio pool exhausted"
+    format: ['mp3'],
+    onplay: () => {
+      els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
+      clearInterval(updateInterval);
+      updateInterval = setInterval(() => {
+        const seek = sound.seek() || 0;
+        const duration = sound.duration() || 0;
+        els.progressFill.style.width = `${(seek / duration) * 100}%`;
+        els.currentTime.textContent = formatTime(seek);
+        syncLyrics();
+      }, 250);
+    },
+    onpause: () => {
+      els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+      clearInterval(updateInterval);
+    },
+    onload: () => { els.duration.textContent = formatTime(sound.duration()); },
+    onloaderror: (id, err) => {
+      console.error('[player] Erro ao carregar áudio:', err);
+      els.title.textContent = 'Erro ao carregar áudio';
+    }
+  });
 
   sound.play();
 }
@@ -276,10 +262,12 @@ window.playerPlay = () => {
   if (!sound) return;
   sound.playing() ? sound.pause() : sound.play();
 };
+
 window.playerNext = () => {
   if (!sound) return;
   sound.seek(Math.min(sound.duration(), sound.seek() + 10));
 };
+
 window.playerPrev = () => {
   if (!sound) return;
   sound.seek(Math.max(0, sound.seek() - 10));
