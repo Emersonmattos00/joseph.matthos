@@ -4,7 +4,6 @@ const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
 const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { streamRatelimit } = require('./_cache');
-const { Readable } = require('stream');
 
 const s3Client = new S3Client({
   region: process.env.B2_MEDIA_REGION || 'us-east-005',
@@ -78,10 +77,6 @@ module.exports = async (req, res) => {
     }
 
     const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
-    
-    // Garante que a chave tenha o prefixo correto. 
-    // Se a chave salva já tem o nome da pasta (ex: pesodacaneta/...), adicionamos o bucket se necessário.
-    // A lógica do seu `_storage.js` adicionava 'josephmatthos/'. Vamos manter a mesma lógica.
     const keyToFetch = b2Key.startsWith('josephmatthos/') ? b2Key : `josephmatthos/${b2Key}`;
 
     console.log(`[stream] Buscando ${keyToFetch} no bucket ${bucket}...`);
@@ -96,21 +91,36 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo não encontrado no Backblaze B2', details: s3Err.message });
     }
 
-    // Define os cabeçalhos para o navegador entender que é um áudio
+    // Define os cabeçalhos para o navegador
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Cache-Control', 'public, max-age=3600');
 
-    // Converte o fluxo do S3 (WebStream) para Node Stream
-    const stream = Readable.fromWeb(s3Response.Body);
+    // TRATAMENTO UNIVERSAL DO STREAM DO S3
+    const body = s3Response.Body;
     
-    // Se o cliente fechar a conexão, encerra o download do S3 para economizar recursos
-    req.on('close', () => {
-      stream.destroy();
-    });
+    if (!body) {
+      return res.status(500).json({ error: 'Corpo do arquivo vazio no B2' });
+    }
 
-    // Transmite o áudio para o navegador
-    stream.pipe(res);
+    // Se o Body for um Readable do Node (o mais comum no SDK v3 rodando no Node)
+    if (typeof body.pipe === 'function') {
+      body.pipe(res);
+    } 
+    // Se o Body for um Web ReadableStream (padrão do SDK v3 no navegador, mas às vezes no Node também)
+    else if (typeof body.getReader === 'function') {
+      const { Readable } = require('stream');
+      Readable.fromWeb(body).pipe(res);
+    }
+    // Se for um Blob (fallback)
+    else if (typeof body.arrayBuffer === 'function') {
+      const buffer = Buffer.from(await body.arrayBuffer());
+      res.setHeader('Content-Length', buffer.length);
+      res.end(buffer);
+    } 
+    else {
+      return res.status(500).json({ error: 'Formato de stream do S3 desconhecido', type: typeof body });
+    }
 
   } catch (error) {
     console.error('[stream] erro detalhado:', error);
