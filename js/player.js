@@ -35,7 +35,8 @@ const els = {
   fullscreenBtn: document.getElementById('fullscreenBtn')
 };
 
-let sound = null;
+// Variável global do áudio (tag nativa)
+let audio = new Audio();
 let updateInterval = null;
 let currentTrackId = null;
 let parsedLyrics = [];
@@ -51,7 +52,6 @@ tabs.forEach(tab => {
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    // Sempre mostra os menus ao trocar de aba
     document.body.classList.remove('immersive-mode');
   });
 });
@@ -61,14 +61,13 @@ function switchTab(tabName) {
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO (TOGGLE POR CLIQUE) ───
+// ─── MODO IMERSIVO ───
 function toggleModoImersivo() {
   if (!document.getElementById('tab-player').classList.contains('active')) return;
-  if (!sound || !sound.playing()) return;
+  if (!audio || audio.paused) return;
   document.body.classList.toggle('immersive-mode');
 }
 
-// Clique no container (ignora botões, abas e barra de progresso)
 els.container.addEventListener('click', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
     return;
@@ -76,7 +75,7 @@ els.container.addEventListener('click', (e) => {
   toggleModoImersivo();
 });
 
-// ─── TELA CHEIA (MAXIMIZAR) ───
+// ─── TELA CHEIA ───
 if (els.fullscreenBtn) {
   els.fullscreenBtn.addEventListener('click', () => {
     if (!document.fullscreenElement) {
@@ -87,13 +86,6 @@ if (els.fullscreenBtn) {
     }
   });
 }
-
-// ─── DESBLOQUEIO DE ÁUDIO (iOS) ───
-document.body.addEventListener('touchstart', () => {
-  if (typeof Howler !== 'undefined' && Howler.ctx && Howler.ctx.state !== 'running') {
-    Howler.ctx.resume();
-  }
-}, { once: true, passive: true });
 
 // ─── FETCHES ───
 async function fetchMetadata(trackId) {
@@ -126,8 +118,8 @@ function renderLyrics(lyricsArray) {
   }));
   els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!sound) return;
-      sound.seek(Number(btn.dataset.time));
+      if (!audio) return;
+      audio.currentTime = Number(btn.dataset.time);
       highlightLyricLine(Number(btn.dataset.index));
     });
   });
@@ -145,8 +137,8 @@ function highlightLyricLine(index) {
 }
 
 function syncLyrics() {
-  if (!sound || !parsedLyrics.length) return;
-  const seek = sound.seek() || 0;
+  if (!audio || !parsedLyrics.length) return;
+  const seek = audio.currentTime || 0;
   let newIndex = -1;
   for (let i = 0; i < parsedLyrics.length; i++) {
     if (parsedLyrics[i].time <= seek) newIndex = i;
@@ -222,62 +214,71 @@ async function initPlayer(trackId) {
 
   if (!stream.audioUrl) { els.title.textContent = 'Áudio não configurado'; return; }
 
-  // 4. Inicia o Howler (SEM html5: true)
-  if (sound) {
-    sound.unload();
-    sound = null;
-  }
+  // 4. Configura a tag de áudio nativa
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.src = stream.audioUrl;
+  audio.load();
 
-  sound = new Howl({
-    src: [stream.audioUrl],
-    // html5: true,  <-- Removido para evitar o "HTML5 Audio pool exhausted"
-    format: ['mp3'],
-    onplay: () => {
-      els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-      updateInterval = setInterval(() => {
-        const seek = sound.seek() || 0;
-        const duration = sound.duration() || 0;
-        els.progressFill.style.width = `${(seek / duration) * 100}%`;
-        els.currentTime.textContent = formatTime(seek);
-        syncLyrics();
-      }, 250);
-    },
-    onpause: () => {
-      els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-      clearInterval(updateInterval);
-    },
-    onload: () => { els.duration.textContent = formatTime(sound.duration()); },
-    onloaderror: (id, err) => {
-      console.error('[player] Erro ao carregar áudio:', err);
-      els.title.textContent = 'Erro ao carregar áudio';
-    }
+  // Eventos da tag de áudio
+  audio.onplay = () => {
+    els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
+    clearInterval(updateInterval);
+    updateInterval = setInterval(() => {
+      const seek = audio.currentTime || 0;
+      const duration = audio.duration || 0;
+      els.progressFill.style.width = `${(seek / duration) * 100}%`;
+      els.currentTime.textContent = formatTime(seek);
+      syncLyrics();
+    }, 250);
+  };
+
+  audio.onpause = () => {
+    els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+    clearInterval(updateInterval);
+  };
+
+  audio.onloadedmetadata = () => {
+    els.duration.textContent = formatTime(audio.duration);
+  };
+
+  audio.onerror = (e) => {
+    console.error('[player] Erro no áudio:', audio.error);
+    els.title.textContent = 'Erro ao carregar áudio';
+  };
+
+  // Tenta tocar (precisa de interação do usuário no mobile)
+  audio.play().catch(err => {
+    console.warn('[player] Autoplay bloqueado:', err);
+    // Se falhar, o usuário precisa clicar no play manualmente
   });
-
-  sound.play();
 }
 
 // ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
-  if (!sound) return;
-  sound.playing() ? sound.pause() : sound.play();
+  if (!audio.src) return;
+  if (audio.paused) {
+    audio.play().catch(err => console.error('[player] play() falhou:', err));
+  } else {
+    audio.pause();
+  }
 };
 
 window.playerNext = () => {
-  if (!sound) return;
-  sound.seek(Math.min(sound.duration(), sound.seek() + 10));
+  if (!audio.duration) return;
+  audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
 };
 
 window.playerPrev = () => {
-  if (!sound) return;
-  sound.seek(Math.max(0, sound.seek() - 10));
+  if (!audio.duration) return;
+  audio.currentTime = Math.max(0, audio.currentTime - 10);
 };
 
 els.progressBar.addEventListener('click', (e) => {
-  if (!sound) return;
+  if (!audio.duration) return;
   const rect = els.progressBar.getBoundingClientRect();
   const pos = (e.clientX - rect.left) / rect.width;
-  sound.seek(sound.duration() * pos);
+  audio.currentTime = audio.duration * pos;
 });
 
 window.tocarMusicaDaLista = async (id) => {
