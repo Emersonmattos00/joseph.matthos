@@ -61,19 +61,34 @@ function switchTab(tabName) {
 
 // ─── MODO IMERSIVO (TOGGLE POR CLIQUE) ───
 function toggleModoImersivo() {
+  console.log('[imersivo] Função chamada');
+  
   // Não ativa se estiver na aba de músicas ou letra
-  if (!document.getElementById('tab-player').classList.contains('active')) return;
+  if (!document.getElementById('tab-player').classList.contains('active')) {
+    console.log('[imersivo] Aba player não está ativa');
+    return;
+  }
   
   // Não ativa se a música não estiver tocando
-  if (!sound || !sound.playing()) return;
+  if (!sound) {
+    console.log('[imersivo] sound é nulo');
+    return;
+  }
   
-  document.body.classList.toggle('immersive-mode');
+  if (!sound.playing()) {
+    console.log('[imersivo] Música não está tocando');
+    return;
+  }
+  
+  const isImmersive = document.body.classList.toggle('immersive-mode');
+  console.log('[imersivo] Modo imersivo:', isImmersive ? 'ATIVADO' : 'DESATIVADO');
 }
 
 // O evento de clique no container principal (mas ignora os botões)
 els.container.addEventListener('click', (e) => {
   // Se clicar em um botão, controle, ou aba, não faz toggle
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) {
+    console.log('[imersivo] Clique em botão/aba, ignorando');
     return;
   }
   
