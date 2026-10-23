@@ -1,11 +1,9 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v17 FINAL)
+   SITE.JS — Joseph Matthos (v18 FINAL DEFINITIVO)
    ------------------------------------------------------------
-   - Correção: Home renderiza álbuns mesmo sem faixas cadastradas
-   - Planos: UUID do backend mapeado pra kind (premium/anual)
-   - Aluguel: faixa e álbum separados com abas
-   - Player: bind sem duplicação, /api/stream?trackId=
-   - Painel direito: lista ou letra (alterna)
+   - CORREÇÃO CRÍTICA: Renderiza os cards da home lendo direto
+     do array SITE.albums, sem depender de faixas existirem.
+   - Mantém toda a lógica de player, modais, carrinho e auth.
    ============================================================ */
 
 import {
@@ -185,7 +183,6 @@ async function loadPublicData() {
       }
     }
 
-    // ─── Planos de assinatura (Uuid → kind) ─────────────────
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) {
@@ -207,7 +204,6 @@ async function loadPublicData() {
       }
     }
 
-    // ─── Planos de aluguel (faixa + álbum) ───────────────────
     SITE.rentalPlans = [];
     SITE.albumRentalPlans = [];
 
@@ -679,7 +675,7 @@ function initCarousels() {
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const tab = SITE.artistTab || 'todos';
-  const albums = SITE.albums || []; // Puxa direto da lista de álbuns
+  const albums = SITE.albums || [];
 
   const principaisEl = document.getElementById('gridPrincipais');
   if (principaisEl) {
@@ -704,7 +700,6 @@ function renderSpotifySections() {
 }
 
 function uniqueAlbumsFromTracks(tracks) {
-  // Função mantida como fallback caso seja usada em outro lugar
   const map = new Map();
   for (const t of tracks) {
     const album = findAlbum(t.albumId);
@@ -739,7 +734,7 @@ function renderSpotifyCard(item, type = 'album') {
     subtitle = `Joseph Matthos · ${album.title || ''}`.trim();
   } else {
     albumId = item.id || item.albumId;
-    album = findAlbum(albumId) || item; // Permite usar o próprio objeto do álbum
+    album = findAlbum(albumId) || item;
     cover = album.coverUrl || album.coverImage;
     title = album.title;
     subtitle = `Joseph Matthos · ${Array.isArray(album.tracks) ? album.tracks.length : 0} faixas`;
