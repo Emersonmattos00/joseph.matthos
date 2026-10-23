@@ -174,6 +174,25 @@
           <a href="#discografia" class="section-spotify-link">VER TUDO</a>
         </div>
       </div>
+      
+      <!-- Template oculto para o JS clonar -->
+      <div id="templateCardAlbum" style="display: none;">
+        <div class="spotify-card" data-spotify-card data-type="album">
+          <div class="spotify-card-cover">
+            <span class="spotify-card-badge spotify-card-badge--full">✓ Premium</span>
+            <img src="" alt="" loading="lazy">
+            <button class="spotify-card-play" type="button" data-spotify-play aria-label="Tocar">▶</button>
+            <div class="spotify-card-actions">
+              <button class="spotify-card-action like" type="button">
+                <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="spotify-card-title"></div>
+          <div class="spotify-card-sub"></div>
+        </div>
+      </div>
+
       <div class="amz-grid" id="gridLancamentos"></div>
     </section>
 
@@ -230,9 +249,6 @@
         <div class="frases-grid" id="frasesGrid"></div>
       </div>
     </section>
-
-    <!-- ═══════════ CONECTE-SE ═══════════ -->
-
 
   </main>
 
@@ -681,6 +697,8 @@
   </div>
 </div>
 
-<script type="module" src="js/site.js"></script>
+<!-- Carrega apenas o site público -->
+<script type="module" src="js/site.js?v=20"></script>
+
 </body>
 </html>
