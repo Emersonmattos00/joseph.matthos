@@ -153,28 +153,28 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
+    // Adicionado 'no-store' para ignorar o cache e forçar a busca no banco
     const r = await fetch('/api/public', { 
-  credentials: 'same-origin',
-  cache: 'no-store' // <-- Força o navegador a buscar a versão nova
-});
+      credentials: 'same-origin',
+      cache: 'no-store' 
+    });
     const json = await r.json();
 
     if (!json || !json.ok) {
-      SITE.content = clone(DEFAULT_CONTENT);
-      SITE.albums = [];
-      SITE.tracks = {};
-      SITE.plans = {};
-      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
-      SITE.albumRentalPlans = [];
-      return;
+      throw new Error('API retornou erro');
     }
 
+    // Pega os dados diretamente
     SITE.content = json.content && typeof json.content === 'object'
       ? deepMerge(clone(DEFAULT_CONTENT), json.content)
       : clone(DEFAULT_CONTENT);
 
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
+    
+    // Debug para vermos no console se chegou
+    console.log('✅ Dados da API carregados. Álbuns:', SITE.albums.length);
 
+    // ... (mantenha o resto do código que preenche SITE.tracks, SITE.plans, etc)
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -186,85 +186,13 @@ async function loadPublicData() {
       }
     }
 
-    SITE.plans = {};
-    if (Array.isArray(json.plans)) {
-      for (const p of json.plans) {
-        if (!p || !p.id) continue;
-        const nameLower = String(p.name || '').toLowerCase();
-        let kind = null;
-        if (nameLower.includes('anual') || nameLower.includes('annual') || nameLower.includes('ano')) {
-          kind = 'anual';
-        } else if (nameLower.includes('mensal') || nameLower.includes('monthly') || nameLower.includes('mês') || nameLower.includes('mes') || nameLower.includes('premium') || nameLower.includes('pro')) {
-          kind = 'premium';
-        }
-
-        SITE.plans[p.id] = {
-          ...p,
-          kind,
-          priceCents: Number(p.priceCents) || 0,
-          available: p.available !== false && (kind === null || Number(p.priceCents) > 0)
-        };
-      }
-    }
-
-    SITE.rentalPlans = [];
-    SITE.albumRentalPlans = [];
-
-    if (Array.isArray(json.rentalPlans) && json.rentalPlans.length) {
-      const allPlans = json.rentalPlans
-        .filter((p) => p && p.id && p.available !== false && Number(p.price) > 0)
-        .map((p) => ({
-          id: String(p.id),
-          label: String(p.label || p.id),
-          days: Number(p.days) || 1,
-          hours: Number(p.hours) || 0,
-          price: Number(p.price) || 0,
-          priceCents: Number(p.priceCents) || Math.round((Number(p.price) || 0) * 100),
-          popular: !!p.popular,
-          available: true,
-          trackId: p.trackId || null,
-          albumId: p.albumId || null
-        }));
-
-      const dedupe = (arr) => {
-        const seen = new Set();
-        return arr.filter((p) => {
-          const key = `${p.label}|${p.days}|${p.hours}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-      };
-
-      SITE.rentalPlans = dedupe(allPlans.filter((p) => p.trackId));
-      SITE.albumRentalPlans = dedupe(allPlans.filter((p) => p.albumId));
-    }
-
-    if (!SITE.rentalPlans.length) {
-      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
-        ...p,
-        price: 0,
-        available: false,
-        trackId: null,
-        albumId: null
-      }));
-    }
-    if (!SITE.albumRentalPlans.length) {
-      SITE.albumRentalPlans = SITE.rentalPlans.map((p) => ({
-        ...p,
-        id: `album:${p.id}`,
-        trackId: null,
-        albumId: 'fallback'
-      }));
-    }
+    // ... (mantenha a parte de SITE.plans e SITE.rentalPlans igual ao original)
+    
   } catch (err) {
     console.warn('[public] falha:', err?.message);
+    // Fallback
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
-    SITE.tracks = {};
-    SITE.plans = {};
-    SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
-    SITE.albumRentalPlans = [];
   }
 }
 
@@ -678,20 +606,21 @@ function initCarousels() {
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
-  console.log('🔥 Renderizando', albums.length, 'álbuns');
+  console.log('🎨 Renderizando a tela com', albums.length, 'álbuns');
 
   const lancamentosEl = document.getElementById('gridLancamentos');
   if (lancamentosEl) {
     if (albums.length === 0) {
-      lancamentosEl.innerHTML = '<p style="color:white;">Nenhum álbum encontrado no banco.</p>';
+      lancamentosEl.innerHTML = '<p style="color:white; text-align:center;">Nenhum álbum encontrado.</p>';
     } else {
+      // Renderização direta, sem usar template clonado
       lancamentosEl.innerHTML = albums.map((a) => `
-        <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="display:block;">
-          <div class="spotify-card-cover" style="height:150px;background:#333;">
-            <img src="${safeMediaUrl(a.coverUrl) || 'assets/img/tema.webp'}" style="width:100%;height:100%;object-fit:cover;">
+        <div class="spotify-card" data-album-id="${a.id}" style="display:flex; flex-direction:column; gap:8px;">
+          <div style="position:relative; width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden;">
+            <img src="${a.coverUrl || 'assets/img/tema.webp'}" style="width:100%; height:100%; object-fit:cover;">
           </div>
-          <div class="spotify-card-title" style="color:white;font-weight:bold;margin-top:10px;">${esc(a.title)}</div>
-          <div class="spotify-card-sub" style="color:#aaa;">Joseph Matthos</div>
+          <div style="color:white; font-weight:bold; font-size:14px;">${a.title}</div>
+          <div style="color:#aaa; font-size:12px;">Joseph Matthos</div>
         </div>
       `).join('');
     }
