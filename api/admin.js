@@ -271,7 +271,7 @@ async function handleUploadConfirm(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
   const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
-  const planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
+  const planRows = []; // Temporário para não quebrar
   const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
 
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
