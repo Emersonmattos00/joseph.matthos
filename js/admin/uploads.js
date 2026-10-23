@@ -3,24 +3,13 @@
    ------------------------------------------------------------
    - Imagens: Base64 via /api/admin?action=upload
        (pequenas, cabem no body da Vercel)
-   - Áudio:   presigned upload URL
-       1) POST /api/admin?action=upload-sign  → recebe uploadUrl
-       2) PUT direto no Supabase Storage (binário, sem Vercel)
-       3) POST /api/admin?action=upload-confirm → valida + grava
+   - Áudio:   presigned upload URL do Backblaze B2
+       1) POST /api/admin?action=upload-sign  → recebe URL assinada
+       2) PUT direto no Backblaze B2 (binário, sem passar pela Vercel)
+       3) POST /api/admin?action=upload-confirm → valida no B2 + grava no Neon
    - Comprime imagens no cliente antes de enviar
    - Progresso real via XHR para áudio
    - Sem IndexedDB, sem Data URLs persistidas
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Áudio usa presigned URL — sem limite de body da Vercel
-   2. MAX_AUDIO_SIZE = 200 MB (era 4 MB)
-   3. MAX_IMAGE_SIZE = 5 MB (mantido, Base64)
-   4. Validação MIME por extensão (fallback)
-   5. putFileXHR com progresso
-   6. upload-confirm chamado automaticamente
-   7. Erros detalhados com status HTTP
-   8. Retorno consistente { url, path, bucket }
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -35,9 +24,6 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;              // 5 MB
 
 // Áudio: presigned (sem limite de body da Vercel)
 const MAX_AUDIO_SIZE = 200 * 1024 * 1024;            // 200 MB
-
-// ⚠️  O limite real de áudio via Base64 era 4 MB (Vercel body = 4.5 MB).
-//     Agora usamos presigned, então o céu é o limite.
 
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -75,8 +61,6 @@ const IMAGE_EXTENSIONS = new Set([
 /**
  * Faz upload de imagem (capa, fundo, sobre, etc.).
  * Usa Base64 via API (imagens são pequenas).
- *
- * @returns {Promise<{ url: string, path: string, bucket: string }>}
  */
 export async function uploadImage(file) {
   if (!file) throw new Error('Arquivo ausente.');
@@ -97,9 +81,7 @@ export async function uploadImage(file) {
 
 /**
  * Faz upload de preview de áudio (bucket público).
- * Usa presigned upload URL.
- *
- * @returns {Promise<{ url: string, path: string, bucket: string }>}
+ * Usa presigned upload URL do B2.
  */
 export async function uploadAudioPreview(file, onProgress) {
   return uploadAudioPresigned(file, 'audio-preview', onProgress);
@@ -107,11 +89,7 @@ export async function uploadAudioPreview(file, onProgress) {
 
 /**
  * Faz upload de áudio completo (bucket privado).
- * Usa presigned upload URL.
- *
- * ⚠️ Retorna `url: null` — use `path` para gravar em `tracks.full_path`.
- *
- * @returns {Promise<{ url: null, path: string, bucket: string }>}
+ * Usa presigned upload URL do B2.
  */
 export async function uploadAudioFull(file, onProgress) {
   return uploadAudioPresigned(file, 'audio-full', onProgress);
@@ -140,7 +118,7 @@ async function uploadAudioPresigned(file, kind, onProgress) {
     throw new Error(`Áudio muito grande (máx ${maxMb} MB).`);
   }
 
-  // 1) Pede URL assinada ao backend
+  // 1) Pede URL assinada ao backend (Backblaze B2)
   const signRes = await apiFetch('upload-sign', {
     method: 'POST',
     body: {
@@ -156,7 +134,7 @@ async function uploadAudioPresigned(file, kind, onProgress) {
     throw new Error(msg);
   }
 
-  // 2) PUT binário direto no Supabase Storage
+  // 2) PUT binário direto no Backblaze B2 (contornando a Vercel)
   await putFileXHR(
     signRes.uploadUrl,
     file,
@@ -164,7 +142,7 @@ async function uploadAudioPresigned(file, kind, onProgress) {
     onProgress
   );
 
-  // 3) Confirma no backend (valida que o arquivo existe no Storage)
+  // 3) Confirma no backend (valida que o arquivo existe no B2 e grava no Neon)
   const confirm = await apiFetch('upload-confirm', {
     method: 'POST',
     body: {
@@ -193,6 +171,9 @@ function putFileXHR(url, file, contentType, onProgress) {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
     xhr.setRequestHeader('Content-Type', contentType);
+    
+    // Nota: O Backblaze B2 às vezes exige headers de segurança no presigned, 
+    // mas o x-upsert é genérico e não deve atrapalhar caso não seja aceito.
     xhr.setRequestHeader('x-upsert', 'true');
 
     xhr.timeout = 180_000; // 3 min
@@ -248,12 +229,6 @@ async function uploadBase64(base64, filename, contentType, kind) {
 
 // ─────────────────────────────────────────────────────────────
 // Bind de <input type="file">
-// ------------------------------------------------------------
-// `kind` aceita: 'image' | 'audio-preview' | 'audio-full'
-//
-// onUploaded recebe { url, path, bucket }.
-// Para imagens e previews (buckets públicos), use `.url`.
-// Para áudio full (bucket privado), use `.path`.
 // ─────────────────────────────────────────────────────────────
 export function bindUpload(inputId, onUploaded, kind = 'image') {
   const input = document.getElementById(inputId);
@@ -313,38 +288,26 @@ export function bindUpload(inputId, onUploaded, kind = 'image') {
 // Helpers de validação
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Valida imagem por MIME e extensão.
- */
 function isValidImage(file) {
   if (!file) return false;
 
   const mime = String(file.type || '').toLowerCase();
   if (ALLOWED_IMAGE_TYPES.has(mime)) return true;
 
-  // Fallback por extensão
   const ext = getExtension(file.name);
   return IMAGE_EXTENSIONS.has(ext);
 }
 
-/**
- * Valida áudio por MIME e extensão.
- */
 function isValidAudio(file) {
   if (!file) return false;
 
   const mime = String(file.type || '').toLowerCase();
   if (ALLOWED_AUDIO_TYPES.has(mime)) return true;
 
-  // Fallback por extensão (Safari/Windows às vezes não preenchem type)
   const ext = getExtension(file.name);
   return AUDIO_EXTENSIONS.has(ext);
 }
 
-/**
- * Normaliza o MIME do áudio para envio ao backend.
- * Se o browser não preencheu, infere pela extensão.
- */
 function normalizeAudioMime(file) {
   const mime = String(file.type || '').toLowerCase();
   if (ALLOWED_AUDIO_TYPES.has(mime)) return mime;

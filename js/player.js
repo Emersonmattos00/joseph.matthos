@@ -1,4 +1,4 @@
-// js/player.js
+// js/player.js — versão final (API redireciona para o Cloudflare Worker)
 
 function formatTime(secs) {
   if (isNaN(secs) || secs < 0) return '0:00';
@@ -36,10 +36,12 @@ const els = {
 };
 
 let audio = new Audio();
+audio.preload = 'none'; // ★ não baixa áudio antes do play (essencial com 330+ faixas)
 let updateInterval = null;
 let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
+let currentTrackMeta = null; // ★ guarda metadados da faixa atual para próximo/anterior
 
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
@@ -51,7 +53,6 @@ tabs.forEach(tab => {
     tabContents.forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    // Sempre mostra os menus ao trocar de aba
     document.body.classList.remove('immersive-mode');
   });
 });
@@ -61,14 +62,13 @@ function switchTab(tabName) {
   if (btn) btn.click();
 }
 
-// ─── MODO IMERSIVO (TOGGLE) ───
+// ─── MODO IMERSIVO ───
 function toggleModoImersivo() {
   if (!document.getElementById('tab-player').classList.contains('active')) return;
   if (!audio.src || audio.paused) return;
   document.body.classList.toggle('immersive-mode');
 }
 
-// Toque no celular (evita o delay de 300ms)
 let touchStartTime = 0;
 els.container.addEventListener('touchstart', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
@@ -77,15 +77,12 @@ els.container.addEventListener('touchstart', (e) => {
 
 els.container.addEventListener('touchend', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
-  if (Date.now() - touchStartTime < 300) {
-    toggleModoImersivo();
-  }
+  if (Date.now() - touchStartTime < 300) toggleModoImersivo();
 });
 
-// Clique no desktop
 els.container.addEventListener('click', (e) => {
   if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
-  if (Date.now() - touchStartTime < 500) return; // ignora o clique disparado após o toque
+  if (Date.now() - touchStartTime < 500) return;
   toggleModoImersivo();
 });
 
@@ -157,7 +154,7 @@ function syncLyrics() {
 }
 
 // ─── INIT ───
-async function initPlayer(trackId) {
+async function initPlayer(trackId, autoplay = true) {
   currentTrackId = trackId;
   currentLyricIndex = -1;
   document.body.classList.remove('immersive-mode');
@@ -166,22 +163,21 @@ async function initPlayer(trackId) {
   try { meta = await fetchMetadata(trackId); }
   catch (err) { els.title.textContent = 'Faixa não encontrada'; return; }
 
-  // 1. Atualiza a UI Principal
+  currentTrackMeta = meta;
+
+  // 1. UI principal
   els.title.textContent = meta.title;
   els.artist.textContent = `${meta.artist} · ${meta.albumTitle}`;
-  
+
   if (meta.coverUrl) {
-    if (els.cover.tagName === 'IMG') {
-      els.cover.src = meta.coverUrl;
-    } else {
-      els.cover.style.backgroundImage = `url('${meta.coverUrl}')`;
-    }
+    if (els.cover.tagName === 'IMG') els.cover.src = meta.coverUrl;
+    else els.cover.style.backgroundImage = `url('${meta.coverUrl}')`;
     els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
   }
-  
+
   renderLyrics(meta.lyrics);
 
-  // 2. Atualiza a Lista
+  // 2. Lista
   if (meta.coverUrl) {
     els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
   }
@@ -192,7 +188,6 @@ async function initPlayer(trackId) {
   els.musicList.innerHTML = meta.albumTracks.map((t, index) => {
     const isPlaying = t.id === trackId;
     const dur = t.durationSeconds ? formatTime(t.durationSeconds) : '--:--';
-    
     return `
       <div class="music-item ${isPlaying ? 'playing' : ''}" onclick="window.tocarMusicaDaLista('${t.id}')">
         <div class="music-item-number">${index + 1}</div>
@@ -213,8 +208,10 @@ async function initPlayer(trackId) {
     `;
   }).join('');
 
-  // 3. Passa a URL DIRETA para a tag <audio> (sem fetch)
-  const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
+  // ★ 3. Áudio: chama a API que AUTORIZA e REDIRECIONA para o Cloudflare Worker.
+  // O navegador segue o 302 e busca direto no CDN (cache de borda, egress zero do B2 após o 1º hit).
+  const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
+  // ★ t=... evita cache do navegador na decisão de autorização (a URL do CDN em si é cacheada normalmente)
 
   audio.pause();
   audio.removeAttribute('src');
@@ -227,7 +224,9 @@ async function initPlayer(trackId) {
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
       const duration = audio.duration || 0;
-      els.progressFill.style.width = `${(seek / duration) * 100}%`;
+      if (duration > 0) {
+        els.progressFill.style.width = `${(seek / duration) * 100}%`;
+      }
       els.currentTime.textContent = formatTime(seek);
       syncLyrics();
     }, 250);
@@ -242,14 +241,29 @@ async function initPlayer(trackId) {
     els.duration.textContent = formatTime(audio.duration);
   };
 
-  audio.onerror = (e) => {
-    console.error('[player] Erro no áudio:', audio.error);
-    els.title.textContent = 'Erro ao carregar áudio';
+  audio.onerror = () => {
+    console.error('[player] Erro no áudio:', audio.error, streamUrl);
+    // ★ 403 = faixa sem preview (precisa alugar/assinar)
+    if (audio.error && audio.error.code === 4) {
+      els.title.textContent = 'Prévia indisponível — alugue ou assine';
+    } else {
+      els.title.textContent = 'Erro ao carregar áudio';
+    }
   };
 
-  audio.play().catch(err => {
-    console.warn('[player] Autoplay bloqueado:', err);
-  });
+  audio.onended = () => {
+    // ★ avança automaticamente para a próxima faixa do álbum
+    if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
+    const idx = currentTrackMeta.albumTracks.findIndex(t => t.id === trackId);
+    const next = currentTrackMeta.albumTracks[idx + 1];
+    if (next) window.tocarMusicaDaLista(next.id);
+  };
+
+  if (autoplay) {
+    audio.play().catch(err => {
+      console.warn('[player] Autoplay bloqueado:', err);
+    });
+  }
 }
 
 // ─── CONTROLES GLOBAIS ───
@@ -262,14 +276,24 @@ window.playerPlay = () => {
   }
 };
 
+// ★ Agora Next/Prev navegam de verdade entre faixas do álbum
 window.playerNext = () => {
-  if (!audio.duration) return;
-  audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
+  if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
+  const idx = currentTrackMeta.albumTracks.findIndex(t => t.id === currentTrackId);
+  const next = currentTrackMeta.albumTracks[idx + 1];
+  if (next) window.tocarMusicaDaLista(next.id);
 };
 
 window.playerPrev = () => {
-  if (!audio.duration) return;
-  audio.currentTime = Math.max(0, audio.currentTime - 10);
+  if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
+  // se estiver nos primeiros 3s, volta para a faixa anterior; senão reinicia a atual
+  if (audio.currentTime > 3) {
+    audio.currentTime = 0;
+    return;
+  }
+  const idx = currentTrackMeta.albumTracks.findIndex(t => t.id === currentTrackId);
+  const prev = currentTrackMeta.albumTracks[idx - 1];
+  if (prev) window.tocarMusicaDaLista(prev.id);
 };
 
 els.progressBar.addEventListener('click', (e) => {

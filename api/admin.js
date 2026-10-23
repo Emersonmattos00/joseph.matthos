@@ -12,10 +12,7 @@ const {
   signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-// Importa o db e os operadores via _db.js (que já tem build CJS funcional)
 const { db, eq, and, or, asc, desc, sql, inArray } = require('./_db');
-
-// Importa o schema via _db.js (que já tem o schema carregado em CJS)
 const schema = require('./_db').schema;
 
 const { tracks, albums, artists } = schema;
@@ -37,22 +34,8 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 const CONTENT_KEY = 'default';
-const MAX_CONTENT_BYTES = 2_000_000;
-const DEFAULT_LIMIT = 500;
-const MAX_LIMIT = 1000;
-const SALES_LIMIT = 500;
-const AUDIT_LIMIT = 100;
-const AUDIT_MAX_LIMIT = 500;
-
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_AUDIO_SIZE = 200 * 1024 * 1024;
-const MAX_AUDIO_SIZE_LEGACY = 4 * 1024 * 1024;
-const UPLOAD_TIMEOUT_MS = 180_000;
-const SIGNED_UPLOAD_TTL_SEC = 900;
 const DOWNLOAD_TTL_SEC = 3600;
-
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const ALLOWED_AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg']);
+const SIGNED_UPLOAD_TTL_SEC = 900;
 
 const BUCKET_BY_KIND = {
   'image': 'site-assets',
@@ -68,8 +51,6 @@ const VALID_ACTIONS = new Set([
   'download-url', 'download-album',
   'delete-user', 'update-lyrics'
 ]);
-
-const VALID_ALBUM_TYPES = new Set(['album', 'ep', 'single']);
 
 const DEV_NO_RATE_LIMIT = process.env.NODE_ENV !== 'production' && process.env.DISABLE_RATE_LIMIT === 'true';
 const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE_CSRF === 'true';
@@ -167,6 +148,10 @@ async function handleLogin(req, res) {
 
   const userOk = timingSafeEq(user, expectedUser);
   const passOk = await verifyScrypt(pass, hash);
+
+  // Logs seguros de depuração (apenas para o servidor)
+  console.log('[admin/login] Tentativa para usuário:', user);
+  console.log('[admin/login] userOk:', userOk, 'passOk:', passOk);
 
   if (!userOk || !passOk) {
     await audit('admin_login', { ip, success: false, reason: 'invalid', target: user });
@@ -266,7 +251,6 @@ async function handleUploadConfirm(req, res, session) {
 
   if (albumId && trackIndex !== null) {
     const isFull = kind === 'audio-full';
-    const field = isFull ? 'full_path' : 'preview_path';
     const patch = isFull
       ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
       : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
@@ -281,17 +265,6 @@ async function handleUploadConfirm(req, res, session) {
   const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
   return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
 }
-
-const expectedUser = String(process.env.ADMIN_USER || '').trim();
-const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
-console.log('[admin/login] expectedUser:', expectedUser);
-console.log('[admin/login] user recebido:', user);
-console.log('[admin/login] hash prefix:', hash.slice(0, 10));
-console.log('[admin/login] hash len:', hash.length);
-
-const userOk = timingSafeEq(user, expectedUser);
-const passOk = await verifyScrypt(pass, hash);
-console.log('[admin/login] userOk:', userOk, 'passOk:', passOk);
 
 // ─────────────────────────────────────────────────────────────
 // USUÁRIOS
@@ -338,7 +311,7 @@ async function handleDeleteUser(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCografia
+// DISCOGRAFIA
 // ─────────────────────────────────────────────────────────────
 async function handleListAlbums(req, res) {
   const rows = await db.select().from(albums).orderBy(asc(albums.sortOrder));

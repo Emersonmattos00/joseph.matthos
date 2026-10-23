@@ -1,24 +1,19 @@
+/*// Permite apenas o seu domínio
+const origin = req.headers.origin;
+if (['https://josephmatthos.com.br', 'https://www.josephmatthos.com.br', 'http://localhost:3000'].includes(origin)) {
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+}*/
+
+// api/stream.js
 const { eq, and, gt, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
-const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { streamRatelimit } = require('./_cache');
 
-const s3Client = new S3Client({
-  region: process.env.B2_MEDIA_REGION || 'us-east-005',
-  endpoint: process.env.B2_MEDIA_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID,
-    secretAccessKey: process.env.B2_APPLICATION_KEY
-  },
-  requestHandler: new NodeHttpHandler({
-    connectionTimeout: 5000,
-    requestTimeout: 15000
-  })
-});
+// ★ Base do Worker Cloudflare (CDN do B2)
+const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos.workers.dev';
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -78,12 +73,11 @@ module.exports = async (req, res) => {
     if (accessLevel === 'full') {
       b2Key = track.streamKey || track.fullPath;
     } else {
-      // Se não tem previewKey, retorna 403 (não entrega o áudio completo)
       b2Key = track.previewKey;
       if (!b2Key) {
-        return res.status(403).json({ 
-          error: 'Prévia não disponível', 
-          message: 'Esta faixa não tem preview configurada. Alugue ou assine para ouvir o áudio completo.' 
+        return res.status(403).json({
+          error: 'Prévia não disponível',
+          message: 'Esta faixa não tem preview configurada. Alugue ou assine para ouvir o áudio completo.'
         });
       }
     }
@@ -92,69 +86,19 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
-    const keyToFetch = (b2Key.startsWith('josephmatthos/') || b2Key.startsWith('previews/')) 
-      ? b2Key 
-      : `josephmatthos/${b2Key}`;
+    // ★ Normaliza o caminho do arquivo no B2
+    const cleanKey = String(b2Key)
+      .replace(/^\/+/, '')
+      .replace(/^josephmatthos\//, ''); // remove prefixo do bucket se já existir
 
-    console.log(`[stream] Buscando ${keyToFetch} (acesso: ${accessLevel})...`);
+    const cdnUrl = `${CDN_BASE}/${cleanKey}`;
 
-    const rangeHeader = req.headers.range;
-    const commandParams = { Bucket: bucket, Key: keyToFetch };
-    
-    if (rangeHeader) {
-      commandParams.Range = rangeHeader;
-    }
-
-    const command = new GetObjectCommand(commandParams);
-    
-    let s3Response;
-    try {
-      s3Response = await s3Client.send(command);
-    } catch (s3Err) {
-      console.error('[stream] Erro no S3:', s3Err.name, s3Err.message);
-      return res.status(404).json({ 
-        error: 'Arquivo não encontrado no Backblaze B2', 
-        details: s3Err.message,
-        code: s3Err.name
-      });
-    }
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-
-    if (s3Response.ContentRange) {
-      res.setHeader('Content-Range', s3Response.ContentRange);
-    }
-    if (s3Response.ContentLength) {
-      res.setHeader('Content-Length', s3Response.ContentLength);
-    }
-
-    if (s3Response.$metadata && s3Response.$metadata.httpStatusCode === 206) {
-      res.status(206);
-    }
-
-    const body = s3Response.Body;
-    
-    if (!body) {
-      return res.status(500).json({ error: 'Corpo do arquivo vazio no B2' });
-    }
-
-    if (typeof body.pipe === 'function') {
-      body.pipe(res);
-    } 
-    else if (typeof body.getReader === 'function') {
-      const { Readable } = require('stream');
-      Readable.fromWeb(body).pipe(res);
-    }
-    else if (typeof body.arrayBuffer === 'function') {
-      const buffer = Buffer.from(await body.arrayBuffer());
-      res.end(buffer);
-    } 
-    else {
-      return res.status(500).json({ error: 'Formato de stream do S3 desconhecido', type: typeof body });
-    }
+    // ★ Redireciona o player para o Cloudflare Worker (CDN)
+    // O Cloudflare busca no B2, cacheia e serve. Egress do B2 = zero após o primeiro hit.
+    res.setHeader('Cache-Control', 'no-store'); // não cacheia a decisão de autorização
+    res.setHeader('X-Access-Level', accessLevel);
+    res.setHeader('X-CDN-URL', cdnUrl);
+    return res.redirect(302, cdnUrl);
 
   } catch (error) {
     console.error('[stream] erro detalhado:', error);
