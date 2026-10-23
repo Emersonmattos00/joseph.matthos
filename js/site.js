@@ -153,12 +153,18 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    // Adiciona um timestamp único para quebrar o cache
-    const response = await fetch(`/api/public?t=${Date.now()}`, { credentials: 'same-origin' });
-    const json = await response.json();
+    // Força a Vercel a ignorar o cache com um parâmetro de tempo
+    const url = `/api/public?v=${Date.now()}`;
+    
+    const r = await fetch(url, { 
+      credentials: 'same-origin',
+      cache: 'no-store' 
+    });
+    
+    const json = await r.json();
 
     if (!json || !json.ok) {
-      throw new Error('API retornou erro');
+      throw new Error('API retornou erro ou vazia');
     }
 
     // Pega os dados diretamente
@@ -168,10 +174,9 @@ async function loadPublicData() {
 
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
     
-    // Debug para vermos no console se chegou
+    // Debug para vermos no console
     console.log('✅ Dados da API carregados. Álbuns:', SITE.albums.length);
 
-    // ... (mantenha o resto do código que preenche SITE.tracks, SITE.plans, etc)
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -183,11 +188,10 @@ async function loadPublicData() {
       }
     }
 
-    // ... (mantenha a parte de SITE.plans e SITE.rentalPlans igual ao original)
+    // (mantenha o resto do código que preenche SITE.plans e SITE.rentalPlans igual ao que já estava)
     
   } catch (err) {
     console.warn('[public] falha:', err?.message);
-    // Fallback
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
   }
@@ -603,37 +607,27 @@ function initCarousels() {
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
-  console.log('🔥 FORCANDO RENDERIZAÇÃO. Álbuns encontrados:', albums.length);
+  console.log('🔥 Renderizando', albums.length, 'álbuns');
 
   const lancamentosEl = document.getElementById('gridLancamentos');
-  
   if (lancamentosEl) {
     if (albums.length === 0) {
-      lancamentosEl.innerHTML = '<p style="color:white; text-align:center; padding: 20px;">Nenhum álbum retornado pela API.</p>';
+      lancamentosEl.innerHTML = '<p style="color:white; text-align:center;">Nenhum álbum encontrado no banco.</p>';
     } else {
-      // Cria o HTML manualmente, sem depender de template clonado
-      let html = '';
-      for (let i = 0; i < albums.length; i++) {
-        const a = albums[i];
-        const imgUrl = a.coverUrl || 'assets/img/tema.webp';
-        
-        html += `
-          <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="cursor:pointer; display:flex; flex-direction:column; gap:8px;">
-            <div style="width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden; background:#333;">
-              <img src="${imgUrl}" alt="${a.title}" style="width:100%; height:100%; object-fit:cover;">
-            </div>
-            <div style="color:white; font-weight:bold; font-size:14px; margin-top:4px;">${a.title}</div>
-            <div style="color:#aaa; font-size:12px;">Joseph Matthos</div>
+      lancamentosEl.innerHTML = albums.map((a) => `
+        <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="cursor:pointer;">
+          <div class="spotify-card-cover">
+            <img src="${a.coverUrl || 'assets/img/tema.webp'}" alt="${a.title}" loading="lazy">
           </div>
-        `;
-      }
-      lancamentosEl.innerHTML = html;
+          <div class="spotify-card-title">${esc(a.title)}</div>
+          <div class="spotify-card-sub">Joseph Matthos</div>
+        </div>
+      `).join('');
       
-      // Adiciona o evento de clique nos cards (para abrir o modal)
+      // Adiciona o evento de clique
       lancamentosEl.querySelectorAll('[data-spotify-card]').forEach(card => {
         card.addEventListener('click', () => {
-          const albumId = card.dataset.albumId;
-          if (albumId) openAlbumModal(albumId);
+          openAlbumModal(card.dataset.albumId);
         });
       });
     }
