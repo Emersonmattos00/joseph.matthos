@@ -153,12 +153,9 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    // Adicionado 'no-store' para ignorar o cache e forçar a busca no banco
-    const r = await fetch('/api/public', { 
-      credentials: 'same-origin',
-      cache: 'no-store' 
-    });
-    const json = await r.json();
+    // Adiciona um timestamp único para quebrar o cache
+    const response = await fetch(`/api/public?t=${Date.now()}`, { credentials: 'same-origin' });
+    const json = await response.json();
 
     if (!json || !json.ok) {
       throw new Error('API retornou erro');
@@ -606,23 +603,39 @@ function initCarousels() {
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
-  console.log('🎨 Renderizando a tela com', albums.length, 'álbuns');
+  console.log('🔥 FORCANDO RENDERIZAÇÃO. Álbuns encontrados:', albums.length);
 
   const lancamentosEl = document.getElementById('gridLancamentos');
+  
   if (lancamentosEl) {
     if (albums.length === 0) {
-      lancamentosEl.innerHTML = '<p style="color:white; text-align:center;">Nenhum álbum encontrado.</p>';
+      lancamentosEl.innerHTML = '<p style="color:white; text-align:center; padding: 20px;">Nenhum álbum retornado pela API.</p>';
     } else {
-      // Renderização direta, sem usar template clonado
-      lancamentosEl.innerHTML = albums.map((a) => `
-        <div class="spotify-card" data-album-id="${a.id}" style="display:flex; flex-direction:column; gap:8px;">
-          <div style="position:relative; width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden;">
-            <img src="${a.coverUrl || 'assets/img/tema.webp'}" style="width:100%; height:100%; object-fit:cover;">
+      // Cria o HTML manualmente, sem depender de template clonado
+      let html = '';
+      for (let i = 0; i < albums.length; i++) {
+        const a = albums[i];
+        const imgUrl = a.coverUrl || 'assets/img/tema.webp';
+        
+        html += `
+          <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="cursor:pointer; display:flex; flex-direction:column; gap:8px;">
+            <div style="width:100%; aspect-ratio:1/1; border-radius:8px; overflow:hidden; background:#333;">
+              <img src="${imgUrl}" alt="${a.title}" style="width:100%; height:100%; object-fit:cover;">
+            </div>
+            <div style="color:white; font-weight:bold; font-size:14px; margin-top:4px;">${a.title}</div>
+            <div style="color:#aaa; font-size:12px;">Joseph Matthos</div>
           </div>
-          <div style="color:white; font-weight:bold; font-size:14px;">${a.title}</div>
-          <div style="color:#aaa; font-size:12px;">Joseph Matthos</div>
-        </div>
-      `).join('');
+        `;
+      }
+      lancamentosEl.innerHTML = html;
+      
+      // Adiciona o evento de clique nos cards (para abrir o modal)
+      lancamentosEl.querySelectorAll('[data-spotify-card]').forEach(card => {
+        card.addEventListener('click', () => {
+          const albumId = card.dataset.albumId;
+          if (albumId) openAlbumModal(albumId);
+        });
+      });
     }
   }
 }
