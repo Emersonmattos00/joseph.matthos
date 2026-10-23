@@ -3278,6 +3278,15 @@ if (document.readyState === 'loading') {
   boot();
 }
 
+// ─────────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────────
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+
 window.__site = {
   get state() { return { ...SITE }; },
   get rentalPlans() { return SITE.rentalPlans.slice(); },
@@ -3294,3 +3303,6 @@ window.__site = {
   },
   openManageModal
 };
+
+// 👇 ADICIONE ESTE LOG PARA SABERMOS SE O ARQUIVO CARREGOU 👇
+console.log('✅ window.__site criado com sucesso! Álbuns:', SITE.albums.length);
