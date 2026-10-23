@@ -378,7 +378,7 @@
 
       <h3>2.2 Dados coletados automaticamente</h3>
       <ul>
-        <li>Dados técnicos registrados pelo provedor de hospedagem (Vercel) e pelo serviço de banco de dados (Supabase), como endereço IP, navegador e sistema operacional;</li>
+        <li>Dados técnicos registrados pelo provedor de hospedagem (Vercel) e pelo serviço de banco de dados (Neon), como endereço IP, navegador e sistema operacional;</li>
         <li>Idioma, resolução de tela e informações necessárias ao funcionamento do site;</li>
         <li>Metadados de arquivos enviados (nome, tamanho, tipo MIME, data de upload) armazenados no banco de dados;</li>
         <li>Logs de acesso e erro retidos por curtos períodos para fins de segurança e diagnóstico.</li>
@@ -400,11 +400,11 @@
       <div class="highlight-box">
         <p>
           <strong>Nota técnica:</strong> A sessão de usuários comuns é gerenciada
-          pelo Supabase Auth, que emite cookies HttpOnly. O painel administrativo
+          pelo Neon Auth, que emite cookies HttpOnly. O painel administrativo
           usa cookie próprio (<code>__Host-jm_admin</code>), HttpOnly e com
           <code>SameSite=Lax</code>. Preferências de player (volume, mudo) ficam
           apenas em memória durante a sessão. Os arquivos de áudio enviados pelo
-          painel administrativo são armazenados no <strong>Supabase Storage</strong>,
+          painel administrativo são armazenados no <strong>Blackblaze b2 Storage</strong>,
           com metadados em PostgreSQL e acesso controlado por políticas de
           Row Level Security (RLS).
         </p>
@@ -447,7 +447,7 @@
       </p>
       <ul>
         <li><strong>Vercel (hospedagem):</strong> processa logs de acesso para operar o site;</li>
-        <li><strong>Supabase (banco de dados, autenticação e Storage):</strong> processa dados de conta, metadados e arquivos enviados;</li>
+        <li><strong>Neon (banco de dados, autenticação e Storage):</strong> processa dados de conta, metadados e arquivos enviados;</li>
         <li><strong>Mercado Pago (pagamentos):</strong> atua como controlador independente dos dados de pagamento. Recomendamos ler a <a href="https://www.mercadopago.com.br/privacidade" target="_blank" rel="noopener noreferrer">Política de Privacidade do Mercado Pago</a>;</li>
         <li><strong>Google (AdSense e Fonts):</strong> exibição de anúncios e carregamento de fontes;</li>
         <li><strong>Cloudflare (Font Awesome via cdnjs):</strong> carregamento de ícones;</li>
@@ -465,7 +465,7 @@
       </p>
       <ul>
         <li><strong>Vercel</strong> — hospedagem (região padrão: Washington, EUA);</li>
-        <li><strong>Supabase</strong> — banco de dados, autenticação e Storage (região padrão do plano gratuito: US East);</li>
+        <li><strong>Neon</strong> — banco de dados, autenticação e Storage (região padrão do plano gratuito: US East);</li>
         <li><strong>Google</strong> — AdSense e Fonts;</li>
         <li><strong>Cloudflare</strong> — CDN de ícones.</li>
       </ul>
@@ -488,9 +488,9 @@
         contra acesso não autorizado, perda, alteração ou divulgação:
       </p>
       <ul>
-        <li>Senhas de usuários são gerenciadas pelo Supabase Auth com hash seguro;</li>
+        <li>Senhas de usuários são gerenciadas pelo Neon Auth com hash seguro;</li>
         <li>Credenciais administrativas são validadas no backend com <code>crypto.scrypt</code>, salt único por senha e comparação em tempo constante;</li>
-        <li>Arquivos enviados são armazenados em buckets do Supabase Storage com políticas de Row Level Security (RLS) que restringem leitura, escrita e exclusão a usuários autenticados e autorizados;</li>
+        <li>Arquivos enviados são armazenados em buckets do Blackblase B2 Storage com políticas de Row Level Security (RLS) que restringem leitura, escrita e exclusão a usuários autenticados e autorizados;</li>
         <li>Comunicação via HTTPS (TLS 1.2+) em todas as páginas e em todas as chamadas à API;</li>
         <li>Content Security Policy (CSP) configurada para prevenir XSS;</li>
         <li>Validação de entrada e sanitização em todos os pontos de interação;</li>
@@ -556,7 +556,7 @@
       <h2>10. Cookies e Tecnologias Similares</h2>
       <p>Utilizamos as seguintes categorias:</p>
       <ul>
-        <li><strong>Essenciais:</strong> sessão do usuário (Supabase Auth, cookie <code>__Host-jm_admin</code> para o painel administrativo); obrigatórios para o funcionamento;</li>
+        <li><strong>Essenciais:</strong> sessão do usuário (Neon Auth, cookie <code>__Host-jm_admin</code> para o painel administrativo); obrigatórios para o funcionamento;</li>
         <li><strong>Funcionais:</strong> preferências de aparência e escolhas de plano;</li>
         <li><strong>Publicidade:</strong> cookies do Google AdSense e seus parceiros para exibir anúncios;</li>
         <li><strong>Analíticos:</strong> métricas agregadas de uso (quando habilitados).</li>
