@@ -174,25 +174,6 @@
           <a href="#discografia" class="section-spotify-link">VER TUDO</a>
         </div>
       </div>
-      
-      <!-- Template oculto para o JS clonar -->
-      <div id="templateCardAlbum" style="display: none;">
-        <div class="spotify-card" data-spotify-card data-type="album">
-          <div class="spotify-card-cover">
-            <span class="spotify-card-badge spotify-card-badge--full">✓ Premium</span>
-            <img src="" alt="" loading="lazy">
-            <button class="spotify-card-play" type="button" data-spotify-play aria-label="Tocar">▶</button>
-            <div class="spotify-card-actions">
-              <button class="spotify-card-action like" type="button">
-                <svg viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-              </button>
-            </div>
-          </div>
-          <div class="spotify-card-title"></div>
-          <div class="spotify-card-sub"></div>
-        </div>
-      </div>
-
       <div class="amz-grid" id="gridLancamentos"></div>
     </section>
 
@@ -713,12 +694,12 @@
         const el = document.getElementById('gridLancamentos');
         if (el) {
           el.innerHTML = SITE.albums.map(a => `
-            <div class="spotify-card" onclick="window.location.href='/player.html?album=${a.id}'" style="cursor:pointer; margin-bottom: 15px;">
+            <div class="spotify-card" onclick="window.location.href='/player.html?album=${a.id}'" style="cursor:pointer;">
               <div class="spotify-card-cover">
-                <img src="${a.coverUrl || 'assets/img/tema.webp'}" alt="${esc(a.title)}" style="width:100%; border-radius:8px;">
+                <img src="${a.coverUrl || 'assets/img/tema.webp'}" alt="${esc(a.title)}" loading="lazy">
               </div>
-              <div class="spotify-card-title" style="color:white; font-weight:bold; margin-top:8px;">${esc(a.title)}</div>
-              <div class="spotify-card-sub" style="color:#aaa;">Joseph Matthos</div>
+              <div class="spotify-card-title">${esc(a.title)}</div>
+              <div class="spotify-card-sub">Joseph Matthos</div>
             </div>
           `).join('');
         }
