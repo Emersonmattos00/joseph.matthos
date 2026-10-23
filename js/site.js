@@ -1,9 +1,9 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v18 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v19 FINAL DEFINITIVO)
    ------------------------------------------------------------
-   - CORREÇÃO CRÍTICA: Renderiza os cards da home lendo direto
-     do array SITE.albums, sem depender de faixas existirem.
-   - Mantém toda a lógica de player, modais, carrinho e auth.
+   - CORREÇÃO CRÍTICA: Renderiza os cards da home clonando
+     o template escondido no HTML (evita erros de string).
+   - Carrega independente do painel admin.
    ============================================================ */
 
 import {
@@ -671,10 +671,9 @@ function initCarousels() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SPOTIFY SECTIONS (CORRIGIDO)
+// SPOTIFY SECTIONS (CLONANDO TEMPLATE)
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
-  const tab = SITE.artistTab || 'todos';
   const albums = SITE.albums || [];
 
   const principaisEl = document.getElementById('gridPrincipais');
@@ -699,105 +698,54 @@ function renderSpotifySections() {
   }
 }
 
-function uniqueAlbumsFromTracks(tracks) {
-  const map = new Map();
-  for (const t of tracks) {
-    const album = findAlbum(t.albumId);
-    if (!album) continue;
-    if (!map.has(album.id)) {
-      map.set(album.id, {
-        albumId: album.id,
-        title: album.title,
-        coverImage: album.coverImage || album.coverUrl,
-        coverInitials: album.coverInitials || album.cover,
-        year: album.year,
-        type: album.type,
-        trackCount: Array.isArray(album.tracks) ? album.tracks.length : 0,
-        firstTrackIndex: t.trackIndex
-      });
-    }
-  }
-  return Array.from(map.values());
-}
-
 function renderSpotifyCard(item, type = 'album') {
-  let album, track, albumId, trackIndex, cover, title, subtitle, badge;
+  // 1. Pega o template oculto no HTML
+  const template = document.getElementById('templateCardAlbum');
+  if (!template) {
+    console.warn('[site] Template de card não encontrado no HTML');
+    return '';
+  }
 
+  // 2. Clona o template
+  const cloneNode = template.firstElementChild.cloneNode(true);
+
+  // 3. Descobre os dados
+  let albumId, cover, title, subtitle, trackIndex;
   if (type === 'track') {
     albumId = item.albumId;
-    trackIndex = item.trackIndex;
-    album = findAlbum(albumId);
-    track = findTrackByIndex(albumId, trackIndex);
+    const album = findAlbum(albumId);
+    const track = findTrackByIndex(albumId, item.trackIndex);
     if (!album || !track) return '';
-    cover = track.coverUrl || album.coverImage || album.coverUrl;
+    cover = track.coverUrl || album.coverUrl;
     title = track.title;
-    subtitle = `Joseph Matthos · ${album.title || ''}`.trim();
+    subtitle = `Joseph Matthos · ${album.title}`;
+    trackIndex = item.trackIndex;
   } else {
     albumId = item.id || item.albumId;
-    album = findAlbum(albumId) || item;
-    cover = album.coverUrl || album.coverImage;
-    title = album.title;
-    subtitle = `Joseph Matthos · ${Array.isArray(album.tracks) ? album.tracks.length : 0} faixas`;
+    cover = item.coverUrl;
+    title = item.title;
+    subtitle = `Joseph Matthos · 0 faixas`;
     trackIndex = 0;
   }
 
-  const premium = isPremium();
-  const rented = isRented(albumId, trackIndex);
-  if (premium) badge = { type: 'full', label: '✓ Premium' };
-  else if (rented) badge = { type: 'rented', label: '✓ Alugado' };
-  else badge = { type: 'preview', label: 'Prévia 30s' };
+  // 4. Preenche os dados no clone
+  cloneNode.dataset.albumId = albumId;
+  cloneNode.dataset.trackIndex = trackIndex;
 
-  const safeCover = safeMediaUrl(cover) || 'assets/img/tema.webp';
-  const badgeHtml = badge
-    ? `<span class="spotify-card-badge spotify-card-badge--${badge.type}">${badge.label}</span>`
-    : '';
+  const img = cloneNode.querySelector('img');
+  if (img) {
+    img.src = safeMediaUrl(cover) || 'assets/img/tema.webp';
+    img.alt = title;
+  }
 
-  const likeKey = `jm_like_${albumId}_${trackIndex}`;
-  const isLiked = localStorage.getItem(likeKey) === '1';
+  const titleEl = cloneNode.querySelector('.spotify-card-title');
+  if (titleEl) titleEl.textContent = title;
 
-  return `
-    <div class="spotify-card"
-         data-spotify-card
-         data-type="${type}"
-         data-album-id="${esc(albumId)}"
-         data-track-id="${esc(track?.id || '')}"
-         data-track-index="${trackIndex}">
-      <div class="spotify-card-cover">
-        ${badgeHtml}
-        <img src="${esc(safeCover)}" alt="${esc(title)}" loading="lazy"
-             onerror="this.src='assets/img/tema.webp'">
-        <button class="spotify-card-play" type="button"
-                data-spotify-play
-                aria-label="Tocar ${esc(title)}">▶</button>
-        <div class="spotify-card-actions">
-          <button class="spotify-card-action like ${isLiked ? 'liked' : ''}"
-                  type="button"
-                  data-action="like-track"
-                  data-album="${esc(albumId)}"
-                  data-track-index="${trackIndex}"
-                  title="${isLiked ? 'Remover dos curtidos' : 'Curtir'}"
-                  aria-label="Curtir"
-                  aria-pressed="${isLiked ? 'true' : 'false'}">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-            </svg>
-          </button>
-          <button class="spotify-card-action share"
-                  type="button"
-                  data-action="share-track"
-                  data-album="${esc(albumId)}"
-                  data-track-index="${trackIndex}"
-                  title="Compartilhar"
-                  aria-label="Compartilhar">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="spotify-card-title">${esc(title)}</div>
-      <div class="spotify-card-sub">${esc(subtitle)}</div>
-    </div>`;
+  const subEl = cloneNode.querySelector('.spotify-card-sub');
+  if (subEl) subEl.textContent = subtitle;
+
+  // 5. Retorna o HTML do clone
+  return cloneNode.outerHTML;
 }
 
 function bindSpotifyCards(container) {
@@ -3278,15 +3226,6 @@ if (document.readyState === 'loading') {
   boot();
 }
 
-// ─────────────────────────────────────────────────────────────
-// START
-// ─────────────────────────────────────────────────────────────
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', boot);
-} else {
-  boot();
-}
-
 window.__site = {
   get state() { return { ...SITE }; },
   get rentalPlans() { return SITE.rentalPlans.slice(); },
@@ -3303,6 +3242,3 @@ window.__site = {
   },
   openManageModal
 };
-
-// 👇 ADICIONE ESTE LOG PARA SABERMOS SE O ARQUIVO CARREGOU 👇
-console.log('✅ window.__site criado com sucesso! Álbuns:', SITE.albums.length);
