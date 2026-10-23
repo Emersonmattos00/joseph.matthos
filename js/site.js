@@ -2690,41 +2690,21 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   syncExpandedPlayer(track, album, false);
   updatePlayingHighlight();
 
-  let streamData;
-  try {
-    const r = await fetch(
-      `/api/stream?trackId=${encodeURIComponent(trackId)}`,
-      {
-        credentials: 'same-origin', cache: 'no-store',
-        headers: { Accept: 'application/json' },
-        signal: currentAbortController.signal
-      }
-    );
-    let json = null;
-    try { json = await r.json(); } catch { json = null; }
-    if (!r.ok) throw new Error(json?.error || `Falha ao obter áudio (${r.status})`);
-    streamData = json;
-  } catch (err) {
-    if (err?.name === 'AbortError') return;
-    console.error('[player] erro ao obter stream:', err);
-    toast(err?.message || 'Não foi possível carregar a música.', '⚠');
-    return;
-  }
-
-  const accessLevel = streamData.accessLevel || 'preview';
-  const unlocked = accessLevel === 'full';
-  const src = streamData.audioUrl;
-  const source = accessLevel;
-
-  if (!src) {
-    toast('Áudio não disponível.', '⚠');
-    return;
-  }
+  // ★ A MÁGICA ACONTECE AQUI: Joga a URL direto no áudio.
+  // O navegador bate na API, recebe o 302, e vai buscar no Cloudflare.
+  const src = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
+  const source = 'auto'; // O backend decide se é preview ou full
+  
+  // O navegador não nos diz se é preview ou full via 302, mas o backend corta o áudio se for preview.
+  // Para a UI, assumimos que se não for premium, pode ser preview.
+  const isUserPremium = isPremium();
+  const isUserRented = isRented(albumId, realIndex);
+  const unlocked = isUserPremium || isUserRented;
 
   if (unlocked) {
     previewState = { active: false, start: 0, end: Infinity };
   } else {
-    const duration = Math.max(1, Number(streamData.previewDuration) || 30);
+    const duration = Math.max(1, Number(30) || 30); // Fallback de 30s
     previewState = { active: true, start: 0, end: duration };
   }
   previewNoticeTrackKey = '';
@@ -2734,7 +2714,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
     trackIndex: realIndex,
     trackId,
     unlocked,
-    source,
+    source: unlocked ? 'full' : 'preview',
     url: src,
     expiresIn: 300,
     loadedAt: Date.now()
@@ -2748,7 +2728,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
 
   const artistEl2 = document.getElementById('nowArtist');
   if (artistEl2) {
-    artistEl2.textContent = `Joseph Matthos · ${album.title}` + (source === 'preview' ? ' (prévia)' : '');
+    artistEl2.textContent = `Joseph Matthos · ${album.title}` + (unlocked ? '' : ' (prévia)');
   }
 
   const cover = document.getElementById('playerCover');
@@ -2764,10 +2744,9 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
     }
   }
 
-  document.getElementById('previewBadge')?.classList.toggle('visible', source === 'preview');
-  document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', source === 'preview');
+  document.getElementById('previewBadge')?.classList.toggle('visible', !unlocked);
+  document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', !unlocked);
 
-  // 🔥 APLICA O FUNDO APENAS APÓS O ÁUDIO SER CARREGADO COM SUCESSO
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
@@ -2788,12 +2767,14 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   try {
     await waitForAudioReady(audio);
     await audio.play();
-    if (source === 'full') scheduleRenewal();
+    // Se o usuário for premium/aluguel, agenda a renovação da URL (se necessário)
+    if (unlocked) scheduleRenewal();
   } catch (err) {
     console.error('[player] falha na reprodução:', err);
     const code = audio?.error?.code;
     if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) toast('O formato deste áudio não é suportado pelo navegador.', '⚠');
     else if (code === MediaError.MEDIA_ERR_NETWORK) toast('Não foi possível acessar o arquivo de áudio.', '⚠');
+    else if (code === MediaError.MEDIA_ERR_DECODE) toast('Erro ao decodificar o áudio. Tente novamente.', '⚠');
   }
 }
 
