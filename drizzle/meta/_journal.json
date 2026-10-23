@@ -8,6 +8,13 @@
       "when": 1791893311032,
       "tag": "0000_acoustic_skullbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792760251816,
+      "tag": "0001_conscious_lester",
+      "breakpoints": true
     }
   ]
 }
