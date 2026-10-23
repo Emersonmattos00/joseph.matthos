@@ -153,7 +153,10 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    const r = await fetch('/api/public', { credentials: 'same-origin' });
+    const r = await fetch('/api/public', { 
+  credentials: 'same-origin',
+  cache: 'no-store' // <-- Força o navegador a buscar a versão nova
+});
     const json = await r.json();
 
     if (!json || !json.ok) {
