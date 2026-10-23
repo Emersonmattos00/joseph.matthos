@@ -13,7 +13,7 @@ const schema = require('./_db').schema;
 // ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
   // Controle de Cache: Deixa a Cloudflare/Vercel cachear o catálogo por 1 minuto
-  res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60');
+  res.setHeader('Cache-Control', 'no-store');
   
   // Configuração básica de CORS (permite acesso do player)
   res.setHeader('Access-Control-Allow-Origin', '*');
