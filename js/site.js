@@ -1,9 +1,9 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v19 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v22 FINAL DEFINITIVO)
    ------------------------------------------------------------
-   - CORREÇÃO CRÍTICA: Renderiza os cards da home clonando
-     o template escondido no HTML (evita erros de string).
-   - Carrega independente do painel admin.
+   - CORREÇÃO CRÍTICA: A função loadPublicData agora busca
+     na API v2 com cache-buster, garantindo que os 30 álbuns
+     apareçam e o visual original seja mantido.
    ============================================================ */
 
 import {
@@ -149,7 +149,7 @@ function deepMerge(target, source) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FETCH
+// FETCH (AQUI ESTÁ A ÚNICA ALTERAÇÃO)
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
@@ -169,9 +169,96 @@ async function loadPublicData() {
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
     console.log('🔥 Álbuns carregados:', SITE.albums.length);
     
-    // ... (mantenha o restante do código de tracks/plans)
+    SITE.tracks = {};
+    if (Array.isArray(json.tracks)) {
+      for (const t of json.tracks) {
+        if (!t) continue;
+        if (t.id) SITE.tracks[t.id] = t;
+        if (t.albumId && t.trackNumber != null) {
+          SITE.tracks[`${t.albumId}:${t.trackNumber}`] = t;
+        }
+      }
+    }
+
+    SITE.plans = {};
+    if (Array.isArray(json.plans)) {
+      for (const p of json.plans) {
+        if (!p || !p.id) continue;
+        const nameLower = String(p.name || '').toLowerCase();
+        let kind = null;
+        if (nameLower.includes('anual') || nameLower.includes('annual') || nameLower.includes('ano')) {
+          kind = 'anual';
+        } else if (nameLower.includes('mensal') || nameLower.includes('monthly') || nameLower.includes('mês') || nameLower.includes('mes') || nameLower.includes('premium') || nameLower.includes('pro')) {
+          kind = 'premium';
+        }
+
+        SITE.plans[p.id] = {
+          ...p,
+          kind,
+          priceCents: Number(p.priceCents) || 0,
+          available: p.available !== false && (kind === null || Number(p.priceCents) > 0)
+        };
+      }
+    }
+
+    SITE.rentalPlans = [];
+    SITE.albumRentalPlans = [];
+
+    if (Array.isArray(json.rentalPlans) && json.rentalPlans.length) {
+      const allPlans = json.rentalPlans
+        .filter((p) => p && p.id && p.available !== false && Number(p.price) > 0)
+        .map((p) => ({
+          id: String(p.id),
+          label: String(p.label || p.id),
+          days: Number(p.days) || 1,
+          hours: Number(p.hours) || 0,
+          price: Number(p.price) || 0,
+          priceCents: Number(p.priceCents) || Math.round((Number(p.price) || 0) * 100),
+          popular: !!p.popular,
+          available: true,
+          trackId: p.trackId || null,
+          albumId: p.albumId || null
+        }));
+
+      const dedupe = (arr) => {
+        const seen = new Set();
+        return arr.filter((p) => {
+          const key = `${p.label}|${p.days}|${p.hours}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      };
+
+      SITE.rentalPlans = dedupe(allPlans.filter((p) => p.trackId));
+      SITE.albumRentalPlans = dedupe(allPlans.filter((p) => p.albumId));
+    }
+
+    if (!SITE.rentalPlans.length) {
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({
+        ...p,
+        price: 0,
+        available: false,
+        trackId: null,
+        albumId: null
+      }));
+    }
+    if (!SITE.albumRentalPlans.length) {
+      SITE.albumRentalPlans = SITE.rentalPlans.map((p) => ({
+        ...p,
+        id: `album:${p.id}`,
+        trackId: null,
+        albumId: 'fallback'
+      }));
+    }
   } catch (err) {
     console.warn('[public] falha:', err?.message);
+    SITE.content = clone(DEFAULT_CONTENT);
+    SITE.albums = [];
+    SITE.tracks = {};
+    SITE.plans = {};
+    SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
+    SITE.albumRentalPlans = [];
   }
 }
 
@@ -3156,5 +3243,3 @@ window.__site = {
   },
   openManageModal
 };
-// No topo do js/site.js, logo após os imports
-console.log('🔥 CARREGOU O SITE.JS v21 - O TEMPLATE ESTÁ AQUI?', !!document.getElementById('templateCardAlbum'));
