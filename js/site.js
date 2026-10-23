@@ -3242,3 +3242,5 @@ window.__site = {
   },
   openManageModal
 };
+// No topo do js/site.js, logo após os imports
+console.log('🔥 CARREGOU O SITE.JS v21 - O TEMPLATE ESTÁ AQUI?', !!document.getElementById('templateCardAlbum'));
