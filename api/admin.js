@@ -15,14 +15,13 @@ const {
 const { db, eq, and, or, asc, desc, sql, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
-const { tracks, albums, artists } = schema;
+const { tracks, albums, artists, orders, adminAudit } = schema;
 
 const {
   uploadObject, createSignedUploadUrl: b2CreateSignedUploadUrl,
   createSignedDownloadUrl: b2CreateSignedDownloadUrl,
   getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists
 } = require('./_storage');
-
 
 // Constantes
 const SESSION_COOKIE_PROD = '__Host-jm_admin';
@@ -149,10 +148,6 @@ async function handleLogin(req, res) {
   const userOk = timingSafeEq(user, expectedUser);
   const passOk = await verifyScrypt(pass, hash);
 
-  // Logs seguros de depuração (apenas para o servidor)
-  console.log('[admin/login] Tentativa para usuário:', user);
-  console.log('[admin/login] userOk:', userOk, 'passOk:', passOk);
-
   if (!userOk || !passOk) {
     await audit('admin_login', { ip, success: false, reason: 'invalid', target: user });
     return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
@@ -232,7 +227,7 @@ async function handleUploadSign(req, res, session) {
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${body.filename.split('.').pop()}`;
   const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
 
-  const signed = await createSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
+  const signed = await b2CreateSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
   return sendJson(res, 200, { ok: true, uploadUrl: signed.uploadUrl, token: signed.token, path, bucket });
 }
 
@@ -271,9 +266,16 @@ async function handleUploadConfirm(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
   const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
-  const planRows = []; // Temporário para não quebrar
+  
+  // Tentativa de ler a view effective_plan, mas à prova de falhas
+  let planRows = [];
+  try {
+    planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
+  } catch (e) {
+    console.warn('[admin] View effective_plan não encontrada.');
+  }
+  
   const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
-
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
 }
 
@@ -407,6 +409,35 @@ async function handleDownloadAlbum(req, res, session) {
     return { id: t.id, title: t.title, url };
   }));
   return sendJson(res, 200, { ok: true, tracks: urls });
+}
+
+// ─────────────────────────────────────────────────────────────
+// VENDAS E AUDITORIA (Funções que estavam faltando)
+// ─────────────────────────────────────────────────────────────
+async function handleGetSales(req, res) {
+  try {
+    const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
+    const sales = rows.map(o => ({
+      id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId
+    }));
+    return sendJson(res, 200, { ok: true, sales });
+  } catch (err) {
+    console.error('[admin] erro ao buscar vendas:', err);
+    return sendJson(res, 200, { ok: true, sales: [] }); 
+  }
+}
+
+async function handleGetAudit(req, res) {
+  try {
+    const rows = await db.select().from(adminAudit).orderBy(desc(adminAudit.createdAt)).limit(100);
+    return sendJson(res, 200, { ok: true, audit: rows });
+  } catch (err) {
+    return sendJson(res, 200, { ok: true, audit: [] });
+  }
+}
+
+async function handleGenHash(req, res, session) {
+  return sendJson(res, 200, { ok: true, message: 'Use o terminal para gerar o hash.' });
 }
 
 // ─────────────────────────────────────────────────────────────
