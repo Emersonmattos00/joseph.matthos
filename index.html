@@ -681,7 +681,12 @@
   </div>
 </div>
 
-<script type="module" src="js/site.js?v=2"></script>
-<script type="module" src="js/admin/index.js"></script>
+<!-- Carrega o site público primeiro -->
+<script type="module" src="js/site.js"></script>
+
+<!-- Carrega o painel admin apenas se estiver na página correta -->
+<script type="module">
+  import './js/admin/index.js';
+</script>
 </body>
 </html>
