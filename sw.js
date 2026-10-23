@@ -23,7 +23,7 @@
        3. req.headers.get('range')
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v23'; // <-- BUMPEI A VERSÃO PARA FORÇAR ATUALIZAÇÃO
+const CACHE_VERSION = 'jm-v24'; // <-- BUMPEI A VERSÃO PARA FORÇAR ATUALIZAÇÃO
 
 // ─────────────────────────────────────────────────────────────
 // Precache — assets estáticos do site público
