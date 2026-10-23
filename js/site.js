@@ -675,26 +675,23 @@ function initCarousels() {
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
-
-  const principaisEl = document.getElementById('gridPrincipais');
-  if (principaisEl) {
-    principaisEl.innerHTML = albums.slice(0, 8).map((a) => renderSpotifyCard(a, 'album')).join('');
-    bindSpotifyCards(principaisEl);
-  }
+  console.log('🔥 Renderizando', albums.length, 'álbuns');
 
   const lancamentosEl = document.getElementById('gridLancamentos');
   if (lancamentosEl) {
-    lancamentosEl.innerHTML = albums.map((a) => renderSpotifyCard(a, 'album')).join('');
-    bindSpotifyCards(lancamentosEl);
-  }
-
-  const albunsRecentesEl = document.getElementById('gridAlbunsRecentes');
-  if (albunsRecentesEl) {
-    const sortedAlbums = [...albums]
-      .sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))
-      .slice(0, 8);
-    albunsRecentesEl.innerHTML = sortedAlbums.map((a) => renderSpotifyCard(a, 'album')).join('');
-    bindSpotifyCards(albunsRecentesEl);
+    if (albums.length === 0) {
+      lancamentosEl.innerHTML = '<p style="color:white;">Nenhum álbum encontrado no banco.</p>';
+    } else {
+      lancamentosEl.innerHTML = albums.map((a) => `
+        <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="display:block;">
+          <div class="spotify-card-cover" style="height:150px;background:#333;">
+            <img src="${safeMediaUrl(a.coverUrl) || 'assets/img/tema.webp'}" style="width:100%;height:100%;object-fit:cover;">
+          </div>
+          <div class="spotify-card-title" style="color:white;font-weight:bold;margin-top:10px;">${esc(a.title)}</div>
+          <div class="spotify-card-sub" style="color:#aaa;">Joseph Matthos</div>
+        </div>
+      `).join('');
+    }
   }
 }
 
