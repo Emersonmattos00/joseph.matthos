@@ -502,13 +502,23 @@ async function handleWebhook(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ROTEADOR
+// ROTEADOR (Versão Final Corrigida)
 // ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', APP_URL() || '*');
+  const allowedOrigin = APP_URL();
+
+  // CORS Seguro: Só envia credenciais se a origem for exata
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // Fallback seguro: sem credenciais se não houver APP_URL
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-signature, x-request-id');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
   if (req.method === 'OPTIONS') return res.status(204).end();
 
   const type = String(req.query.type || '');

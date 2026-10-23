@@ -6,7 +6,7 @@
    - JS do admin: network-first (NUNCA cacheado)
    - API: NUNCA cacheada (incluindo /api/stream)
    - Range requests (áudio): passam direto, sem interceptação
-   - Cross-origin (Supabase Storage): passam direto
+   - Cross-origin (Cloudflare CDN / Backblaze B2): passam direto
    - Imagens: fallback para placeholder SVG em caso de falha
 
    ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
@@ -15,20 +15,18 @@
 
    🛡️  SEGURANÇA
    ------------------------------------------------------------
-   - URLs assinadas do Supabase (fullUrl) NUNCA são cacheadas
+   - URLs do CDN da Cloudflare NUNCA são cacheadas
    - O player pede /api/stream toda vez → URL nova a cada request
-   - Se o SW cacheasse /api/stream, uma URL expirada seria servida
    - Por isso há 3 guardas redundantes abaixo:
        1. url.pathname.startsWith('/api/')
        2. url.origin !== self.location.origin
        3. req.headers.get('range')
    ============================================================ */
 
-const CACHE_VERSION = 'jm-v20';
+const CACHE_VERSION = 'jm-v21'; // <-- BUMPEI A VERSÃO PARA FORÇAR ATUALIZAÇÃO
 
 // ─────────────────────────────────────────────────────────────
 // Precache — assets estáticos do site público
-// ⚠️  NÃO incluir /js/admin/** — esses são network-first
 // ─────────────────────────────────────────────────────────────
 const CACHE_STATIC = [
   // Páginas
@@ -54,7 +52,6 @@ const CACHE_STATIC = [
 
 // ─────────────────────────────────────────────────────────────
 // Placeholder SVG — usado como fallback de imagem quebrada
-// (retornar HTML para <img> quebra o layout; SVG é aceito)
 // ─────────────────────────────────────────────────────────────
 const IMAGE_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
   <rect width="200" height="200" fill="#131216"/>
@@ -117,12 +114,11 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
 
-  // 2) Guarda: NUNCA intercepta cross-origin (Supabase, CDNs, MP)
-  //    O áudio vem de *.supabase.co — o SW nem vê.
+  // 2) Guarda: NUNCA intercepta cross-origin (Cloudflare, B2, MP)
+  //    O áudio vem de cdn.josephmatthos.com.br — o SW nem vê.
   if (url.origin !== self.location.origin) return;
 
   // 3) Guarda: NUNCA intercepta /api/* (inclui /api/stream)
-  //    URLs assinadas precisam ser geradas a cada request.
   if (url.pathname.startsWith('/api/')) return;
 
   // 4) Guarda: NUNCA intercepta Range requests (áudio com seek)
@@ -148,12 +144,6 @@ self.addEventListener('fetch', (event) => {
 // HANDLERS
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Navegação (HTML):
- * - network-first (busca versão fresca)
- * - fallback para cache
- * - fallback final para offline.html
- */
 async function handleNavigation(req) {
   try {
     const res = await fetch(req);
@@ -181,12 +171,6 @@ async function handleNavigation(req) {
   }
 }
 
-/**
- * JS do admin:
- * - network-first puro
- * - SEM cache de escrita (nunca guarda versão antiga)
- * - se offline e não tem cache, retorna erro claro
- */
 async function handleAdminAsset(req) {
   try {
     return await fetch(req);
@@ -194,19 +178,10 @@ async function handleAdminAsset(req) {
     const cached = await caches.match(req);
     if (cached) return cached;
 
-    return new Response('', {
-      status: 504,
-      statusText: 'Offline'
-    });
+    return new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
-/**
- * Assets estáticos (CSS, JS público, imagens):
- * - cache-first
- * - revalidate em background se online
- * - fallback de imagem → placeholder SVG
- */
 async function handleAsset(req) {
   const cached = await caches.match(req);
 
@@ -227,9 +202,7 @@ async function handleAsset(req) {
 
     return res;
   } catch {
-    // Offline e não cacheado
     if (req.destination === 'image') {
-      // SVG é seguro como resposta de <img>
       return new Response(IMAGE_PLACEHOLDER_SVG, {
         status: 200,
         headers: {
@@ -239,16 +212,10 @@ async function handleAsset(req) {
       });
     }
 
-    return new Response('', {
-      status: 504,
-      statusText: 'Offline'
-    });
+    return new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
-/**
- * Revalida um asset em background, atualizando o cache se mudou.
- */
 async function revalidate(req) {
   try {
     const res = await fetch(req);

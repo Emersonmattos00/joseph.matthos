@@ -9,5 +9,6 @@ const db = drizzle(sqlNeon, { schema });
 module.exports = { 
   db, 
   sql: sqlNeon,
+  schema, // <-- ADICIONADO AQUI (Era isso que quebrava o admin!)
   eq, and, or, asc, desc, sql, inArray, gt, lt 
 };

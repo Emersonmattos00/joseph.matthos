@@ -1,181 +1,124 @@
 /* ============================================================
-   API: /api/public — Catálogo público e Metadados do Player
+   api/public.js — Catálogo público (Versão Final Corrigida)
    ============================================================ */
 
-const { eq, desc, asc } = require('drizzle-orm');
-const { db } = require('./_db');
-const { tracks, albums, artists, plans, rentalProducts } = require('../src/schema.js');
+'use strict';
 
-// Função auxiliar para garantir que a URL da capa seja sempre pública
-function getPublicCoverUrl(coverUrl, albumSlug) {
-  if (!coverUrl) {
-    return `https://f005.backblazeb2.com/file/joseph.matthos/assets/img/${albumSlug || 'default'}.webp`;
-  }
-  // Se já for uma URL completa, retorna como está
-  if (coverUrl.startsWith('http')) {
-    return coverUrl;
-  }
-  // Se for apenas o caminho, monta a URL do B2
-  return `https://f005.backblazeb2.com/file/joseph.matthos/${coverUrl.replace(/^\/+/, '')}`;
-}
+const { sendJson } = require('./_lib');
+const { db, eq, and, or, asc, desc, inArray } = require('./_db');
+const schema = require('./_db').schema;
 
+// ─────────────────────────────────────────────────────────────
+// HANDLER
+// ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
+  // Controle de Cache: Deixa a Cloudflare/Vercel cachear o catálogo por 1 minuto
+  res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60');
+  
+  // Configuração básica de CORS (permite acesso do player)
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  
+  const { track, album } = req.query;
 
   try {
-    // ============================================
-    // ROTA DO PLAYER: METADADOS DA FAIXA E LETRA
-    // ============================================
-    if (req.query.track) {
-      const trackId = req.query.track;
+    if (req.method !== 'GET') {
+      return sendJson(res, 405, { error: 'Method not allowed' });
+    }
 
-      const trackResult = await db
-        .select({
-          id: tracks.id,
-          title: tracks.title,
-          durationSeconds: tracks.durationSeconds,
-          trackNumber: tracks.trackNumber,
-          albumId: tracks.albumId,
-          albumTitle: albums.title,
-          albumSlug: albums.slug,
-          coverUrl: albums.coverUrl,
-          artistName: artists.name,
-          lyrics: tracks.lyrics, // JSONB: [{ time, text }]
-        })
-        .from(tracks)
-        .leftJoin(albums, eq(tracks.albumId, albums.id))
-        .leftJoin(artists, eq(tracks.artistId, artists.id))
-        .where(eq(tracks.id, trackId))
-        .limit(1);
+    // ── 1. Retorna faixa específica (Player) ──────────────────
+    if (track) {
+      const [trackRow] = await db.select()
+        .from(schema.tracks)
+        .where(
+          and(
+            eq(schema.tracks.id, track),
+            eq(schema.tracks.published, true) // ⚠️ Garante que a faixa está publicada
+          )
+        ).limit(1);
 
-      if (trackResult.length === 0) {
-        return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
+      if (!trackRow) {
+        return sendJson(res, 404, { error: 'Faixa não encontrada ou não publicada.' });
       }
 
-      const track = trackResult[0];
-      const finalCoverUrl = getPublicCoverUrl(track.coverUrl, track.albumSlug);
+      // Busca o Álbum da faixa para exibir no player (título, capa, etc)
+      const [albumRow] = await db.select()
+        .from(schema.albums)
+        .where(
+          and(
+            eq(schema.albums.id, trackRow.albumId),
+            eq(schema.albums.published, true) // ⚠️ Garante que o álbum está publicado
+          )
+        ).limit(1);
 
-      const albumTracksResult = await db
-        .select({
-          id: tracks.id,
-          title: tracks.title,
-          durationSeconds: tracks.durationSeconds,
-          trackNumber: tracks.trackNumber,
-          status: tracks.status,
-        })
-        .from(tracks)
-        .where(eq(tracks.albumId, track.albumId))
-        .orderBy(asc(tracks.trackNumber));
+      if (!albumRow) {
+        return sendJson(res, 404, { error: 'Álbum não encontrado ou não publicado.' });
+      }
 
-      const albumTracksFormatted = albumTracksResult.map(t => ({
-        id: t.id,
-        title: t.title,
-        durationSeconds: t.durationSeconds,
-        duration: t.durationSeconds
-          ? `${Math.floor(t.durationSeconds / 60)}:${String(t.durationSeconds % 60).padStart(2, '0')}`
-          : '--:--',
-        locked: t.status !== 'PUBLISHED',
-      }));
+      // Busca todas as faixas publicadas deste álbum para montar a lista do player
+      const albumTracks = await db.select({
+        id: schema.tracks.id,
+        title: schema.tracks.title,
+        trackNumber: schema.tracks.trackNumber,
+        durationSeconds: schema.tracks.durationSeconds,
+        locked: schema.tracks.locked
+      })
+      .from(schema.tracks)
+      .where(
+        and(
+          eq(schema.tracks.albumId, albumRow.id),
+          eq(schema.tracks.published, true)
+        )
+      )
+      .orderBy(asc(schema.tracks.trackNumber));
 
-      return res.status(200).json({
-        ok: true,
-        id: track.id,
-        title: track.title,
-        artist: track.artistName || 'Joseph Matthos',
-        albumTitle: track.albumTitle || 'Álbum',
-        coverUrl: finalCoverUrl,
-        lyrics: track.lyrics || [],
-        albumTracks: albumTracksFormatted,
+      // Retorna a resposta exata que o player.js espera
+      return sendJson(res, 200, {
+        id: trackRow.id,
+        title: trackRow.title,
+        artist: albumRow.artistName || 'Joseph Matthos',
+        albumTitle: albumRow.title,
+        coverUrl: albumRow.coverUrl,
+        audioPath: trackRow.fullPath || trackRow.previewPath, // Usado pela API de stream
+        lyrics: trackRow.lyrics || [],
+        albumTracks
       });
     }
 
-    // ============================================
-    // CATÁLOGO COMPLETO (SITE)
-    // ============================================
-    const albumsRaw = await db
-      .select({
-        id: albums.id, title: albums.title, slug: albums.slug, releaseDate: albums.releaseDate,
-        coverUrl: albums.coverUrl, sortOrder: albums.sortOrder, upc: albums.upc,
-        artistId: albums.artistId, artistName: artists.name, artistSlug: artists.slug,
-      })
-      .from(albums)
-      .leftJoin(artists, eq(albums.artistId, artists.id))
-      .orderBy(asc(albums.sortOrder), desc(albums.releaseDate));
+    // ── 2. Retorna álbum específico ───────────────────────────
+    if (album) {
+      const [albumRow] = await db.select()
+        .from(schema.albums)
+        .where(
+          and(
+            eq(schema.albums.id, album),
+            eq(schema.albums.published, true)
+          )
+        ).limit(1);
 
-    const tracksRaw = await db
-      .select({
-        id: tracks.id, title: tracks.title, slug: tracks.slug, durationSeconds: tracks.durationSeconds,
-        trackNumber: tracks.trackNumber, albumId: tracks.albumId, albumTitle: albums.title,
-        albumSlug: albums.slug, coverUrl: albums.coverUrl, artistId: tracks.artistId,
-        artistName: artists.name, status: tracks.status,
-      })
-      .from(tracks)
-      .leftJoin(albums, eq(tracks.albumId, albums.id))
-      .leftJoin(artists, eq(tracks.artistId, artists.id))
-      .where(eq(tracks.status, 'PUBLISHED'))
-      .orderBy(asc(tracks.albumId), asc(tracks.trackNumber));
+      if (!albumRow) return sendJson(res, 404, { error: 'Álbum não encontrado.' });
 
-    let plansRaw = [];
-    try {
-      plansRaw = await db.select().from(plans).where(eq(plans.active, true));
-    } catch (err) { console.warn('[public] planos indisponíveis:', err.message); }
+      const tracks = await db.select()
+        .from(schema.tracks)
+        .where(
+          and(
+            eq(schema.tracks.albumId, albumRow.id),
+            eq(schema.tracks.published, true)
+          )
+        ).orderBy(asc(schema.tracks.trackNumber));
 
-    let rentalRaw = [];
-    try {
-      rentalRaw = await db.select().from(rentalProducts).where(eq(rentalProducts.active, true)).orderBy(asc(rentalProducts.sortOrder));
-    } catch (err) { console.warn('[public] aluguéis indisponíveis:', err.message); }
-
-    const tracksByAlbum = new Map();
-    for (const t of tracksRaw) {
-      if (!t.albumId) continue;
-      if (!tracksByAlbum.has(t.albumId)) tracksByAlbum.set(t.albumId, []);
-      tracksByAlbum.get(t.albumId).push({
-        id: t.id, title: t.title, slug: t.slug, durationSeconds: t.durationSeconds,
-        trackNumber: t.trackNumber, trackIndex: t.trackNumber, coverUrl: getPublicCoverUrl(t.coverUrl, t.albumSlug),
-      });
+      return sendJson(res, 200, { album: albumRow, tracks });
     }
 
-    const albumsWithTracks = albumsRaw.map((a) => {
-      const albumTracks = tracksByAlbum.get(a.id) || [];
-      return {
-        id: a.id, title: a.title, slug: a.slug, year: a.releaseDate ? String(a.releaseDate).slice(0, 4) : '',
-        releaseDate: a.releaseDate, coverUrl: getPublicCoverUrl(a.coverUrl, a.slug), coverImage: getPublicCoverUrl(a.coverUrl, a.slug),
-        coverInitials: a.title ? a.title.charAt(0) : '♪', type: 'album',
-        artistId: a.artistId, artistName: a.artistName, artistSlug: a.artistSlug, tracks: albumTracks,
-      };
-    });
+    // ── 3. Lista todos os álbuns publicados (Home) ────────────
+    const albums = await db.select()
+      .from(schema.albums)
+      .where(eq(schema.albums.published, true))
+      .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    const plansNormalized = plansRaw.map((p) => ({
-      id: p.id, name: p.name, priceCents: p.priceCents, currency: p.currency,
-      interval: p.intervalUnit === 'MONTH' ? 'month' : p.intervalUnit === 'YEAR' ? 'year' : p.intervalUnit === 'DAY' ? 'day' : null,
-      intervalCount: p.intervalCount, available: true,
-    }));
+    return sendJson(res, 200, { albums });
 
-    const rentalNormalized = rentalRaw.map((r) => {
-      const hours = r.durationHours || 24;
-      const days = Math.max(1, Math.floor(hours / 24));
-      return {
-        id: r.id, label: r.name, days, hours, price: (r.priceCents || 0) / 100, priceCents: r.priceCents,
-        popular: false, available: r.active !== false && (r.priceCents || 0) > 0, trackId: r.trackId, albumId: r.albumId,
-      };
-    });
-
-    const tracksPublic = tracksRaw.map(({ ...rest }) => rest);
-
-    return res.status(200).json({
-      ok: true, content: null, albums: albumsWithTracks, tracks: tracksPublic,
-      plans: plansNormalized, rentalPlans: rentalNormalized,
-      stats: {
-        totalAlbums: albumsWithTracks.length, totalTracks: tracksRaw.length,
-        totalPlans: plansNormalized.length, totalRentals: rentalNormalized.length,
-      },
-    });
-  } catch (error) {
-    console.error('Erro em /api/public:', error);
-    return res.status(500).json({ ok: false, error: 'Erro ao buscar catálogo', message: error.message });
+  } catch (err) {
+    console.error('[public] Erro na API:', err);
+    return sendJson(res, 500, { error: 'Erro interno no catálogo.' });
   }
 };

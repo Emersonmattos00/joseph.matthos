@@ -1,26 +1,28 @@
+/*// Permite apenas o seu domínio
+const origin = req.headers.origin;
+if (['https://josephmatthos.com.br', 'https://www.josephmatthos.com.br', 'http://localhost:3000'].includes(origin)) {
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+}*/
+
+/* ============================================================
+   api/stream.js — Entrega de áudio (Versão Final Segura)
+   ============================================================ */
+
+'use strict';
+
 const { eq, and, gt, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
-const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
-const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { streamRatelimit } = require('./_cache');
 
-const s3Client = new S3Client({
-  region: process.env.B2_MEDIA_REGION || 'us-east-005',
-  endpoint: process.env.B2_MEDIA_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID,
-    secretAccessKey: process.env.B2_APPLICATION_KEY
-  },
-  requestHandler: new NodeHttpHandler({
-    connectionTimeout: 5000,
-    requestTimeout: 15000
-  })
-});
+// ★ Aqui usamos a variável de ambiente. 
+// Se ela não existir (ex: em dev), ele usa um fallback para o Worker.
+const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
 
 module.exports = async (req, res) => {
+  // CORS restrito para o seu domínio
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
@@ -53,7 +55,9 @@ module.exports = async (req, res) => {
             gt(subscriptions.currentPeriodEnd, now)
           )).limit(1);
         if (sub) accessLevel = 'full';
-      } catch (e) {}
+      } catch (e) {
+        console.error('[stream] Erro ao checar assinatura:', e);
+      }
 
       if (accessLevel !== 'full') {
         try {
@@ -69,21 +73,22 @@ module.exports = async (req, res) => {
               rentalCond
             )).limit(1);
           if (rent) accessLevel = 'full';
-        } catch (e) {}
+        } catch (e) {
+          console.error('[stream] Erro ao checar aluguel:', e);
+        }
       }
     }
 
-    // LÓGICA DE SEGURANÇA: NUNCA entrega o full para quem não tem permissão
+    // LÓGICA DE SEGURANÇA: Decide qual arquivo entregar
     let b2Key;
     if (accessLevel === 'full') {
       b2Key = track.streamKey || track.fullPath;
     } else {
-      // Se não tem previewKey, retorna 403 (não entrega o áudio completo)
       b2Key = track.previewKey;
       if (!b2Key) {
         return res.status(403).json({ 
-          error: 'Prévia não disponível', 
-          message: 'Esta faixa não tem preview configurada. Alugue ou assine para ouvir o áudio completo.' 
+          error: 'Prévia indisponível', 
+          message: 'Alugue ou assine para ouvir o áudio completo.' 
         });
       }
     }
@@ -92,74 +97,25 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    const bucket = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
-    const keyToFetch = (b2Key.startsWith('josephmatthos/') || b2Key.startsWith('previews/')) 
-      ? b2Key 
-      : `josephmatthos/${b2Key}`;
+    // ★ PADRONIZAÇÃO DO CAMINHO (Correção da auditoria)
+    // Remove barras extras no início e o prefixo do bucket se já existir
+    const cleanKey = String(b2Key)
+      .replace(/^\/+/, '')
+      .replace(/^josephmatthos\//, ''); 
 
-    console.log(`[stream] Buscando ${keyToFetch} (acesso: ${accessLevel})...`);
+    // ★ REDIRECIONAMENTO (Economia de banda)
+    const cdnUrl = `${CDN_BASE}/${cleanKey}`;
 
-    const rangeHeader = req.headers.range;
-    const commandParams = { Bucket: bucket, Key: keyToFetch };
+    // Não guarda a decisão de autorização no cache do navegador
+    res.setHeader('Cache-Control', 'no-store');
     
-    if (rangeHeader) {
-      commandParams.Range = rangeHeader;
-    }
-
-    const command = new GetObjectCommand(commandParams);
-    
-    let s3Response;
-    try {
-      s3Response = await s3Client.send(command);
-    } catch (s3Err) {
-      console.error('[stream] Erro no S3:', s3Err.name, s3Err.message);
-      return res.status(404).json({ 
-        error: 'Arquivo não encontrado no Backblaze B2', 
-        details: s3Err.message,
-        code: s3Err.name
-      });
-    }
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-
-    if (s3Response.ContentRange) {
-      res.setHeader('Content-Range', s3Response.ContentRange);
-    }
-    if (s3Response.ContentLength) {
-      res.setHeader('Content-Length', s3Response.ContentLength);
-    }
-
-    if (s3Response.$metadata && s3Response.$metadata.httpStatusCode === 206) {
-      res.status(206);
-    }
-
-    const body = s3Response.Body;
-    
-    if (!body) {
-      return res.status(500).json({ error: 'Corpo do arquivo vazio no B2' });
-    }
-
-    if (typeof body.pipe === 'function') {
-      body.pipe(res);
-    } 
-    else if (typeof body.getReader === 'function') {
-      const { Readable } = require('stream');
-      Readable.fromWeb(body).pipe(res);
-    }
-    else if (typeof body.arrayBuffer === 'function') {
-      const buffer = Buffer.from(await body.arrayBuffer());
-      res.end(buffer);
-    } 
-    else {
-      return res.status(500).json({ error: 'Formato de stream do S3 desconhecido', type: typeof body });
-    }
+    // Redireciona o player para o CDN (Cloudflare) ou para o B2
+    return res.redirect(302, cdnUrl);
 
   } catch (error) {
     console.error('[stream] erro detalhado:', error);
     if (!res.headersSent) {
-      return res.status(500).json({ error: 'Erro interno no servidor', message: error.message });
+      return res.status(500).json({ error: 'Erro interno no servidor' });
     }
   }
 };
