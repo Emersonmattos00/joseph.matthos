@@ -153,12 +153,9 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    // Adicionado 'no-store' para ignorar o cache e forçar a busca no banco
-    const r = await fetch('/api/public', { 
-      credentials: 'same-origin',
-      cache: 'no-store' 
-    });
-    const json = await r.json();
+    // Adiciona um timestamp único para quebrar o cache
+    const response = await fetch(`/api/public?t=${Date.now()}`, { credentials: 'same-origin' });
+    const json = await response.json();
 
     if (!json || !json.ok) {
       throw new Error('API retornou erro');
