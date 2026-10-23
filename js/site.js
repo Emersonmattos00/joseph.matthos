@@ -1,9 +1,8 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v22 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v24 FINAL COMPLETO)
    ------------------------------------------------------------
-   - CORREÇÃO CRÍTICA: A função loadPublicData agora busca
-     na API v2 com cache-buster, garantindo que os 30 álbuns
-     apareçam e o visual original seja mantido.
+   - TODAS as funcionalidades originais mantidas
+   - CORREÇÃO ÚNICA: loadPublicData busca na api v2 com timestamp
    ============================================================ */
 
 import {
@@ -105,18 +104,13 @@ async function boot() {
         esc,
         safeMediaUrl,
         setQueue: (queue) => {
-          playerQueue = queue.map((t) => ({
-            albumId: t.albumId,
-            trackIndex: t.trackIndex
-          }));
+          playerQueue = queue.map((t) => ({ albumId: t.albumId, trackIndex: t.trackIndex }));
           playerQueueIndex = 0;
         },
         getQueue: () => playerQueue.slice(),
         getQueueIndex: () => playerQueueIndex,
         setQueueIndex: (idx) => {
-          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
-            playerQueueIndex = idx;
-          }
+          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) playerQueueIndex = idx;
         }
       });
     } catch (err) {
@@ -149,14 +143,13 @@ function deepMerge(target, source) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FETCH (AQUI ESTÁ A ÚNICA ALTERAÇÃO)
+// FETCH (AQUI ESTÁ A ÚNICA ALTERAÇÃO: V2 COM TIMESTAMP)
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    // Busca na v2 com timestamp para ignorar cache
-    const r = await fetch(`/api/public_v2?t=${Date.now()}`, { 
+    const r = await fetch(`/api/public_v2?t=${Date.now()}`, {
       credentials: 'same-origin',
-      cache: 'no-store' 
+      cache: 'no-store'
     });
     const json = await r.json();
 
@@ -168,7 +161,7 @@ async function loadPublicData() {
 
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
     console.log('🔥 Álbuns carregados:', SITE.albums.length);
-    
+
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
       for (const t of json.tracks) {
@@ -481,7 +474,7 @@ function renderArtistHero() {
   if (avatar) {
     const imageUrl = 'https://f005.backblazeb2.com/file/joseph.matthos/assets/img/avatarjm.jpg';
     const safe = safeMediaUrl(imageUrl);
-    
+
     if (safe) {
       avatar.style.display = 'block';
       avatar.style.backgroundImage = `url('${safe}')`;
@@ -688,8 +681,7 @@ function renderSpotifySections() {
           <div class="spotify-card-sub">Joseph Matthos</div>
         </div>
       `).join('');
-      
-      // Adiciona o evento de clique
+
       lancamentosEl.querySelectorAll('[data-spotify-card]').forEach(card => {
         card.addEventListener('click', () => {
           openAlbumModal(card.dataset.albumId);
@@ -2624,7 +2616,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
 
   const src = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
   const source = 'auto';
-  
+
   const isUserPremium = isPremium();
   const isUserRented = isRented(albumId, realIndex);
   const unlocked = isUserPremium || isUserRented;
@@ -2723,7 +2715,7 @@ function nextTrack() {
   playerQueueIndex++;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
-  
+
   setTimeout(() => {
     renderTracklistPanel();
   }, 100);
@@ -2736,7 +2728,7 @@ function prevTrack() {
   playerQueueIndex--;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
-  
+
   setTimeout(() => {
     renderTracklistPanel();
   }, 100);
@@ -2956,13 +2948,13 @@ function updatePlayingHighlight() {
 
 function openExpandedPlayer(albumId, trackIndexOrId) {
   const track = findTrackByIndex(albumId, trackIndexOrId);
-  
+
   if (!track || !track.id) {
     console.warn('[player] faixa sem id:', albumId, trackIndexOrId);
     toast('Faixa indisponível.', '⚠');
     return;
   }
-  
+
   window.location.href = `/player.html?id=${encodeURIComponent(track.id)}`;
 }
 
