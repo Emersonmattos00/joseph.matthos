@@ -553,9 +553,31 @@ async function invalidatePlanCache(userId) {
 // 8. CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
 function checkOrigin(req) {
-  // 🔓 TEMPORÁRIO: libera todas as origens para testes de migração.
-  //    Reativar antes da produção (usar ALLOWED_ORIGINS).
-  return true;
+  // Se a variável ALLOWED_ORIGINS não estiver configurada, 
+  // bloqueia tudo em produção por segurança.
+  if (!ALLOWED_ORIGINS.size) {
+    console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
+    return false; 
+  }
+
+  const origin = String(req.headers.origin || req.headers.referer || '').trim();
+  if (!origin) return false;
+
+  try {
+    const url = new URL(origin);
+    // Compara a origem (protocolo + domínio) sem a barra final
+    const originBase = url.origin;
+    
+    for (const allowed of ALLOWED_ORIGINS) {
+      if (originBase === allowed.replace(/\/+$/, '')) {
+        return true;
+      }
+    }
+  } catch (e) {
+    return false;
+  }
+
+  return false;
 }
 
 // ═════════════════════════════════════════════════════════════
