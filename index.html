@@ -679,35 +679,6 @@
 </div>
 
 <!-- Carrega apenas o site público -->
-<script>
-  const SITE = { albums: [] };
-  function esc(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-  async function loadData() {
-    try {
-      const r = await fetch('/api/public_v2', { cache: 'no-store' });
-      const json = await r.json();
-      if (json && json.albums && json.albums.length > 0) {
-        SITE.albums = json.albums;
-        console.log('🔥 CARREGOU', SITE.albums.length, 'ÁLBUNS');
-        
-        const el = document.getElementById('gridLancamentos');
-        if (el) {
-          el.innerHTML = SITE.albums.map(a => `
-            <div class="spotify-card" onclick="window.location.href='/player.html?album=${a.id}'" style="cursor:pointer;">
-              <div class="spotify-card-cover">
-                <img src="${a.coverUrl || 'assets/img/tema.webp'}" alt="${esc(a.title)}" loading="lazy">
-              </div>
-              <div class="spotify-card-title">${esc(a.title)}</div>
-              <div class="spotify-card-sub">Joseph Matthos</div>
-            </div>
-          `).join('');
-        }
-      }
-    } catch (e) { console.error(e); }
-  }
-  
-  document.addEventListener('DOMContentLoaded', loadData);
-</script>
+<script type="module" src="js/site.js?v=22"></script>
 </body>
 </html>
