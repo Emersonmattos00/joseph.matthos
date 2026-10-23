@@ -1,6 +1,10 @@
 'use strict';
 
-require('dotenv').config({ path: '.env.local' });
+// Carrega .env.local APENAS se não estivermos em produção.
+// Na Vercel/Render, as variáveis são injetadas automaticamente.
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config({ path: '.env.local' });
+}
 
 const express = require('express');
 const path = require('path');
@@ -29,15 +33,22 @@ for (const name of apiFiles) {
       try {
         await handler(req, res);
       } catch (err) {
-        console.error(`Erro em /api/${name}:`, err);
+        console.error(`Erro fatal em /api/${name}:`, err);
         if (!res.headersSent) {
+          // Não expõe err.message para o cliente em produção
           res.status(500).json({ ok: false, error: 'Erro interno do servidor.' });
         }
       }
     });
     console.log(`✅ Rota /api/${name} carregada`);
   } catch (err) {
-    console.warn(`⚠️  Falha ao carregar /api/${name}:`, err.message);
+    console.error(`❌ FALHA CRÍTICA ao carregar /api/${name}:`, err.message);
+    // Em produção, impede o servidor de iniciar "capenga"
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    } else {
+      console.warn(`⚠️  Aviso: /api/${name} falhou em ambiente de desenvolvimento.`);
+    }
   }
 }
 
