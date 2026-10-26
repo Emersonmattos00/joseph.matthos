@@ -67,28 +67,34 @@ module.exports = async (req, res) => {
       return sendJson(res, 200, { ok: true, album: albumRow, tracks });
     }
 
-    // 3. Lista todos os álbuns (e o conteúdo do site)
-    const albums = await db.select()
-      .from(schema.albums)
-      .where(eq(schema.albums.published, true))
-      .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
+    // 3. Lista todos os álbuns (com as faixas de cada um)
+const albums = await db.select()
+  .from(schema.albums)
+  .where(eq(schema.albums.published, true))
+  .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    // ✅ Busca o conteúdo do site para o frontend
-    const [siteContentRow] = await db.select()
-      .from(schema.siteContent)
-      .where(eq(schema.siteContent.key, 'default'))
-      .limit(1);
+// Busca todas as faixas publicadas
+const allTracks = await db.select()
+  .from(schema.tracks)
+  .where(eq(schema.tracks.published, true))
+  .orderBy(asc(schema.tracks.trackNumber));
 
-    return sendJson(res, 200, {
-      ok: true,
-      content: siteContentRow?.data || {},
-      albums,
-      tracks: [], // Se precisar, busque as tracks aqui
-      plans: [],  // Se precisar, busque os plans aqui
-    });
+// Agrupa as faixas dentro de cada álbum
+const albumsWithTracks = albums.map((album) => ({
+  ...album,
+  tracks: allTracks.filter((t) => t.albumId === album.id)
+}));
 
-  } catch (err) {
-    console.error('[public_v2] Erro:', err);
-    return sendJson(res, 500, { error: 'Erro interno no catálogo.' });
-  }
-};
+// Busca o conteúdo do site para o frontend
+const [siteContentRow] = await db.select()
+  .from(schema.siteContent)
+  .where(eq(schema.siteContent.key, 'default'))
+  .limit(1);
+
+return sendJson(res, 200, {
+  ok: true,
+  content: siteContentRow?.data || {},
+  albums: albumsWithTracks,
+  tracks: allTracks, // Opcional: retorna todas as faixas soltas também
+  plans: [], 
+});

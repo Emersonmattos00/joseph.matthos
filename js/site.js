@@ -1,8 +1,11 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v24 FINAL COMPLETO)
+   SITE.JS — Joseph Matthos (v16 FINAL)
    ------------------------------------------------------------
-   - TODAS as funcionalidades originais mantidas
-   - CORREÇÃO ÚNICA: loadPublicData busca na api v2 com timestamp
+   - Planos: UUID do backend mapeado pra kind (premium/anual)
+   - Aluguel: faixa e álbum separados com abas
+   - Player: bind sem duplicação, /api/stream?trackId=
+   - Painel direito: lista ou letra (alterna)
+   - FIX: Player atualiza o álbum correto ao clicar em outro
    ============================================================ */
 
 import {
@@ -104,13 +107,18 @@ async function boot() {
         esc,
         safeMediaUrl,
         setQueue: (queue) => {
-          playerQueue = queue.map((t) => ({ albumId: t.albumId, trackIndex: t.trackIndex }));
+          playerQueue = queue.map((t) => ({
+            albumId: t.albumId,
+            trackIndex: t.trackIndex
+          }));
           playerQueueIndex = 0;
         },
         getQueue: () => playerQueue.slice(),
         getQueueIndex: () => playerQueueIndex,
         setQueueIndex: (idx) => {
-          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) playerQueueIndex = idx;
+          if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) {
+            playerQueueIndex = idx;
+          }
         }
       });
     } catch (err) {
@@ -143,25 +151,28 @@ function deepMerge(target, source) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FETCH (AQUI ESTÁ A ÚNICA ALTERAÇÃO: V2 COM TIMESTAMP)
+// FETCH
 // ─────────────────────────────────────────────────────────────
- async function loadPublicData() {
+async function loadPublicData() {
   try {
-    // Busca na API v2 com timestamp
-    const r = await fetch(`/api/public_v2?t=${Date.now()}`, { 
-      credentials: 'same-origin',
-      cache: 'no-store' 
-    });
+    const r = await fetch('/api/public', { credentials: 'same-origin' });
     const json = await r.json();
 
-    if (!json || !json.ok) return;
+    if (!json || !json.ok) {
+      SITE.content = clone(DEFAULT_CONTENT);
+      SITE.albums = [];
+      SITE.tracks = {};
+      SITE.plans = {};
+      SITE.rentalPlans = RENTAL_PLANS_FALLBACK.map((p) => ({ ...p, price: 0, available: false }));
+      SITE.albumRentalPlans = [];
+      return;
+    }
 
     SITE.content = json.content && typeof json.content === 'object'
       ? deepMerge(clone(DEFAULT_CONTENT), json.content)
       : clone(DEFAULT_CONTENT);
 
     SITE.albums = Array.isArray(json.albums) ? json.albums : [];
-    console.log('🔥 Álbuns carregados:', SITE.albums.length);
 
     SITE.tracks = {};
     if (Array.isArray(json.tracks)) {
@@ -174,6 +185,7 @@ function deepMerge(target, source) {
       }
     }
 
+    // ─── Planos de assinatura (Uuid → kind) ─────────────────
     SITE.plans = {};
     if (Array.isArray(json.plans)) {
       for (const p of json.plans) {
@@ -195,6 +207,7 @@ function deepMerge(target, source) {
       }
     }
 
+    // ─── Planos de aluguel (faixa + álbum) ───────────────────
     SITE.rentalPlans = [];
     SITE.albumRentalPlans = [];
 
@@ -473,9 +486,10 @@ function renderArtistHero() {
   const c = SITE.content;
 
   if (avatar) {
+    // 🔥 FORÇA A URL EXATA DO AVATAR
     const imageUrl = 'https://f005.backblazeb2.com/file/joseph.matthos/assets/img/avatarjm.jpg';
     const safe = safeMediaUrl(imageUrl);
-
+    
     if (safe) {
       avatar.style.display = 'block';
       avatar.style.backgroundImage = `url('${safe}')`;
@@ -483,6 +497,7 @@ function renderArtistHero() {
       avatar.style.backgroundPosition = 'center';
       avatar.classList.add('visible');
     } else {
+      // Fallback se a imagem não carregar
       avatar.style.display = 'none';
     }
   }
@@ -491,6 +506,7 @@ function renderArtistHero() {
     banner.style.backgroundImage = 'transparent';
   }
 
+  // ... resto da função (estatísticas, seguidores, etc.)
   const statsEl = document.getElementById('statPlays');
   if (statsEl) {
     const totalTracks = SITE.albums.reduce(
@@ -662,84 +678,140 @@ function initCarousels() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SPOTIFY SECTIONS (CLONANDO TEMPLATE)
+// SPOTIFY SECTIONS
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
-  const albums = SITE.albums || [];
-  console.log('🔥 Renderizando', albums.length, 'álbuns');
+  const allTracks = collectAllTracks();
+  const tab = SITE.artistTab || 'todos';
+
+  const principaisEl = document.getElementById('gridPrincipais');
+  if (principaisEl) {
+    if (tab === 'albuns') {
+      const albumsUnique = uniqueAlbumsFromTracks(allTracks);
+      principaisEl.innerHTML = albumsUnique.slice(0, 8).map((a) => renderSpotifyCard(a, 'album')).join('');
+    } else {
+      principaisEl.innerHTML = allTracks.slice(0, 8).map((t) => renderSpotifyCard(t, 'track')).join('');
+    }
+    bindSpotifyCards(principaisEl);
+  }
 
   const lancamentosEl = document.getElementById('gridLancamentos');
   if (lancamentosEl) {
-    if (albums.length === 0) {
-      lancamentosEl.innerHTML = '<p style="color:white; text-align:center;">Nenhum álbum encontrado no banco.</p>';
-    } else {
-      lancamentosEl.innerHTML = albums.map((a) => `
-        <div class="spotify-card" data-spotify-card data-album-id="${a.id}" style="cursor:pointer;">
-          <div class="spotify-card-cover">
-            <img src="${a.coverUrl || 'assets/img/tema.webp'}" alt="${a.title}" loading="lazy">
-          </div>
-          <div class="spotify-card-title">${esc(a.title)}</div>
-          <div class="spotify-card-sub">Joseph Matthos</div>
-        </div>
-      `).join('');
+    const albumsUnique = uniqueAlbumsFromTracks(allTracks);
+    lancamentosEl.innerHTML = albumsUnique.map((a) => renderSpotifyCard(a, 'album')).join('');
+    bindSpotifyCards(lancamentosEl);
+  }
 
-      lancamentosEl.querySelectorAll('[data-spotify-card]').forEach(card => {
-        card.addEventListener('click', () => {
-          openAlbumModal(card.dataset.albumId);
-        });
-      });
-    }
+  const albunsRecentesEl = document.getElementById('gridAlbunsRecentes');
+  if (albunsRecentesEl) {
+    const albumsUnique = uniqueAlbumsFromTracks(allTracks)
+      .sort((a, b) => (Number(b.year) || 0) - (Number(a.year) || 0))
+      .slice(0, 8);
+    albunsRecentesEl.innerHTML = albumsUnique.map((a) => renderSpotifyCard(a, 'album')).join('');
+    bindSpotifyCards(albunsRecentesEl);
   }
 }
 
-function renderSpotifyCard(item, type = 'album') {
-  // 1. Pega o template oculto no HTML
-  const template = document.getElementById('templateCardAlbum');
-  if (!template) {
-    console.warn('[site] Template de card não encontrado no HTML');
-    return '';
+function uniqueAlbumsFromTracks(tracks) {
+  const map = new Map();
+  for (const t of tracks) {
+    const album = findAlbum(t.albumId);
+    if (!album) continue;
+    if (!map.has(album.id)) {
+      map.set(album.id, {
+        albumId: album.id,
+        title: album.title,
+        coverImage: album.coverImage || album.coverUrl,
+        coverInitials: album.coverInitials || album.cover,
+        year: album.year,
+        type: album.type,
+        trackCount: Array.isArray(album.tracks) ? album.tracks.length : 0,
+        firstTrackIndex: t.trackIndex
+      });
+    }
   }
+  return Array.from(map.values());
+}
 
-  // 2. Clona o template
-  const cloneNode = template.firstElementChild.cloneNode(true);
+function renderSpotifyCard(item, type = 'album') {
+  let album, track, albumId, trackIndex, cover, title, subtitle, badge;
 
-  // 3. Descobre os dados
-  let albumId, cover, title, subtitle, trackIndex;
   if (type === 'track') {
     albumId = item.albumId;
-    const album = findAlbum(albumId);
-    const track = findTrackByIndex(albumId, item.trackIndex);
-    if (!album || !track) return '';
-    cover = track.coverUrl || album.coverUrl;
-    title = track.title;
-    subtitle = `Joseph Matthos · ${album.title}`;
     trackIndex = item.trackIndex;
+    album = findAlbum(albumId);
+    track = findTrackByIndex(albumId, trackIndex);
+    if (!album || !track) return '';
+    cover = track.coverUrl || album.coverImage || album.coverUrl;
+    title = track.title;
+    subtitle = `Joseph Matthos · ${album.title || ''}`.trim();
   } else {
-    albumId = item.id || item.albumId;
-    cover = item.coverUrl;
-    title = item.title;
-    subtitle = `Joseph Matthos · 0 faixas`;
-    trackIndex = 0;
+    albumId = item.albumId;
+    album = findAlbum(albumId);
+    if (!album) return '';
+    cover = item.coverImage || album.coverImage || album.coverUrl;
+    title = item.title || album.title;
+    subtitle = `Joseph Matthos · ${item.trackCount || (album.tracks?.length || 0)} faixas`;
+    trackIndex = item.firstTrackIndex ?? 0;
   }
 
-  // 4. Preenche os dados no clone
-  cloneNode.dataset.albumId = albumId;
-  cloneNode.dataset.trackIndex = trackIndex;
+  const premium = isPremium();
+  const rented = isRented(albumId, trackIndex);
+  if (premium) badge = { type: 'full', label: '✓ Premium' };
+  else if (rented) badge = { type: 'rented', label: '✓ Alugado' };
+  else badge = { type: 'preview', label: 'Prévia 30s' };
 
-  const img = cloneNode.querySelector('img');
-  if (img) {
-    img.src = safeMediaUrl(cover) || 'assets/img/tema.webp';
-    img.alt = title;
-  }
+  const safeCover = safeMediaUrl(cover) || 'assets/img/tema.webp';
+  const badgeHtml = badge
+    ? `<span class="spotify-card-badge spotify-card-badge--${badge.type}">${badge.label}</span>`
+    : '';
 
-  const titleEl = cloneNode.querySelector('.spotify-card-title');
-  if (titleEl) titleEl.textContent = title;
+  const likeKey = `jm_like_${albumId}_${trackIndex}`;
+  const isLiked = localStorage.getItem(likeKey) === '1';
 
-  const subEl = cloneNode.querySelector('.spotify-card-sub');
-  if (subEl) subEl.textContent = subtitle;
-
-  // 5. Retorna o HTML do clone
-  return cloneNode.outerHTML;
+  return `
+    <div class="spotify-card"
+         data-spotify-card
+         data-type="${type}"
+         data-album-id="${esc(albumId)}"
+         data-track-id="${esc(track?.id || '')}"
+         data-track-index="${trackIndex}">
+      <div class="spotify-card-cover">
+        ${badgeHtml}
+        <img src="${esc(safeCover)}" alt="${esc(title)}" loading="lazy"
+             onerror="this.src='assets/img/tema.webp'">
+        <button class="spotify-card-play" type="button"
+                data-spotify-play
+                aria-label="Tocar ${esc(title)}">▶</button>
+        <div class="spotify-card-actions">
+          <button class="spotify-card-action like ${isLiked ? 'liked' : ''}"
+                  type="button"
+                  data-action="like-track"
+                  data-album="${esc(albumId)}"
+                  data-track-index="${trackIndex}"
+                  title="${isLiked ? 'Remover dos curtidos' : 'Curtir'}"
+                  aria-label="Curtir"
+                  aria-pressed="${isLiked ? 'true' : 'false'}">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+          </button>
+          <button class="spotify-card-action share"
+                  type="button"
+                  data-action="share-track"
+                  data-album="${esc(albumId)}"
+                  data-track-index="${trackIndex}"
+                  title="Compartilhar"
+                  aria-label="Compartilhar">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="spotify-card-title">${esc(title)}</div>
+      <div class="spotify-card-sub">${esc(subtitle)}</div>
+    </div>`;
 }
 
 function bindSpotifyCards(container) {
@@ -785,6 +857,7 @@ function renderPlans() {
 
   grid.innerHTML = plans
     .map((p) => {
+      // Mapeia o plano do admin ('premium'/'anual') pro plano do backend (UUID)
       let priceInfo = SITE.plans[p.id];
       if (!priceInfo && (p.id === 'premium' || p.id === 'anual')) {
         const foundId = Object.keys(SITE.plans).find(
@@ -1509,6 +1582,7 @@ async function subscribe(planId) {
     return;
   }
 
+  // Aceita tanto o id do admin ('premium'/'anual') quanto o UUID do backend
   let planInfo = SITE.plans[planId];
   if (!planInfo && (planId === 'premium' || planId === 'anual')) {
     const foundId = Object.keys(SITE.plans).find(
@@ -1520,6 +1594,7 @@ async function subscribe(planId) {
   const planKind = planInfo?.kind || (planId === 'premium' || planId === 'anual' ? planId : null);
   const currentPlan = SITE.user.plan;
 
+  // ID que será enviado ao backend (prefere o UUID do backend)
   const backendPlanId = planInfo?.id || planId;
 
   if (currentPlan === backendPlanId || (planKind && currentPlan === planKind)) {
@@ -2615,9 +2690,13 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   syncExpandedPlayer(track, album, false);
   updatePlayingHighlight();
 
+  // ★ A MÁGICA ACONTECE AQUI: Joga a URL direto no áudio.
+  // O navegador bate na API, recebe o 302, e vai buscar no Cloudflare.
   const src = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
-  const source = 'auto';
-
+  const source = 'auto'; // O backend decide se é preview ou full
+  
+  // O navegador não nos diz se é preview ou full via 302, mas o backend corta o áudio se for preview.
+  // Para a UI, assumimos que se não for premium, pode ser preview.
   const isUserPremium = isPremium();
   const isUserRented = isRented(albumId, realIndex);
   const unlocked = isUserPremium || isUserRented;
@@ -2625,7 +2704,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   if (unlocked) {
     previewState = { active: false, start: 0, end: Infinity };
   } else {
-    const duration = Math.max(1, Number(30) || 30);
+    const duration = Math.max(1, Number(30) || 30); // Fallback de 30s
     previewState = { active: true, start: 0, end: duration };
   }
   previewNoticeTrackKey = '';
@@ -2688,6 +2767,7 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   try {
     await waitForAudioReady(audio);
     await audio.play();
+    // Se o usuário for premium/aluguel, agenda a renovação da URL (se necessário)
     if (unlocked) scheduleRenewal();
   } catch (err) {
     console.error('[player] falha na reprodução:', err);
@@ -2716,7 +2796,8 @@ function nextTrack() {
   playerQueueIndex++;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
-
+  
+  // 🔥 ATUALIZA A LISTA DE FAIXAS DO PAINEL LATERAL
   setTimeout(() => {
     renderTracklistPanel();
   }, 100);
@@ -2729,7 +2810,8 @@ function prevTrack() {
   playerQueueIndex--;
   const item = playerQueue[playerQueueIndex];
   playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
-
+  
+  // 🔥 ATUALIZA A LISTA DE FAIXAS DO PAINEL LATERAL
   setTimeout(() => {
     renderTracklistPanel();
   }, 100);
@@ -2948,14 +3030,16 @@ function updatePlayingHighlight() {
 }
 
 function openExpandedPlayer(albumId, trackIndexOrId) {
+  // Busca a faixa para garantir que temos um ID válido
   const track = findTrackByIndex(albumId, trackIndexOrId);
-
+  
   if (!track || !track.id) {
     console.warn('[player] faixa sem id:', albumId, trackIndexOrId);
     toast('Faixa indisponível.', '⚠');
     return;
   }
-
+  
+  // Redireciona para a página dedicada do player
   window.location.href = `/player.html?id=${encodeURIComponent(track.id)}`;
 }
 
@@ -3006,6 +3090,7 @@ function syncExpandedPlayer(track, album, unlocked) {
   const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
   const safeCover = safeMediaUrl(coverImg);
 
+  // 1. Preenche a capa principal (tag img)
   if (cover) {
     cover.innerHTML = '';
     if (safeCover) {
@@ -3022,6 +3107,7 @@ function syncExpandedPlayer(track, album, unlocked) {
     }
   }
 
+  // 2. Define a variável CSS para o fundo
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     if (safeCover) {
@@ -3061,6 +3147,7 @@ function renderTracklistPanel() {
   const panelTitle = document.getElementById('lyricsPanelTitle');
   if (panelTitle) panelTitle.textContent = 'Faixas do álbum';
 
+  // 🔥 CORREÇÃO: Tenta pegar o albumId da identidade atual ou da fila.
   const albumId = currentTrackIdentity?.albumId || (playerQueue[playerQueueIndex]?.albumId);
   const album = albumId ? findAlbum(albumId) : null;
   const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
