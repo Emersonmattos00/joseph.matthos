@@ -145,11 +145,12 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 // FETCH (AQUI ESTÁ A ÚNICA ALTERAÇÃO: V2 COM TIMESTAMP)
 // ─────────────────────────────────────────────────────────────
-async function loadPublicData() {
+ async function loadPublicData() {
   try {
+    // Busca na API v2 com timestamp
     const r = await fetch(`/api/public_v2?t=${Date.now()}`, { 
-    credentials: 'same-origin',
-    cache: 'no-store' 
+      credentials: 'same-origin',
+      cache: 'no-store' 
     });
     const json = await r.json();
 
