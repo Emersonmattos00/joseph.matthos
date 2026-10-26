@@ -54,7 +54,7 @@ const albums = pgTable('albums', {
   year: integer(),
   type: text().default('album'),
   description: text(),
-  published: boolean().default(false),
+  published: boolean().default(false),   // ✅ ADICIONADO
   coverInitials: text('cover_initials'),
   orderIndex: integer('order_index').default(0)
 }, (t) => [
@@ -84,7 +84,9 @@ const tracks = pgTable('tracks', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
   trackNumber: integer('track_number'),
   fullPath: text('full_path'),
-  previewPath: text('preview_path')
+  previewPath: text('preview_path'),
+  published: boolean().default(false),   // ✅ ADICIONADO
+  locked: boolean().default(false)       // ✅ ADICIONADO
 }, (t) => [
   index('tracks_album_id_idx').on(t.albumId),
   index('tracks_album_id_track_number_idx').on(t.albumId, t.trackNumber),
