@@ -43,6 +43,7 @@ module.exports = async (req, res) => {
       .orderBy(asc(schema.tracks.trackNumber));
 
       return sendJson(res, 200, {
+        ok: true,
         id: trackRow.id, title: trackRow.title, artist: albumRow.artistName || 'Joseph Matthos',
         albumTitle: albumRow.title, coverUrl: albumRow.coverUrl, audioPath: trackRow.fullPath || trackRow.previewPath,
         lyrics: trackRow.lyrics || [], albumTracks
@@ -63,16 +64,28 @@ module.exports = async (req, res) => {
         .where(and(eq(schema.tracks.albumId, albumRow.id), eq(schema.tracks.published, true)))
         .orderBy(asc(schema.tracks.trackNumber));
 
-      return sendJson(res, 200, { album: albumRow, tracks });
+      return sendJson(res, 200, { ok: true, album: albumRow, tracks });
     }
 
-    // 3. Lista todos os álbuns
+    // 3. Lista todos os álbuns (e o conteúdo do site)
     const albums = await db.select()
       .from(schema.albums)
       .where(eq(schema.albums.published, true))
       .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    return sendJson(res, 200, { albums });
+    // ✅ Busca o conteúdo do site para o frontend
+    const [siteContentRow] = await db.select()
+      .from(schema.siteContent)
+      .where(eq(schema.siteContent.key, 'default'))
+      .limit(1);
+
+    return sendJson(res, 200, {
+      ok: true,
+      content: siteContentRow?.data || {},
+      albums,
+      tracks: [], // Se precisar, busque as tracks aqui
+      plans: [],  // Se precisar, busque os plans aqui
+    });
 
   } catch (err) {
     console.error('[public_v2] Erro:', err);
