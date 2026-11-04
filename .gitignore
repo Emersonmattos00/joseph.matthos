@@ -159,3 +159,5 @@ assets/img/raw/
 *.backup-*
 awscliv2.zip
 *.zip
+awscliv2.zip
+*.zip
