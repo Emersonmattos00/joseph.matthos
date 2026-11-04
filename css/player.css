@@ -337,3 +337,32 @@ body.immersive-mode .player-footer-actions {
 .player-cover-wrap, .album-cover {
   pointer-events: auto;
 }
+
+/* ─── Fundo com a capa do álbum (marca d'água) ─── */
+#playerContainer {
+  position: relative;
+  overflow: hidden;
+}
+
+#playerContainer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* Usa a variável --player-bg definida pelo JS (capa do álbum) */
+  background-image: var(--player-bg, none);
+  background-size: cover;
+  background-position: center;
+  /* Marca d'água sutil */
+  opacity: 0.15;
+  z-index: 0;
+  filter: blur(4px);
+  pointer-events: none;
+  /* Suaviza a transição ao trocar de faixa */
+  transition: background-image 0.6s ease;
+}
+
+/* Garante que o conteúdo fique acima do fundo */
+#playerContainer > * {
+  position: relative;
+  z-index: 1;
+}
