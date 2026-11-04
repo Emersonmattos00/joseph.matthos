@@ -208,11 +208,8 @@ async function initPlayer(trackId, autoplay = true) {
     `;
   }).join('');
 
-  // ★ 3. Áudio: chama a API que AUTORIZA e REDIRECIONA para o Cloudflare Worker.
-  // O navegador segue o 302 e busca direto no CDN (cache de borda, egress zero do B2 após o 1º hit).
+  // 3. Áudio
   const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
-  // ★ t=... evita cache do navegador na decisão de autorização (a URL do CDN em si é cacheada normalmente)
-
   audio.pause();
   audio.removeAttribute('src');
   audio.src = streamUrl;
@@ -243,7 +240,6 @@ async function initPlayer(trackId, autoplay = true) {
 
   audio.onerror = () => {
     console.error('[player] Erro no áudio:', audio.error, streamUrl);
-    // ★ 403 = faixa sem preview (precisa alugar/assinar)
     if (audio.error && audio.error.code === 4) {
       els.title.textContent = 'Prévia indisponível — alugue ou assine';
     } else {
@@ -252,7 +248,6 @@ async function initPlayer(trackId, autoplay = true) {
   };
 
   audio.onended = () => {
-    // ★ avança automaticamente para a próxima faixa do álbum
     if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
     const idx = currentTrackMeta.albumTracks.findIndex(t => t.id === trackId);
     const next = currentTrackMeta.albumTracks[idx + 1];
@@ -276,7 +271,6 @@ window.playerPlay = () => {
   }
 };
 
-// ★ Agora Next/Prev navegam de verdade entre faixas do álbum
 window.playerNext = () => {
   if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
   const idx = currentTrackMeta.albumTracks.findIndex(t => t.id === currentTrackId);
@@ -286,7 +280,6 @@ window.playerNext = () => {
 
 window.playerPrev = () => {
   if (!currentTrackMeta || !currentTrackMeta.albumTracks) return;
-  // se estiver nos primeiros 3s, volta para a faixa anterior; senão reinicia a atual
   if (audio.currentTime > 3) {
     audio.currentTime = 0;
     return;
@@ -318,4 +311,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   const trackId = params.get('id');
   if (!trackId) { els.title.textContent = 'Nenhuma faixa selecionada'; return; }
   await initPlayer(trackId);
+});
+
+// ★ CORREÇÃO P2: navegação pelo histórico (botão voltar do navegador)
+window.addEventListener('popstate', () => {
+  const params = new URLSearchParams(window.location.search);
+  const trackId = params.get('id');
+  if (trackId && trackId !== currentTrackId) {
+    initPlayer(trackId);
+  }
 });

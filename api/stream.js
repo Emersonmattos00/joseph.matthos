@@ -95,18 +95,15 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    // Padronização do caminho
+    // ★ CORREÇÃO P2: Padronização robusta do caminho
     const cleanKey = String(b2Key)
-      .replace(/^\/+/, '')
-      .replace(/^josephmatthos\//, ''); 
+      .replace(/^\/+/, '') // remove barras iniciais
+      .replace(/^(josephmatthos|audio|music|tracks)\//i, ''); // remove prefixos comuns do bucket
 
     // ★ CORREÇÃO DE SEGURANÇA: URL assinada para áudio completo
     if (accessLevel === 'full') {
       try {
-        // Gera URL assinada do B2 que expira em 5 minutos (300s)
-        // O `true` avisa ao _storage.js para usar o bucket de áudio full
         const signedUrl = await getPlaybackUrl(cleanKey, true);
-        
         res.setHeader('Cache-Control', 'no-store');
         return res.redirect(302, signedUrl);
       } catch (err) {
