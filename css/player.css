@@ -359,8 +359,9 @@ body.immersive-mode .player-footer-actions {
   background-size: cover;
   background-position: center;
   /* Marca d'água sutil */
-  opacity: 0.9;
+  opacity: 0.10;
   z-index: 0;
+  filter: blur(4px);
   pointer-events: none;
   /* Suaviza a transição ao trocar de faixa */
   transition: background-image 0.6s ease;
