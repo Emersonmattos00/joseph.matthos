@@ -157,3 +157,5 @@ assets/img/raw/
 *.pre-final
 *.pre-b2-fix
 *.backup-*
+awscliv2.zip
+*.zip
