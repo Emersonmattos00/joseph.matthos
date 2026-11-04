@@ -1,127 +1,224 @@
 /* ============================================================
-   api/stream.js — Entrega de áudio (Versão Final Segura)
+   api/stream.js — Entrega de áudio (Versão Final Auditada)
+   ------------------------------------------------------------
+   Correções aplicadas (Etapa 6):
+   - Verifica track.published / track.status / album.published
+   - Verifica rentals.startsAt (não libera antes do tempo)
+   - CORS restrito via ALLOWED_ORIGINS (não mais '*')
+   - Suporta format=json para renovação do player
+   - Erros de banco não viram "sem assinatura" (fail-closed)
    ============================================================ */
 
 'use strict';
 
-const { eq, and, gt, or } = require('drizzle-orm');
+const { eq, and, gt, lte, or, isNull } = require('drizzle-orm');
 const { db } = require('./_db');
-const { tracks, rentals, subscriptions } = require('../src/schema.js');
-const { getAuthUser } = require('./_lib');
+const { tracks, albums, rentals, subscriptions } = require('../src/schema.js');
+const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
 const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
+const PLAYBACK_TTL = 3600; // segundos — deve bater com getPlaybackUrl
 
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+function sendError(res, status, error, message) {
+  return res.status(status).json({
+    ok: false,
+    error,
+    ...(message ? { message } : {}),
+  });
+}
+
+function validUuid(value) {
+  return typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function corsHeadersFor(req, res) {
+  const origin = String(req.headers.origin || '').trim();
+  if (!origin) {
+    // Requisições sem origin (curl, health check) — sem CORS
+    return;
+  }
+  if (!ALLOWED_ORIGINS.size) {
+    console.warn('[stream] ALLOWED_ORIGINS não configurado — bloqueando CORS.');
+    return;
+  }
+  for (const allowed of ALLOWED_ORIGINS) {
+    if (origin === allowed.replace(/\/+$/, '')) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      return;
+    }
+  }
+}
+
+module.exports = async function stream(req, res) {
+  corsHeadersFor(req, res);
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
+  res.setHeader('Cache-Control', 'private, no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    return sendError(res, 405, 'Método não permitido.');
+  }
 
   try {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
+    // ── 1. Validação do trackId ──
+    const trackId = String(req.query?.trackId || '').trim();
+    if (!validUuid(trackId)) {
+      return sendError(res, 400, 'Identificador de faixa inválido.');
+    }
 
-    // ★ CORREÇÃO: diferencia 503 (Redis caiu) de 429 (excesso)
+    // ── 2. Rate limit ──
+    const ip = clientIp(req);
+    if (!ip || ip === 'unknown') {
+      return sendError(res, 503, 'Origem da requisição não identificada.');
+    }
+
     let rl;
     try {
       rl = await checkStreamRateLimit(ip);
     } catch (err) {
       console.error('[stream] Rate limit indisponível:', err.message);
-      return res.status(503).json({ error: 'Serviço de reprodução temporariamente indisponível.' });
+      return sendError(res, 503, 'Serviço de reprodução temporariamente indisponível.');
     }
-
     if (!rl.success) {
-      return res.status(429).json({ error: 'Muitas requisições. Aguarde um momento.' });
+      return sendError(res, 429, 'Muitas requisições. Aguarde um momento.');
     }
 
-    const { trackId } = req.query;
-    if (!trackId) return res.status(400).json({ error: 'trackId obrigatório' });
-
+    // ── 3. Busca da faixa ──
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
-    if (!track) return res.status(404).json({ error: 'Faixa não encontrada' });
+    if (!track) return sendError(res, 404, 'Faixa não encontrada.');
 
-    let user = null;
-    try { user = await getAuthUser(req); } catch (e) {}
+    // ★ CORREÇÃO P0: verifica publicação
+    if (track.published !== true || track.status !== 'PUBLISHED') {
+      return sendError(res, 404, 'Faixa não disponível.');
+    }
+
+    // ★ CORREÇÃO P0: verifica publicação do álbum
+    if (track.albumId) {
+      const [albumRow] = await db.select({ id: albums.id, published: albums.published })
+        .from(albums).where(eq(albums.id, track.albumId)).limit(1);
+      if (!albumRow || albumRow.published !== true) {
+        return sendError(res, 404, 'Álbum não disponível.');
+      }
+    }
+
+    // ── 4. Identificação do usuário ──
+    const user = await getAuthUser(req);
+    const now = new Date();
+    const nowIso = now.toISOString();
 
     let accessLevel = 'preview';
 
-    if (user) {
-      const now = new Date().toISOString();
-
+    // ── 5. Verificação de Premium (fail-closed em erro) ──
+    if (user?.id) {
       try {
         const [sub] = await db.select().from(subscriptions)
           .where(and(
             eq(subscriptions.userId, user.id),
             eq(subscriptions.status, 'ACTIVE'),
-            gt(subscriptions.currentPeriodEnd, now)
+            lte(subscriptions.currentPeriodStart, nowIso),
+            gt(subscriptions.currentPeriodEnd, nowIso)
           )).limit(1);
         if (sub) accessLevel = 'full';
-      } catch (e) {
-        console.error('[stream] Erro ao checar assinatura:', e);
-      }
-
-      if (accessLevel !== 'full') {
-        try {
-          const rentalCond = or(
-            eq(rentals.trackId, track.id),
-            track.albumId ? eq(rentals.albumId, track.albumId) : eq(rentals.trackId, track.id)
-          );
-          const [rent] = await db.select().from(rentals)
-            .where(and(
-              eq(rentals.userId, user.id),
-              eq(rentals.status, 'ACTIVE'),
-              gt(rentals.expiresAt, now),
-              rentalCond
-            )).limit(1);
-          if (rent) accessLevel = 'full';
-        } catch (e) {
-          console.error('[stream] Erro ao checar aluguel:', e);
-        }
+      } catch (err) {
+        console.error('[stream] Erro ao checar assinatura:', err.message);
+        // ★ CORREÇÃO P0: fail-closed (não assume free em erro)
+        return sendError(res, 503, 'Não foi possível verificar sua assinatura.');
       }
     }
 
+    // ── 6. Verificação de aluguel (respeita startsAt) ──
+    if (user?.id && accessLevel !== 'full') {
+      try {
+        const rentalTarget = track.albumId
+          ? or(eq(rentals.trackId, track.id), eq(rentals.albumId, track.albumId))
+          : eq(rentals.trackId, track.id);
+
+        const [rent] = await db.select().from(rentals)
+          .where(and(
+            eq(rentals.userId, user.id),
+            eq(rentals.status, 'ACTIVE'),
+            lte(rentals.startsAt, nowIso),   // ★ CORREÇÃO P0: já começou
+            gt(rentals.expiresAt, nowIso),   // ★ ainda não expirou
+            rentalTarget
+          )).limit(1);
+        if (rent) accessLevel = 'full';
+      } catch (err) {
+        console.error('[stream] Erro ao checar aluguel:', err.message);
+        // ★ CORREÇÃO P0: fail-closed
+        return sendError(res, 503, 'Não foi possível verificar seu aluguel.');
+      }
+    }
+
+    // ── 7. Seleção do arquivo ──
     let b2Key;
+    let isFull = false;
+
     if (accessLevel === 'full') {
       b2Key = track.streamKey || track.fullPath;
+      isFull = true;
     } else {
-      b2Key = track.previewKey;
-      if (!b2Key) {
-        return res.status(403).json({
-          error: 'Prévia indisponível',
-          message: 'Alugue ou assine para ouvir o áudio completo.'
-        });
-      }
+      b2Key = track.previewKey || track.previewPath;
     }
 
     if (!b2Key) {
-      return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
+      if (!isFull) {
+        return sendError(res, 403, 'Prévia indisponível.', 'Alugue ou assine para ouvir o áudio completo.');
+      }
+      console.error('[stream] Faixa sem arquivo completo:', track.id);
+      return sendError(res, 404, 'Arquivo de áudio não configurado.');
     }
 
     const cleanKey = String(b2Key)
       .replace(/^\/+/, '')
       .replace(/^(josephmatthos|audio|music|tracks)\//i, '');
 
-    if (accessLevel === 'full') {
+    // ── 8. Resposta ──
+    const wantsJson = String(req.query?.format || '').toLowerCase() === 'json';
+
+    if (isFull) {
+      let signedUrl;
       try {
-        const signedUrl = await getPlaybackUrl(cleanKey, true);
-        res.setHeader('Cache-Control', 'no-store');
-        return res.redirect(302, signedUrl);
+        signedUrl = await getPlaybackUrl(cleanKey, true);
       } catch (err) {
         console.error('[stream] Falha ao gerar URL assinada:', err.message);
-        return res.status(503).json({ error: 'Serviço de áudio temporariamente indisponível.' });
+        return sendError(res, 503, 'Serviço de áudio temporariamente indisponível.');
       }
+
+      if (wantsJson) {
+        return res.status(200).json({
+          ok: true,
+          audioUrl: signedUrl,
+          expiresIn: PLAYBACK_TTL,
+          source: 'full',
+        });
+      }
+      return res.redirect(302, signedUrl);
     }
 
+    // Preview
     const cdnUrl = `${CDN_BASE}/${cleanKey}`;
-    res.setHeader('Cache-Control', 'no-store');
+    if (wantsJson) {
+      return res.status(200).json({
+        ok: true,
+        audioUrl: cdnUrl,
+        expiresIn: PLAYBACK_TTL,
+        source: 'preview',
+      });
+    }
     return res.redirect(302, cdnUrl);
 
   } catch (error) {
-    console.error('[stream] erro detalhado:', error);
+    console.error('[stream] Erro:', { code: error.code, message: error.message });
     if (!res.headersSent) {
-      return res.status(500).json({ error: 'Erro interno no servidor' });
+      return sendError(res, 503, 'Não foi possível disponibilizar o áudio neste momento.');
     }
   }
 };

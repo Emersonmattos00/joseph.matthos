@@ -1689,26 +1689,43 @@ async function renewSignedUrl() {
   const wasPlaying = audio && !audio.paused;
   const savedTime = audio?.currentTime || 0;
   const savedVolume = audio?.volume ?? lastVolume;
+
   try {
-    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}`, { credentials: 'same-origin', cache: 'no-store' });
+    const r = await fetch(
+      `/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`,
+      { method: 'GET', credentials: 'same-origin', cache: 'no-store' }
+    );
     const json = await r.json();
-    if (!r.ok || !json?.audioUrl) throw new Error(json?.error || 'URL não renovada');
+    if (!r.ok || !json?.ok || !json?.audioUrl) {
+      throw new Error(json?.error || 'URL de reprodução não renovada.');
+    }
+
     currentStream.url = json.audioUrl;
-    currentStream.expiresIn = 300;
+    currentStream.expiresIn = json.expiresIn || 300;
     currentStream.loadedAt = Date.now();
+
     audio.src = json.audioUrl;
     audio.volume = savedVolume;
     audio.load();
+
     const restore = () => {
-      try { if (Number.isFinite(audio.duration) && savedTime < audio.duration) audio.currentTime = savedTime; }
-      catch (err) { console.debug('[player] falha ao restaurar posição:', err); }
+      try {
+        if (Number.isFinite(audio.duration) && savedTime < audio.duration) {
+          audio.currentTime = savedTime;
+        }
+      } catch (err) {
+        console.debug('[player] falha ao restaurar posição:', err);
+      }
       if (wasPlaying) audio.play().catch(() => {});
     };
     audio.addEventListener('loadedmetadata', restore, { once: true });
     scheduleRenewal();
     console.log('[player] URL renovada');
-  } catch (err) { console.warn('[player] renovação falhou:', err?.message); }
-  finally { isRenewing = false; }
+  } catch (err) {
+    console.warn('[player] renovação falhou:', err?.message);
+  } finally {
+    isRenewing = false;
+  }
 }
 
 function buildQueueForAlbum(albumId, startIndex) {
