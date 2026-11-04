@@ -52,6 +52,20 @@ export const SITE = {
   artistTab: 'lancamentos'
 };
 
+// ─────────────────────────────────────────────────────────────
+// HELPER: Resolve faixas do álbum a partir de SITE.tracks
+// ─────────────────────────────────────────────────────────────
+function resolveAlbumTracks(album) {
+  if (!album) return [];
+  if (Array.isArray(album.tracks) && album.tracks.length > 0) {
+    return album.tracks;
+  }
+  const all = Object.values(SITE.tracks || {});
+  return all
+    .filter((t) => t && t.albumId === album.id)
+    .sort((a, b) => (a.trackNumber || 0) - (b.trackNumber || 0));
+}
+
 let audio = null;
 let currentTrackIdentity = null;
 let previewState = { active: false, start: 0, end: Infinity };
@@ -321,7 +335,7 @@ function findAlbum(albumId) {
 function findTrackByIndex(albumId, realTrackIndexOrId) {
   const album = findAlbum(albumId);
   if (!album) return null;
-  const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+  const tracks = resolveAlbumTracks(album);
   return tracks.find((t) =>
     String(t.id) === String(realTrackIndexOrId) ||
     Number(t.trackNumber) === Number(realTrackIndexOrId) ||
@@ -332,7 +346,7 @@ function findTrackByIndex(albumId, realTrackIndexOrId) {
 function collectAllTracks() {
   const out = [];
   for (const album of SITE.albums || []) {
-    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    const tracks = resolveAlbumTracks(album);
     for (const track of tracks) {
       const idx = Number(track.trackNumber ?? track.trackIndex);
       if (!Number.isInteger(idx) || idx < 0) continue;
@@ -493,7 +507,7 @@ function renderArtistHero() {
   const statsEl = document.getElementById('statPlays');
   if (statsEl) {
     const totalTracks = SITE.albums.reduce(
-      (acc, a) => acc + (Array.isArray(a.tracks) ? a.tracks.length : 0), 0
+      (acc, a) => acc + resolveAlbumTracks(a).length, 0
     );
     statsEl.textContent = totalTracks > 0 ? totalTracks * 12 : 534;
   }
@@ -825,7 +839,7 @@ function renderDiscography() {
   const filtered = SITE.filter === 'all' ? albums : albums.filter((a) => a.type === SITE.filter);
   const q = (SITE.shopSearch || '').trim().toLowerCase();
   const visible = q ? filtered.filter((album) => {
-    const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+    const albumTracks = resolveAlbumTracks(album);
     const matchAlbum = (album.title || '').toLowerCase().includes(q);
     const matchTrack = albumTracks.some((t) => (t.title || '').toLowerCase().includes(q));
     return matchAlbum || matchTrack;
@@ -876,7 +890,7 @@ function resolvePlaylistTracks(playlist) {
   if (!playlist || !Array.isArray(playlist.tracks)) return [];
   const index = new Map();
   for (const album of SITE.albums || []) {
-    const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+    const tracks = resolveAlbumTracks(album);
     tracks.forEach((track) => {
       if (track && track.id !== undefined && track.id !== null) {
         index.set(String(track.id), { album, track, trackIndex: Number(track.trackNumber ?? track.trackIndex) || 0 });
@@ -907,7 +921,7 @@ function openAlbumModal(albumId) {
   if (existing && existing.classList.contains('open')) existing.classList.remove('open');
   const album = findAlbum(albumId);
   if (!album) { console.warn('[album] não encontrado:', albumId); return; }
-  const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+  const tracks = resolveAlbumTracks(album);
   let modal = document.getElementById('albumModal');
   if (!modal) {
     modal = document.createElement('div');
@@ -978,7 +992,7 @@ function openTrackMoreMenu(albumId, trackIndex, anchorEl) {
         toggleLike(albumId, trackIndex, null);
         const modal = document.getElementById('albumModal');
         if (modal) {
-          const tracks = Array.isArray(album.tracks) ? album.tracks : [];
+          const tracks = resolveAlbumTracks(album);
           const tracksEl = modal.querySelector('#albumModalTracks');
           if (tracksEl) tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
         }
@@ -1700,7 +1714,7 @@ async function renewSignedUrl() {
 function buildQueueForAlbum(albumId, startIndex) {
   const album = findAlbum(albumId);
   if (!album) { playerQueue = []; playerQueueIndex = -1; return; }
-  const albumTracks = Array.isArray(album.tracks) ? album.tracks : [];
+  const albumTracks = resolveAlbumTracks(album);
   let indices = albumTracks.map((t) => t.id).filter(Boolean);
   if (shuffleEnabled && indices.length > 1) {
     indices = shuffleArray(indices);
@@ -2052,7 +2066,7 @@ function renderTracklistPanel() {
   if (panelTitle) panelTitle.textContent = 'Faixas do álbum';
   const albumId = currentTrackIdentity?.albumId || (playerQueue[playerQueueIndex]?.albumId);
   const album = albumId ? findAlbum(albumId) : null;
-  const albumTracks = album && Array.isArray(album.tracks) ? album.tracks : [];
+  const albumTracks = album ? resolveAlbumTracks(album) : [];
   if (!albumTracks.length) { container.innerHTML = '<p class="lyrics-empty">Nenhuma faixa encontrada.</p>'; return; }
   const currentId = currentTrackIdentity?.trackId || null;
   container.innerHTML = `<div class="album-tracklist-header"><span class="album-tracklist-title">${esc(album.title || 'Álbum')}</span><span class="album-tracklist-count">${albumTracks.length} faixa${albumTracks.length === 1 ? '' : 's'}</span></div><div class="album-tracklist">${albumTracks.map((t, i) => {
