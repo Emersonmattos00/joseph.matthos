@@ -1,8 +1,12 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v25 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v26 FINAL AUDITADO)
    ------------------------------------------------------------
-   - CORREÇÃO: renderiza 'Mais Ouvidos' e lê tracks nos álbuns
-   - Mantém TODAS as funcionalidades originais (player, modais)
+   Correções aplicadas:
+   - resolveAlbumTracks (Etapa 8)
+   - isRented com suporte a aluguel de álbum (Etapa 8)
+   - playFromDiscography com controle de concorrência (Etapa 8)
+   - setQueue padronizado (Etapa 8)
+   - renewSignedUrl com format=json (Etapa 8)
    ============================================================ */
 
 import {
@@ -80,8 +84,10 @@ let shuffleEnabled = false;
 
 let currentStream = null;
 let renewTimer = null;
-let currentAbortController = null;
 let isRenewing = false;
+
+// ★ Controle de concorrência do player
+let playbackRequestId = 0;
 
 let _rentContext = { albumId: null, trackIndex: null, planId: null, kind: 'track' };
 
@@ -118,8 +124,15 @@ async function boot() {
         esc,
         safeMediaUrl,
         setQueue: (queue) => {
-          playerQueue = queue.map((t) => ({ albumId: t.albumId, trackIndex: t.trackIndex }));
-          playerQueueIndex = 0;
+          // ★ Fila padronizada com trackId
+          playerQueue = (Array.isArray(queue) ? queue : [])
+            .map(item => {
+              const track = findTrackByIndex(item.albumId, item.trackId ?? item.trackIndex);
+              if (!track?.id) return null;
+              return { albumId: item.albumId, trackId: track.id };
+            })
+            .filter(Boolean);
+          playerQueueIndex = playerQueue.length ? 0 : -1;
         },
         getQueue: () => playerQueue.slice(),
         getQueueIndex: () => playerQueueIndex,
@@ -312,12 +325,28 @@ function trackInfo(albumId, trackIndexOrId) {
   return SITE.tracks[`${albumId}:${trackIndexOrId}`] || null;
 }
 
+// ★ CORREÇÃO: reconhece aluguel de álbum
 function isRented(albumId, trackIndex) {
-  const key = `${albumId}:${trackIndex}`;
   const now = Date.now();
-  return SITE.rentals.some(
-    (r) => r.trackKey === key && new Date(r.expiresAt).getTime() > now
-  );
+
+  return SITE.rentals.some(rental => {
+    if (!rental) return false;
+
+    if (rental.status && rental.status !== 'ACTIVE') return false;
+
+    const expires = new Date(rental.expiresAt).getTime();
+    if (!Number.isFinite(expires) || expires <= now) return false;
+
+    if (rental.startsAt) {
+      const starts = new Date(rental.startsAt).getTime();
+      if (Number.isFinite(starts) && starts > now) return false;
+    }
+
+    if (String(rental.albumId) === String(albumId)) return true;
+
+    const trackKey = `${albumId}:${trackIndex}`;
+    return rental.trackKey === trackKey;
+  });
 }
 
 function ownsTrack(albumId, trackIndex) {
@@ -675,7 +704,7 @@ function initCarousels() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SPOTIFY SECTIONS (CORRIGIDO)
+// SPOTIFY SECTIONS
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
@@ -704,7 +733,6 @@ function renderSpotifySections() {
     }
   }
 
-  // ✅ CORREÇÃO: Preencher 'Mais Ouvidos' com os primeiros 8 álbuns
   const albunsRecentesEl = document.getElementById('gridAlbunsRecentes');
   if (albunsRecentesEl) {
     const sortedAlbums = [...albums].slice(0, 8);
@@ -728,60 +756,6 @@ function renderSpotifySections() {
       });
     }
   }
-}
-
-function renderSpotifyCard(item, type = 'album') {
-  const template = document.getElementById('templateCardAlbum');
-  if (!template) { console.warn('[site] Template de card não encontrado no HTML'); return ''; }
-  const cloneNode = template.firstElementChild.cloneNode(true);
-  let albumId, cover, title, subtitle, trackIndex;
-  if (type === 'track') {
-    albumId = item.albumId;
-    const album = findAlbum(albumId);
-    const track = findTrackByIndex(albumId, item.trackIndex);
-    if (!album || !track) return '';
-    cover = track.coverUrl || album.coverUrl;
-    title = track.title;
-    subtitle = `Joseph Matthos · ${album.title}`;
-    trackIndex = item.trackIndex;
-  } else {
-    albumId = item.id || item.albumId;
-    cover = item.coverUrl;
-    title = item.title;
-    subtitle = `Joseph Matthos · 0 faixas`;
-    trackIndex = 0;
-  }
-  cloneNode.dataset.albumId = albumId;
-  cloneNode.dataset.trackIndex = trackIndex;
-  const img = cloneNode.querySelector('img');
-  if (img) { img.src = safeMediaUrl(cover) || 'assets/img/tema.webp'; img.alt = title; }
-  const titleEl = cloneNode.querySelector('.spotify-card-title');
-  if (titleEl) titleEl.textContent = title;
-  const subEl = cloneNode.querySelector('.spotify-card-sub');
-  if (subEl) subEl.textContent = subtitle;
-  return cloneNode.outerHTML;
-}
-
-function bindSpotifyCards(container) {
-  container.querySelectorAll('[data-spotify-card]').forEach((card) => {
-    if (card.dataset.bound === '1') return;
-    card.dataset.bound = '1';
-    const albumId = card.dataset.albumId;
-    const trackId = card.dataset.trackId;
-    const trackIndex = Number(card.dataset.trackIndex);
-    const playBtn = card.querySelector('[data-spotify-play]');
-    if (playBtn) {
-      playBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openExpandedPlayer(albumId, trackId || trackIndex); });
-    }
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('[data-spotify-play]')) return;
-      if (e.target.closest('[data-action="like-track"]')) return;
-      if (e.target.closest('[data-action="share-track"]')) return;
-      if (e.target.closest('[data-action="open-rent"]')) return;
-      e.preventDefault(); e.stopPropagation();
-      openAlbumModal(albumId);
-    });
-  });
 }
 
 function renderPlans() {
@@ -914,7 +888,7 @@ function resolvePlaylistTracks(playlist) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM (CORRIGIDO)
+// MODAL DE ÁLBUM
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
   const existing = document.getElementById('albumModal');
@@ -1020,7 +994,7 @@ function openRentModal(albumId, trackIndex) {
   if (isPremium()) { toast('Você já é Premium — ouça sem alugar.', '✓'); return; }
   const realIndex = track ? (Number(track.trackNumber ?? track.trackIndex) || 0) : 0;
   const trackRented = track && isRented(albumId, realIndex);
-  const albumRented = SITE.rentals.some((r) => r.trackKey === `album:${albumId}` && new Date(r.expiresAt).getTime() > Date.now());
+  const albumRented = isRented(albumId, null);
   if (albumRented) { toast('Você já alugou este álbum.', '✓'); return; }
   const initialKind = (track && !trackRented) ? 'track' : 'album';
   _rentContext = { albumId, trackIndex: realIndex, kind: initialKind, planId: null };
@@ -1238,7 +1212,7 @@ function bindGlobalEvents() {
         if (!Number.isInteger(idx) || !playerQueue[idx]) break;
         playerQueueIndex = idx;
         const item = playerQueue[idx];
-        playFromDiscography(item.albumId, item.trackIndex, { fromQueue: true });
+        playFromDiscography(item.albumId, item.trackId, { fromQueue: true });
         renderQueue();
         break;
       }
@@ -1773,31 +1747,41 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
   const trackId = track.id;
   if (!trackId) { console.error('[player] faixa sem id:', track); toast('Faixa sem ID — não foi possível carregar.', '⚠'); return; }
   const realIndex = Number(track.trackNumber ?? track.trackIndex) || 0;
+
+  // ★ Controle de concorrência
+  const requestId = ++playbackRequestId;
+
   if (!opts.fromQueue) buildQueueForAlbum(albumId, trackId);
-  if (currentAbortController) currentAbortController.abort();
-  currentAbortController = new AbortController();
+
   clearRenewTimer();
   isRenewing = false;
+
   currentTrackIdentity = { albumId, trackIndex: realIndex, trackId, trackTitle: track.title, identity: `${albumId}:${realIndex}` };
   syncRadioOnTrackChange(albumId, realIndex);
+
   const titleEl = document.getElementById('nowTitle');
   if (titleEl) titleEl.textContent = track.title;
   const artistEl = document.getElementById('nowArtist');
   if (artistEl) artistEl.textContent = `Joseph Matthos · ${album.title}`;
   syncExpandedPlayer(track, album, false);
   updatePlayingHighlight();
-  const src = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
-  const source = 'auto';
+
+  const src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
   const isUserPremium = isPremium();
   const isUserRented = isRented(albumId, realIndex);
   const unlocked = isUserPremium || isUserRented;
+
   if (unlocked) previewState = { active: false, start: 0, end: Infinity };
   else { const duration = Math.max(1, Number(30) || 30); previewState = { active: true, start: 0, end: duration }; }
+
   previewNoticeTrackKey = '';
   currentStream = { albumId, trackIndex: realIndex, trackId, unlocked, source: unlocked ? 'full' : 'preview', url: src, expiresIn: 300, loadedAt: Date.now() };
+
   audio.pause(); audio.removeAttribute('src'); audio.preload = 'auto'; audio.load(); audio.src = src;
+
   const artistEl2 = document.getElementById('nowArtist');
   if (artistEl2) artistEl2.textContent = `Joseph Matthos · ${album.title}` + (unlocked ? '' : ' (prévia)');
+
   const cover = document.getElementById('playerCover');
   if (cover) {
     const coverImg = album.coverImage || album.coverUrl;
@@ -1805,20 +1789,35 @@ async function playFromDiscography(albumId, trackIndexOrId, opts = {}) {
     if (safeCover) { cover.classList.add('has-cover'); cover.style.backgroundImage = `url('${safeCover}')`; }
     else { cover.classList.remove('has-cover'); cover.style.backgroundImage = ''; }
   }
+
   document.getElementById('previewBadge')?.classList.toggle('visible', !unlocked);
   document.getElementById('expandedPreviewBadge')?.classList.toggle('visible', !unlocked);
+
   const playerEl = document.querySelector('#expandedPlayerModal .music-player');
   if (playerEl) {
     const coverImg = track.coverUrl || album.coverImage || album.coverUrl;
     const safeCover = safeMediaUrl(coverImg);
     if (safeCover) { playerEl.style.backgroundImage = `url('${safeCover}')`; playerEl.style.backgroundSize = 'cover'; playerEl.style.backgroundPosition = 'center'; playerEl.setAttribute('data-has-bg', '1'); }
   }
+
   syncExpandedPlayer(track, album, unlocked);
   renderExpandedPlayerActions(albumId, realIndex);
   renderQueue();
   updatePlayingHighlight();
-  try { await waitForAudioReady(audio); await audio.play(); if (unlocked) scheduleRenewal(); }
-  catch (err) {
+
+  try {
+    await waitForAudioReady(audio);
+
+    // ★ descarta se o usuário trocou de faixa
+    if (requestId !== playbackRequestId) return;
+
+    await audio.play();
+
+    if (requestId !== playbackRequestId) { audio.pause(); return; }
+
+    if (unlocked) scheduleRenewal();
+  } catch (err) {
+    if (requestId !== playbackRequestId) return;
     console.error('[player] falha na reprodução:', err);
     const code = audio?.error?.code;
     if (code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) toast('O formato deste áudio não é suportado pelo navegador.', '⚠');
