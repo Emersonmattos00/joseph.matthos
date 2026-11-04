@@ -1,17 +1,19 @@
 /* ============================================================
    api/stream.js — Entrega de áudio (Versão Final Auditada)
    ------------------------------------------------------------
-   Correções aplicadas (Etapa 6):
+   Correções aplicadas:
    - Verifica track.published / track.status / album.published
    - Verifica rentals.startsAt (não libera antes do tempo)
-   - CORS restrito via ALLOWED_ORIGINS (não mais '*')
+   - CORS restrito via ALLOWED_ORIGINS
    - Suporta format=json para renovação do player
-   - Erros de banco não viram "sem assinatura" (fail-closed)
+   - Erros de banco viram 503 (fail-closed)
+   - ★ Fallback: usa stream_key quando preview não está preenchido
+   - ★ cleanKey remove prefixos comuns (josephmatthos/, audio/, etc.)
    ============================================================ */
 
 'use strict';
 
-const { eq, and, gt, lte, or, isNull } = require('drizzle-orm');
+const { eq, and, gt, lte, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, albums, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
@@ -19,7 +21,7 @@ const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
 const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
-const PLAYBACK_TTL = 3600; // segundos — deve bater com getPlaybackUrl
+const PLAYBACK_TTL = 3600;
 
 function sendError(res, status, error, message) {
   return res.status(status).json({
@@ -36,10 +38,8 @@ function validUuid(value) {
 
 function corsHeadersFor(req, res) {
   const origin = String(req.headers.origin || '').trim();
-  if (!origin) {
-    // Requisições sem origin (curl, health check) — sem CORS
-    return;
-  }
+  if (!origin) return;
+
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[stream] ALLOWED_ORIGINS não configurado — bloqueando CORS.');
     return;
@@ -95,12 +95,10 @@ module.exports = async function stream(req, res) {
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
     if (!track) return sendError(res, 404, 'Faixa não encontrada.');
 
-    // ★ CORREÇÃO P0: verifica publicação
     if (track.published !== true || track.status !== 'PUBLISHED') {
       return sendError(res, 404, 'Faixa não disponível.');
     }
 
-    // ★ CORREÇÃO P0: verifica publicação do álbum
     if (track.albumId) {
       const [albumRow] = await db.select({ id: albums.id, published: albums.published })
         .from(albums).where(eq(albums.id, track.albumId)).limit(1);
@@ -116,7 +114,7 @@ module.exports = async function stream(req, res) {
 
     let accessLevel = 'preview';
 
-    // ── 5. Verificação de Premium (fail-closed em erro) ──
+    // ── 5. Verificação de Premium (fail-closed) ──
     if (user?.id) {
       try {
         const [sub] = await db.select().from(subscriptions)
@@ -129,7 +127,6 @@ module.exports = async function stream(req, res) {
         if (sub) accessLevel = 'full';
       } catch (err) {
         console.error('[stream] Erro ao checar assinatura:', err.message);
-        // ★ CORREÇÃO P0: fail-closed (não assume free em erro)
         return sendError(res, 503, 'Não foi possível verificar sua assinatura.');
       }
     }
@@ -145,42 +142,39 @@ module.exports = async function stream(req, res) {
           .where(and(
             eq(rentals.userId, user.id),
             eq(rentals.status, 'ACTIVE'),
-            lte(rentals.startsAt, nowIso),   // ★ CORREÇÃO P0: já começou
-            gt(rentals.expiresAt, nowIso),   // ★ ainda não expirou
+            lte(rentals.startsAt, nowIso),
+            gt(rentals.expiresAt, nowIso),
             rentalTarget
           )).limit(1);
         if (rent) accessLevel = 'full';
       } catch (err) {
         console.error('[stream] Erro ao checar aluguel:', err.message);
-        // ★ CORREÇÃO P0: fail-closed
         return sendError(res, 503, 'Não foi possível verificar seu aluguel.');
       }
     }
 
-    // ── 7. Seleção do arquivo ──
+    // ── 7. Seleção do arquivo (com fallback) ──
     let b2Key;
     let isFull = false;
 
     if (accessLevel === 'full') {
-      b2Key = track.streamKey || track.fullPath;
+      b2Key = track.streamKey || track.fullPath || track.previewKey || track.previewPath;
       isFull = true;
     } else {
-      b2Key = track.previewKey || track.previewPath;
+      // ★ Fallback: se o banco só tem stream_key, usar ele também
+      b2Key = track.previewKey || track.previewPath || track.streamKey || track.fullPath;
     }
 
     if (!b2Key) {
-      if (!isFull) {
-        return sendError(res, 403, 'Prévia indisponível.', 'Alugue ou assine para ouvir o áudio completo.');
-      }
-      console.error('[stream] Faixa sem arquivo completo:', track.id);
       return sendError(res, 404, 'Arquivo de áudio não configurado.');
     }
 
+    // ── 8. Normalização do caminho ──
     const cleanKey = String(b2Key)
       .replace(/^\/+/, '')
       .replace(/^(josephmatthos|audio|music|tracks)\//i, '');
 
-    // ── 8. Resposta ──
+    // ── 9. Resposta ──
     const wantsJson = String(req.query?.format || '').toLowerCase() === 'json';
 
     if (isFull) {
