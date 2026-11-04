@@ -220,7 +220,7 @@ body.player-page {
 .music-item { display: flex; align-items: center; gap: 1rem; padding: 0.8rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); cursor: pointer; }
 .music-item-number { width: 24px; text-align: center; color: var(--text-dim); }
 .music-item-info { flex: 1; min-width: 0; }
-.music-item-title { font-size: 0.95rem; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.music-item-title { font-size: 0.75rem; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .music-item.playing .music-item-title { color: var(--green); }
 .music-item-artist { font-size: 0.75rem; color: var(--text-dim); }
 .music-item-actions { display: flex; align-items: center; gap: 0.8rem; flex-shrink: 0; color: var(--text-dim); }
