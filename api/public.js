@@ -5,7 +5,7 @@
 'use strict';
 
 const { sendJson } = require('./_lib');
-const { db, eq, and, or, asc, desc, inArray } = require('./_db');
+const { db, eq, and, asc, desc, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
 // ─────────────────────────────────────────────────────────────
@@ -40,7 +40,6 @@ module.exports = async (req, res) => {
         return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada ou não publicada.' });
       }
 
-      // Busca o Álbum da faixa
       const [albumRow] = await db.select()
         .from(schema.albums)
         .where(
@@ -54,7 +53,6 @@ module.exports = async (req, res) => {
         return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado ou não publicado.' });
       }
 
-      // Busca todas as faixas publicadas deste álbum
       const albumTracks = await db.select({
         id: schema.tracks.id,
         title: schema.tracks.title,
@@ -115,7 +113,6 @@ module.exports = async (req, res) => {
       .where(eq(schema.albums.published, true))
       .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    // Busca as faixas de todos os álbuns publicados
     const albumIds = albums.map(a => a.id);
     let tracks = [];
     if (albumIds.length > 0) {
@@ -135,7 +132,6 @@ module.exports = async (req, res) => {
       .orderBy(asc(schema.tracks.trackNumber));
     }
 
-    // Conteúdo do site (textos, hero, etc.)
     let content = {};
     try {
       const [row] = await db.select().from(schema.siteContent)
@@ -145,13 +141,44 @@ module.exports = async (req, res) => {
       console.warn('[public] site_content indisponível:', e.message);
     }
 
+    // ★ NOVO: Busca os planos de assinatura e aluguel do banco
+    let plans = [];
+    let rentalPlans = [];
+    
+    try {
+      const planRows = await db.select().from(schema.plans).where(eq(schema.plans.active, true));
+      plans = planRows.map(p => ({
+        id: p.id,
+        name: p.name,
+        price: p.priceCents / 100,
+        priceCents: p.priceCents,
+        interval: p.intervalUnit === 'MONTH' ? 'month' : 'year',
+        available: true
+      }));
+
+      const rentalRows = await db.select().from(schema.rentalProducts).where(eq(schema.rentalProducts.active, true));
+      rentalPlans = rentalRows.map(r => ({
+        id: r.id,
+        label: r.name,
+        days: Math.ceil(r.durationHours / 24),
+        hours: r.durationHours,
+        price: r.priceCents / 100,
+        priceCents: r.priceCents,
+        available: true,
+        trackId: r.trackId,
+        albumId: r.albumId
+      }));
+    } catch (err) {
+      console.warn('[public] Erro ao carregar planos:', err.message);
+    }
+
     return sendJson(res, 200, {
       ok: true,
       content,
       albums,
       tracks,
-      plans: [],        
-      rentalPlans: [],  
+      plans,
+      rentalPlans,
     });
 
   } catch (err) {
