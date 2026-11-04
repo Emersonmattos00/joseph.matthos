@@ -1,10 +1,3 @@
-/*// Permite apenas o seu domínio
-const origin = req.headers.origin;
-if (['https://josephmatthos.com.br', 'https://www.josephmatthos.com.br', 'http://localhost:3000'].includes(origin)) {
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-}*/
-
 /* ============================================================
    api/stream.js — Entrega de áudio (Versão Final Segura)
    ============================================================ */
@@ -15,14 +8,14 @@ const { eq, and, gt, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser } = require('./_lib');
-const { streamRatelimit } = require('./_cache');
+const { checkStreamRateLimit } = require('./_cache');
+const { getPlaybackUrl } = require('./_storage');
 
-// ★ Aqui usamos a variável de ambiente. 
-// Se ela não existir (ex: em dev), ele usa um fallback para o Worker.
+// ★ CDN fallback para previews gratuitas
 const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
 
 module.exports = async (req, res) => {
-  // CORS restrito para o seu domínio
+  // CORS restrito
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
@@ -31,8 +24,10 @@ module.exports = async (req, res) => {
 
   try {
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
-    const { success } = await streamRatelimit.limit(ip);
-    if (!success) return res.status(429).json({ error: 'Muitas requisições' });
+    
+    // Rate limit com fail-closed (se Redis cair em prod, nega)
+    const rl = await checkStreamRateLimit(ip);
+    if (!rl.success) return res.status(429).json({ error: 'Muitas requisições' });
 
     const { trackId } = req.query;
     if (!trackId) return res.status(400).json({ error: 'trackId obrigatório' });
@@ -47,6 +42,8 @@ module.exports = async (req, res) => {
 
     if (user) {
       const now = new Date().toISOString();
+      
+      // 1. Checa Assinatura Premium
       try {
         const [sub] = await db.select().from(subscriptions)
           .where(and(
@@ -59,6 +56,7 @@ module.exports = async (req, res) => {
         console.error('[stream] Erro ao checar assinatura:', e);
       }
 
+      // 2. Checa Aluguel (se não for Premium)
       if (accessLevel !== 'full') {
         try {
           const rentalCond = or(
@@ -97,19 +95,30 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    // ★ PADRONIZAÇÃO DO CAMINHO (Correção da auditoria)
-    // Remove barras extras no início e o prefixo do bucket se já existir
+    // Padronização do caminho
     const cleanKey = String(b2Key)
       .replace(/^\/+/, '')
       .replace(/^josephmatthos\//, ''); 
 
-    // ★ REDIRECIONAMENTO (Economia de banda)
-    const cdnUrl = `${CDN_BASE}/${cleanKey}`;
+    // ★ CORREÇÃO DE SEGURANÇA: URL assinada para áudio completo
+    if (accessLevel === 'full') {
+      try {
+        // Gera URL assinada do B2 que expira em 5 minutos (300s)
+        // O `true` avisa ao _storage.js para usar o bucket de áudio full
+        const signedUrl = await getPlaybackUrl(cleanKey, true);
+        
+        res.setHeader('Cache-Control', 'no-store');
+        return res.redirect(302, signedUrl);
+      } catch (err) {
+        console.error('[stream] Falha ao gerar URL assinada:', err.message);
+        // Fail-closed: se o B2 falhar, NÃO entrega o áudio completo.
+        return res.status(503).json({ error: 'Serviço de áudio temporariamente indisponível.' });
+      }
+    }
 
-    // Não guarda a decisão de autorização no cache do navegador
+    // Preview: CDN público é aceitável (arquivo de 30s)
+    const cdnUrl = `${CDN_BASE}/${cleanKey}`;
     res.setHeader('Cache-Control', 'no-store');
-    
-    // Redireciona o player para o CDN (Cloudflare) ou para o B2
     return res.redirect(302, cdnUrl);
 
   } catch (error) {
