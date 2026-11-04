@@ -1,5 +1,11 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (Versão Final)
+   api/admin.js — Painel administrativo (Versão Final Auditada)
+   ------------------------------------------------------------
+   Correções aplicadas (Etapa 10):
+   - upload-sign: passa contentType correto para createSignedUploadUrl
+   - upload / upload-confirm: usa kind lógico (não nome físico)
+   - BUCKET_BY_KIND: mapeia kind → kind (storage resolve o físico)
+   - Download: usa kind lógico 'audio-full'
    ============================================================ */
 
 'use strict';
@@ -36,11 +42,8 @@ const CONTENT_KEY = 'default';
 const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
 
-const BUCKET_BY_KIND = {
-  'image': 'site-assets',
-  'audio-preview': 'audio-preview',
-  'audio-full': 'audio-premium'
-};
+// ★ CORREÇÃO: kinds lógicos (storage resolve para o bucket físico)
+const VALID_KINDS = new Set(['image', 'audio-preview', 'audio-full']);
 
 const VALID_ACTIONS = new Set([
   'login', 'session', 'logout', 'content',
@@ -226,24 +229,33 @@ async function handlePutContent(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOADS
+// UPLOADS (★ corrigidos para usar kind lógico)
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
   const buffer = Buffer.from(String(body.base64 || ''), 'base64');
-  const bucket = BUCKET_BY_KIND[kind];
-  
-  if (!bucket) return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
-  
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${body.filename.split('.').pop()}`;
+
+  if (!VALID_KINDS.has(kind)) {
+    return sendJson(res, 400, { ok: false, error: 'Tipo de upload inválido.' });
+  }
+  if (!buffer.length) {
+    return sendJson(res, 400, { ok: false, error: 'Arquivo vazio.' });
+  }
+  if (!body.contentType) {
+    return sendJson(res, 400, { ok: false, error: 'contentType obrigatório.' });
+  }
+
+  const ext = String(body.filename || '').split('.').pop().toLowerCase();
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
 
   try {
-    await uploadObject(bucket, path, buffer, body.contentType);
-    const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-    return sendJson(res, 200, { ok: true, url: publicUrl, path, bucket });
+    await uploadObject(kind, path, buffer, body.contentType);
+    const publicUrl = kind !== 'audio-full' ? b2GetPublicUrl(kind, path) : null;
+    return sendJson(res, 200, { ok: true, url: publicUrl, path, kind });
   } catch (err) {
+    console.error('[admin/upload]', err.message);
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
   }
 }
@@ -251,14 +263,34 @@ async function handleUpload(req, res, session) {
 async function handleUploadSign(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
-  const bucket = BUCKET_BY_KIND[kind];
-  if (!bucket) return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
+  const filename = String(body.filename || '').trim();
+  const contentType = String(body.contentType || '').trim();
 
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${body.filename.split('.').pop()}`;
+  if (!VALID_KINDS.has(kind)) {
+    return sendJson(res, 400, { ok: false, error: 'Tipo de upload inválido.' });
+  }
+  if (!filename || !contentType) {
+    return sendJson(res, 400, { ok: false, error: 'filename e contentType obrigatórios.' });
+  }
+
+  const ext = filename.split('.').pop().toLowerCase();
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
 
-  const signed = await b2CreateSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
-  return sendJson(res, 200, { ok: true, uploadUrl: signed.uploadUrl, token: signed.token, path, bucket });
+  try {
+    // ★ CORREÇÃO: 4 argumentos — (kind, path, contentType, TTL)
+    const signed = await b2CreateSignedUploadUrl(kind, path, contentType, SIGNED_UPLOAD_TTL_SEC);
+    return sendJson(res, 200, {
+      ok: true,
+      uploadUrl: signed.uploadUrl,
+      token: signed.token,
+      path,
+      kind
+    });
+  } catch (err) {
+    console.error('[admin/upload-sign]', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Não foi possível gerar URL de upload.' });
+  }
 }
 
 async function handleUploadConfirm(req, res, session) {
@@ -271,16 +303,17 @@ async function handleUploadConfirm(req, res, session) {
     ? null
     : Number(body.trackIndex);
 
-  const bucket = BUCKET_BY_KIND[kind];
-
-  if (!bucket || !path) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  if (!VALID_KINDS.has(kind) || !path) {
+    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  }
 
   if (albumId && (!isUuid(albumId) || trackIndex === null || !Number.isInteger(trackIndex) || trackIndex < 1)) {
     return sendJson(res, 400, { ok: false, error: 'Álbum ou número da faixa inválido.' });
   }
 
   try {
-    const exists = await b2ObjectExists(bucket, path);
+    // ★ CORREÇÃO: kind lógico
+    const exists = await b2ObjectExists(kind, path);
     if (!exists) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no armazenamento.' });
 
     if (albumId && trackIndex !== null) {
@@ -295,15 +328,15 @@ async function handleUploadConfirm(req, res, session) {
 
       if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 
-      await audit('upload.track.confirm', { actor: session.user, target: updated[0].id, metadata: { kind, bucket, path } });
+      await audit('upload.track.confirm', { actor: session.user, target: updated[0].id, metadata: { kind, path } });
 
-      const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(bucket, path);
-      return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl, track: updated[0] });
+      const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(kind, path);
+      return sendJson(res, 200, { ok: true, path, kind, url: publicUrl, track: updated[0] });
     }
 
-    const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(bucket, path);
-    await audit('upload.confirm', { actor: session.user, metadata: { kind, bucket, path } });
-    return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
+    const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(kind, path);
+    await audit('upload.confirm', { actor: session.user, metadata: { kind, path } });
+    return sendJson(res, 200, { ok: true, path, kind, url: publicUrl });
   } catch (err) {
     console.error('[admin/upload-confirm]', err.code || err.message);
     return sendJson(res, 502, { ok: false, error: 'Não foi possível confirmar o arquivo.' });
@@ -314,15 +347,20 @@ async function handleUploadConfirm(req, res, session) {
 // USUÁRIOS
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
-  const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
-  
+  const rows = await db.select({
+    id: schema.users.id,
+    email: schema.users.email,
+    name: schema.users.name,
+    createdAt: schema.users.createdAt
+  }).from(schema.users).orderBy(desc(schema.users.createdAt));
+
   let planRows = [];
   try {
     planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
   } catch (e) {
     console.warn('[admin] View effective_plan não encontrada.');
   }
-  
+
   const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
 }
@@ -334,14 +372,21 @@ async function handlePatchUser(req, res, session) {
 
   if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
-  await db.update(schema.subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
+  await db.update(schema.subscriptions)
+    .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+    .where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
 
   if (plan !== 'free') {
     const [planRow] = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
     if (planRow) {
       await db.insert(schema.subscriptions).values({
-        id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${userId}_${Date.now()}`,
-        status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), updatedAt: new Date().toISOString()
+        id: crypto.randomUUID(),
+        userId,
+        planId: planRow.id,
+        externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+        status: 'ACTIVE',
+        currentPeriodStart: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       });
     }
   }
@@ -385,7 +430,6 @@ async function handleCreateAlbum(req, res, session) {
   if (title.length < 1 || title.length > 200) {
     return sendJson(res, 400, { ok: false, error: 'Título do álbum inválido.' });
   }
-
   if (!isUuid(artistId)) {
     return sendJson(res, 400, { ok: false, error: 'Artista inválido.' });
   }
@@ -506,12 +550,12 @@ async function handleUpdateLyrics(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DOWNLOADS
+// DOWNLOADS (★ corrigidos para usar kind lógico)
 // ─────────────────────────────────────────────────────────────
 async function handleDownloadUrl(req, res, session) {
   const [track] = await db.select().from(tracks).where(eq(tracks.id, req.query.id)).limit(1);
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
-  const url = await b2CreateSignedDownloadUrl('audio-premium', track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
+  const url = await b2CreateSignedDownloadUrl('audio-full', track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
   return sendJson(res, 200, { ok: true, url });
 }
 
@@ -519,7 +563,7 @@ async function handleDownloadAlbum(req, res, session) {
   const rows = await db.select().from(tracks).where(eq(tracks.albumId, req.query.id)).orderBy(asc(tracks.trackNumber));
   const urls = await Promise.all(rows.map(async t => {
     if (!t.fullPath) return { id: t.id, url: null };
-    const url = await b2CreateSignedDownloadUrl('audio-premium', t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
+    const url = await b2CreateSignedDownloadUrl('audio-full', t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
     return { id: t.id, title: t.title, url };
   }));
   return sendJson(res, 200, { ok: true, tracks: urls });
@@ -575,5 +619,5 @@ function sanitizeFilename(s) {
 }
 
 function isUuid(s) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
