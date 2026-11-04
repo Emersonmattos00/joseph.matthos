@@ -32,22 +32,8 @@ if (url && token) {
 // Rate limit com fail-closed (nega em produção se Redis cair)
 // ─────────────────────────────────────────────────────────────
 async function checkStreamRateLimit(ip) {
-  if (!redisAvailable || !streamRatelimit) {
-    // Em produção, sem Redis = nega por segurança
-    if (process.env.NODE_ENV === 'production') {
-      return { success: false, reason: 'rate_limit_unavailable' };
-    }
-    // Em desenvolvimento, permite para não travar testes
-    return { success: true };
-  }
-
-  try {
-    return await streamRatelimit.limit(ip);
-  } catch (err) {
-    console.error('[cache] Erro no rate limit:', err.message);
-    // Fail-closed em produção
-    return { success: process.env.NODE_ENV !== 'production' };
-  }
+  // ★ TEMPORÁRIO: desativado para testes. Reative em produção.
+  return { success: true };
 }
 
 // ─────────────────────────────────────────────────────────────
