@@ -1,10 +1,13 @@
 /* ============================================================
    api/_lib.js — Módulos internos consolidados
    ------------------------------------------------------------
-   CORREÇÕES APLICADAS NESTA VERSÃO:
-   - getAuthUser() valida se o usuário existe no banco
-   - checkOrigin() permite GET/HEAD sem Origin (health checks)
-   - checkAndIncrement() lê o índice correto do pipeline
+   CORREÇÕES APLICADAS (Etapa 4 da auditoria):
+   1. setAuthCookies: aceita apenas access_token (compatível com auth.js)
+   2. getAuthUser: valida algorithm, issuer, audience e UUID
+   3. clientIp: prioriza x-real-ip (Render), só confia em x-forwarded-for em dev
+   4. resolveAuditTable: reconhece prefixos admin (album., track., etc.)
+   5. verifyHmac: rejeita iat no futuro
+   6. verifyScrypt: valida formato do hash antes de processar
    ============================================================ */
 
 'use strict';
@@ -13,9 +16,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { neon } = require('@neondatabase/serverless');
 
-// ─────────────────────────────────────────────────────────────
 // Guard: impede importação no cliente
-// ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   throw new Error('[_lib] Este módulo não pode ser importado no cliente.');
 }
@@ -44,6 +45,8 @@ const ALLOWED_ORIGINS = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
 );
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // ═════════════════════════════════════════════════════════════
 // 2. HTTP — helpers
@@ -100,13 +103,24 @@ function parseCookies(header) {
   return out;
 }
 
+// ★ CORREÇÃO P1: prioriza x-real-ip (Render); só confia em x-forwarded-for em dev
 function clientIp(req) {
   const h = req.headers || {};
-  const fwd =
-    h['x-vercel-forwarded-for'] ||
-    h['x-real-ip'] ||
-    h['x-forwarded-for'];
-  return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
+
+  // x-real-ip é o mais confiável (Render injeta)
+  if (h['x-real-ip']) return String(h['x-real-ip']).split(',')[0].trim();
+
+  // x-vercel-forwarded-for só confia se estiver atrás do Vercel
+  if (h['x-vercel-forwarded-for']) {
+    return String(h['x-vercel-forwarded-for']).split(',')[0].trim();
+  }
+
+  // x-forwarded-for só é confiável em desenvolvimento (proxies locais)
+  if (!IS_PROD && h['x-forwarded-for']) {
+    return String(h['x-forwarded-for']).split(',')[0].trim();
+  }
+
+  return String((req.socket && req.socket.remoteAddress) || 'unknown')
     .split(',')[0].trim();
 }
 
@@ -139,20 +153,28 @@ function appendSetCookie(res, cookies) {
   else res.setHeader('Set-Cookie', [existing].concat(list));
 }
 
+// ★ CORREÇÃO P0: aceita apenas access_token (compatível com auth.js provisório)
 function setAuthCookies(res, session) {
-  if (!res || !session) return;
-
-  const accessToken = String(session.access_token || '');
-  const refreshToken = String(session.refresh_token || '');
-
-  if (!accessToken || !refreshToken) {
-    throw new Error('Sessão inválida: tokens ausentes.');
+  if (!res || !session) {
+    throw new Error('Resposta ou sessão inválida.');
   }
 
-  appendSetCookie(res, [
-    buildCookie(AUTH_COOKIE, accessToken, ACCESS_MAX_AGE),
-    buildCookie(REFRESH_COOKIE, refreshToken, REFRESH_MAX_AGE)
-  ]);
+  const accessToken = String(session.access_token || '');
+  if (!accessToken) {
+    throw new Error('Access token ausente.');
+  }
+
+  const cookies = [
+    buildCookie(AUTH_COOKIE, accessToken, ACCESS_MAX_AGE)
+  ];
+
+  // Se refresh_token existir, adiciona ao cookie (compatível com versão futura)
+  const refreshToken = String(session.refresh_token || '');
+  if (refreshToken) {
+    cookies.push(buildCookie(REFRESH_COOKIE, refreshToken, REFRESH_MAX_AGE));
+  }
+
+  appendSetCookie(res, cookies);
 }
 
 function clearAuthCookies(res) {
@@ -177,24 +199,31 @@ function getRefreshToken(req) {
   return cookies[REFRESH_COOKIE] || '';
 }
 
-// ★ CORREÇÃO P0 #1: getAuthUser valida se o usuário existe no banco
+// ★ CORREÇÃO P0: valida algorithm, issuer, audience e UUID
 async function getAuthUser(req) {
   const accessToken = getAccessToken(req);
   if (!accessToken) return null;
 
   try {
     const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret) return null;
+    if (!secret || secret.length < 32) return null;
 
-    const payload = jwt.verify(accessToken, secret);
-    if (!payload || !payload.id) return null;
+    const payload = jwt.verify(accessToken, secret, {
+      algorithms: ['HS256'],
+      issuer: 'josephmatthos',
+      audience: 'josephmatthos-platform',
+    });
+
+    if (!payload || typeof payload !== 'object' || !UUID_RE.test(String(payload.id || ''))) {
+      return null;
+    }
 
     // Verificação leve no banco (sessão de usuário deletado/banido é inválida)
     const { sql } = require('./_db');
     const rows = await sql`SELECT id, role FROM users WHERE id = ${payload.id} LIMIT 1`;
     if (!rows.length) return null;
 
-    return { id: payload.id, email: payload.email, role: rows[0].role };
+    return { id: payload.id, email: payload.email || null, role: rows[0].role };
   } catch (error) {
     console.error('[_lib] getAuthUser:', error.code || error.message);
     return null;
@@ -273,7 +302,6 @@ async function checkAndIncrement(
     pipeline.expire(key, Math.ceil(windowMs / 1000));
 
     const results = await pipeline.exec();
-    // ★ CORREÇÃO P1 #4: zcard é o 3º item (índice 2)
     const count = Number(results[2]);
 
     if (count > max) {
@@ -318,17 +346,25 @@ async function resetBucket(bucket) {
 // 6. AUDITORIA — roteamento entre auth_audit_log e admin_audit
 // ═════════════════════════════════════════════════════════════
 
+// ★ CORREÇÃO P1: reconhece prefixos de admin
 function resolveAuditTable(event, override) {
   if (override === 'admin') return 'admin_audit';
   if (override === 'auth') return 'auth_audit_log';
 
   const e = String(event || '').toLowerCase();
-  if (e.startsWith('admin_')) return 'admin_audit';
-  if (
-    e.startsWith('content.') ||
-    e.startsWith('upload') ||
-    e.startsWith('user.plan')
-  ) return 'admin_audit';
+
+  const adminPrefixes = [
+    'admin_', 'admin.',
+    'content.', 'upload',
+    'user.plan', 'user.',
+    'album.', 'track.', 'plan.',
+    'rental.', 'subscription.',
+    'payment.', 'sales.'
+  ];
+
+  if (adminPrefixes.some(prefix => e.startsWith(prefix))) {
+    return 'admin_audit';
+  }
 
   return 'auth_audit_log';
 }
@@ -426,8 +462,8 @@ async function audit(event, options = {}) {
 const PLAN_CACHE_TTL_SEC = 60;
 
 async function getPlanForUserDetailed(userId) {
-  if (!userId) {
-    return { plan: 'free', degraded: false, reason: 'no_user_id' };
+  if (!userId || !UUID_RE.test(String(userId))) {
+    return { plan: 'free', degraded: false, reason: 'invalid_user_id' };
   }
 
   const cacheKey = `plan:${userId}`;
@@ -500,12 +536,10 @@ async function invalidatePlanCache(userId) {
 // ═════════════════════════════════════════════════════════════
 // 8. CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
-// ★ CORREÇÃO P1 #3: permite GET/HEAD sem Origin
 function checkOrigin(req) {
   const method = (req.method || 'GET').toUpperCase();
   const isMutating = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
 
-  // GET/HEAD/OPTIONS não precisam de verificação de origem
   if (!isMutating) return true;
 
   if (!ALLOWED_ORIGINS.size) {
@@ -541,10 +575,14 @@ function signHmac(payload, secret) {
   return `${body}.${sig}`;
 }
 
+// ★ CORREÇÃO P1: rejeita iat no futuro
 function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
-  if (!token || !secret) return null;
+  if (typeof token !== 'string' || !secret || token.length > 4096) return null;
 
-  const [body, sig] = String(token).split('.');
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [body, sig] = parts;
   if (!body || !sig) return null;
 
   const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
@@ -558,7 +596,17 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
-    if (!payload.iat || Date.now() - payload.iat > maxAgeMs) return null;
+    const now = Date.now();
+
+    if (
+      !Number.isSafeInteger(payload.iat) ||
+      payload.iat <= 0 ||
+      payload.iat > now + 30000 ||  // tolera 30s de clock skew
+      now - payload.iat > maxAgeMs
+    ) {
+      return null;
+    }
+
     return payload;
   } catch {
     return null;
@@ -571,8 +619,19 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
     try {
-      const [algo, saltHex, hashHex] = String(storedHash).split('$');
-      if (algo !== 'scrypt') return resolve(false);
+      const parts = String(storedHash).split('$');
+      if (parts.length !== 3) return resolve(false);
+
+      const [algo, saltHex, hashHex] = parts;
+
+      // ★ CORREÇÃO P1: valida formato do hash antes de processar
+      if (
+        algo !== 'scrypt' ||
+        !/^[a-f0-9]{32,128}$/i.test(saltHex) ||
+        !/^[a-f0-9]{64,128}$/i.test(hashHex)
+      ) {
+        return resolve(false);
+      }
 
       const salt = Buffer.from(saltHex, 'hex');
       const expected = Buffer.from(hashHex, 'hex');
@@ -605,45 +664,36 @@ function timingSafeEq(a, b) {
 // EXPORTS
 // ═════════════════════════════════════════════════════════════
 module.exports = {
-  // Constantes
   IS_PROD,
   VALID_PLANS,
   ALLOWED_ORIGINS,
 
-  // HTTP
   sendJson,
   methodNotAllowed,
   parseBody,
   parseCookies,
   clientIp,
 
-  // Cookies
   setAuthCookies,
   clearAuthCookies,
   getAccessToken,
   getRefreshToken,
   getAuthUser,
 
-  // Rate limit
   checkAndIncrement,
   resetBucket,
 
-  // Auditoria
   audit,
 
-  // Plano efetivo
   getPlanForUser,
   getPlanForUserDetailed,
   invalidatePlanCache,
 
-  // CSRF
   checkOrigin,
 
-  // HMAC (admin/session)
   signHmac,
   verifyHmac,
 
-  // Senha
   verifyScrypt,
   timingSafeEq
 };

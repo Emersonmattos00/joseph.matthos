@@ -6,6 +6,7 @@
    - Tratamento de e-mail duplicado (409)
    - Suporte a aluguel de álbum
    - Remoção do Clear-Site-Data no logout
+   - JWT com issuer/audience (compatível com _lib.js)
    ============================================================ */
 
 'use strict';
@@ -26,6 +27,8 @@ const {
   resetBucket,
   audit,
   checkOrigin,
+  parseCookies,
+  clientIp,
 } = require('./_lib');
 
 const { db, sql } = require('./_db');
@@ -48,7 +51,6 @@ const COMMON_PASSWORDS = new Set([
   'welcome1', 'iloveyou', 'abc12345', '1q2w3e4r', '1qaz2wsx'
 ]);
 
-// ★ CORREÇÃO: Limites mais restritivos para segurança
 const MAX_EMAILS_PER_HOUR = 3;
 const MAX_LOGIN_ATTEMPTS_PER_IP = 60;
 const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 10;
@@ -122,23 +124,37 @@ function verifyPassword(password, storedHash) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// JWT — par de tokens
+// JWT — par de tokens (★ agora com issuer/audience)
 // ─────────────────────────────────────────────────────────────
 function signTokenPair(user) {
   const secret = String(process.env.JWT_SECRET || '').trim();
-  if (!secret) throw new Error('JWT_SECRET não configurado.');
-  const basePayload = { id: user.id, email: user.email, role: user.role };
+  if (!secret || secret.length < 32) {
+    throw new Error('JWT_SECRET ausente ou insuficiente (mínimo 32 caracteres).');
+  }
+
+  const basePayload = { id: user.id, email: user.email };
+
+  const options = {
+    algorithm: 'HS256',
+    issuer: 'josephmatthos',
+    audience: 'josephmatthos-platform',
+  };
+
   return {
-    access_token: jwt.sign(basePayload, secret, { expiresIn: '1h' }),
-    refresh_token: jwt.sign(basePayload, secret, { expiresIn: '7d' }),
+    access_token: jwt.sign(basePayload, secret, { ...options, expiresIn: '1h' }),
+    refresh_token: jwt.sign(basePayload, secret, { ...options, expiresIn: '7d' }),
   };
 }
 
 function verifyToken(token) {
   try {
     const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret) return null;
-    return jwt.verify(token, secret);
+    if (!secret || secret.length < 32) return null;
+    return jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+      issuer: 'josephmatthos',
+      audience: 'josephmatthos-platform',
+    });
   } catch { return null; }
 }
 
@@ -161,8 +177,8 @@ async function handleLogin(req, res) {
   }
 
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000),
-    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000)
+    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -235,8 +251,8 @@ async function handleSignup(req, res) {
   }
 
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000),
-    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000)
+    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -251,7 +267,7 @@ async function handleSignup(req, res) {
 
     if (existing) {
       await audit('signup', { email, ip, userAgent, success: false, reason: 'email_exists' });
-      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' }); // ★ Mudei para 409
+      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' });
     }
 
     const passwordHash = await hashPassword(password);
@@ -275,13 +291,12 @@ async function handleSignup(req, res) {
   } catch (error) {
     await audit('signup', { email, ip, userAgent, success: false, reason: error.code || 'error' });
 
-    // ★ CORREÇÃO: Tratar erro de e-mail duplicado (condição de corrida)
     if (error.code === '23505' && (error.constraint === 'users_email_key' || String(error.message).includes('users_email_key'))) {
       return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' });
     }
 
     console.error('[auth/signup]', error.code || error.message);
-    return sendJson(res, 500, { ok: false, error: GENERIC_ERROR }); // ★ Mudei 502 para 500
+    return sendJson(res, 500, { ok: false, error: GENERIC_ERROR });
   }
 }
 
@@ -298,7 +313,6 @@ async function handleLogout(req, res) {
     console.warn('[auth/logout] falha ao limpar cookies:', err.message);
   }
 
-  // ★ CORREÇÃO: Removido Clear-Site-Data (pode apagar dados locais desnecessariamente)
   await audit('logout', { ip, userAgent, success: true, reason: null });
 
   return sendJson(res, 200, { ok: true });
@@ -309,7 +323,10 @@ async function handleLogout(req, res) {
 // ─────────────────────────────────────────────────────────────
 async function handleMe(req, res) {
   const method = (req.method || 'GET').toUpperCase();
-  const token = getAccessTokenFromCookie(req);
+  const cookies = parseCookies(req.headers.cookie || '');
+  const IS_PROD = process.env.NODE_ENV === 'production';
+  const cookieName = IS_PROD ? '__Host-jm_auth_access' : 'jm_auth_access';
+  const token = cookies[cookieName] || '';
 
   if (!token) return method === 'HEAD' ? res.status(401).end() : sendJson(res, 401, { ok: false });
 
@@ -348,25 +365,6 @@ async function handleMe(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers de cookie
-// ─────────────────────────────────────────────────────────────
-function getAccessTokenFromCookie(req) {
-  const header = req.headers.cookie || req.headers.Cookie || '';
-  const cookies = {};
-  String(header).split(';').forEach((item) => {
-    const i = item.indexOf('=');
-    if (i < 0) return;
-    const k = item.slice(0, i).trim();
-    const v = item.slice(i + 1).trim();
-    if (k) { try { cookies[k] = decodeURIComponent(v); } catch { cookies[k] = v; } }
-  });
-
-  const IS_PROD = process.env.NODE_ENV === 'production';
-  const name = IS_PROD ? '__Host-jm_auth_access' : 'jm_auth_access';
-  return cookies[name] || '';
-}
-
-// ─────────────────────────────────────────────────────────────
 // Rentals (Suporte a faixa e álbum)
 // ─────────────────────────────────────────────────────────────
 async function getActiveRentals(userId) {
@@ -374,7 +372,7 @@ async function getActiveRentals(userId) {
 
   const rows = await db.select({
     trackId: rentals.trackId,
-    albumId: rentals.albumId, // ★ Pega o albumId do próprio rental
+    albumId: rentals.albumId,
     expiresAt: rentals.expiresAt,
     trackAlbumId: tracks.albumId,
     trackNumber: tracks.trackNumber,
@@ -388,7 +386,6 @@ async function getActiveRentals(userId) {
   ))
   .limit(MAX_RENTALS);
 
-  // ★ CORREÇÃO: Suporta aluguel de faixa (trackKey) e aluguel de álbum (albumId)
   return rows.map((r) => {
     if (r.trackId && r.trackAlbumId && r.trackNumber != null) {
       return { trackKey: `${r.trackAlbumId}:${r.trackNumber}`, expiresAt: r.expiresAt };
@@ -452,17 +449,6 @@ function isValidPassword(password) {
 // ─────────────────────────────────────────────────────────────
 // Helpers HTTP
 // ─────────────────────────────────────────────────────────────
-function clientIp(req) {
-  const h = req.headers || {};
-  const trusted = h['x-vercel-forwarded-for'] || h['x-real-ip'];
-  if (trusted) return String(trusted).split(',')[0].trim();
-  if (process.env.NODE_ENV !== 'production') {
-    const fwd = h['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
-  }
-  return String((req.socket && req.socket.remoteAddress) || 'unknown').split(',')[0].trim();
-}
-
 function methodNotAllowed(res, allow) {
   res.setHeader('Allow', allow);
   return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
