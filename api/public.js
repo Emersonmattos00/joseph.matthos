@@ -12,17 +12,17 @@ const schema = require('./_db').schema;
 // HANDLER
 // ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
-  // Controle de Cache: Deixa a Cloudflare/Vercel cachear o catálogo por 1 minuto
-  res.setHeader('Cache-Control', 'no-store');
+  // Controle de Cache: permite cache na borda por 1 minuto
+  res.setHeader('Cache-Control', 'public, max-age=60');
   
-  // Configuração básica de CORS (permite acesso do player)
+  // Configuração básica de CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   
   const { track, album } = req.query;
 
   try {
     if (req.method !== 'GET') {
-      return sendJson(res, 405, { error: 'Method not allowed' });
+      return sendJson(res, 405, { ok: false, error: 'Method not allowed' });
     }
 
     // ── 1. Retorna faixa específica (Player) ──────────────────
@@ -32,29 +32,29 @@ module.exports = async (req, res) => {
         .where(
           and(
             eq(schema.tracks.id, track),
-            eq(schema.tracks.published, true) // ⚠️ Garante que a faixa está publicada
+            eq(schema.tracks.published, true)
           )
         ).limit(1);
 
       if (!trackRow) {
-        return sendJson(res, 404, { error: 'Faixa não encontrada ou não publicada.' });
+        return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada ou não publicada.' });
       }
 
-      // Busca o Álbum da faixa para exibir no player (título, capa, etc)
+      // Busca o Álbum da faixa
       const [albumRow] = await db.select()
         .from(schema.albums)
         .where(
           and(
             eq(schema.albums.id, trackRow.albumId),
-            eq(schema.albums.published, true) // ⚠️ Garante que o álbum está publicado
+            eq(schema.albums.published, true)
           )
         ).limit(1);
 
       if (!albumRow) {
-        return sendJson(res, 404, { error: 'Álbum não encontrado ou não publicado.' });
+        return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado ou não publicado.' });
       }
 
-      // Busca todas as faixas publicadas deste álbum para montar a lista do player
+      // Busca todas as faixas publicadas deste álbum
       const albumTracks = await db.select({
         id: schema.tracks.id,
         title: schema.tracks.title,
@@ -71,14 +71,14 @@ module.exports = async (req, res) => {
       )
       .orderBy(asc(schema.tracks.trackNumber));
 
-      // Retorna a resposta exata que o player.js espera
       return sendJson(res, 200, {
+        ok: true,
         id: trackRow.id,
         title: trackRow.title,
         artist: albumRow.artistName || 'Joseph Matthos',
         albumTitle: albumRow.title,
         coverUrl: albumRow.coverUrl,
-        audioPath: trackRow.fullPath || trackRow.previewPath, // Usado pela API de stream
+        audioPath: trackRow.fullPath || trackRow.previewPath,
         lyrics: trackRow.lyrics || [],
         albumTracks
       });
@@ -95,7 +95,7 @@ module.exports = async (req, res) => {
           )
         ).limit(1);
 
-      if (!albumRow) return sendJson(res, 404, { error: 'Álbum não encontrado.' });
+      if (!albumRow) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
 
       const tracks = await db.select()
         .from(schema.tracks)
@@ -106,19 +106,56 @@ module.exports = async (req, res) => {
           )
         ).orderBy(asc(schema.tracks.trackNumber));
 
-      return sendJson(res, 200, { album: albumRow, tracks });
+      return sendJson(res, 200, { ok: true, album: albumRow, tracks });
     }
 
-    // ── 3. Lista todos os álbuns publicados (Home) ────────────
+    // ── 3. Home: contrato completo esperado pelo frontend ─────
     const albums = await db.select()
       .from(schema.albums)
       .where(eq(schema.albums.published, true))
       .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    return sendJson(res, 200, { albums });
+    // Busca as faixas de todos os álbuns publicados
+    const albumIds = albums.map(a => a.id);
+    let tracks = [];
+    if (albumIds.length > 0) {
+      tracks = await db.select({
+        id: schema.tracks.id,
+        albumId: schema.tracks.albumId,
+        title: schema.tracks.title,
+        trackNumber: schema.tracks.trackNumber,
+        durationSeconds: schema.tracks.durationSeconds,
+        locked: schema.tracks.locked,
+      })
+      .from(schema.tracks)
+      .where(and(
+        eq(schema.tracks.published, true),
+        inArray(schema.tracks.albumId, albumIds)
+      ))
+      .orderBy(asc(schema.tracks.trackNumber));
+    }
+
+    // Conteúdo do site (textos, hero, etc.)
+    let content = {};
+    try {
+      const [row] = await db.select().from(schema.siteContent)
+        .where(eq(schema.siteContent.key, 'default')).limit(1);
+      if (row && row.data) content = row.data;
+    } catch (e) {
+      console.warn('[public] site_content indisponível:', e.message);
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      content,
+      albums,
+      tracks,
+      plans: [],        
+      rentalPlans: [],  
+    });
 
   } catch (err) {
     console.error('[public] Erro na API:', err);
-    return sendJson(res, 500, { error: 'Erro interno no catálogo.' });
+    return sendJson(res, 500, { ok: false, error: 'Erro interno no catálogo.' });
   }
 };
