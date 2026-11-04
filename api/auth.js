@@ -9,7 +9,7 @@
    - Cookies __Host- em produção (HttpOnly + SameSite=Lax)
    - CSRF: Origin check em métodos mutantes
    - Senhas com scrypt (nativo do Node)
-   - Sessão via JWT (7 dias)
+   - Sessão via JWT (access 1h + refresh 7d)
    - Rate limit por IP + e-mail (Redis/KV)
    - Auditoria em todas as ações
    ============================================================ */
@@ -144,16 +144,16 @@ function verifyPassword(password, storedHash) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// JWT
+// JWT — par de tokens (access + refresh)
 // ─────────────────────────────────────────────────────────────
-function signToken(user) {
+function signTokenPair(user) {
   const secret = String(process.env.JWT_SECRET || '').trim();
   if (!secret) throw new Error('JWT_SECRET não configurado.');
-  return jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    secret,
-    { expiresIn: '7d' }
-  );
+  const basePayload = { id: user.id, email: user.email, role: user.role };
+  return {
+    access_token: jwt.sign(basePayload, secret, { expiresIn: '1h' }),
+    refresh_token: jwt.sign(basePayload, secret, { expiresIn: '7d' }),
+  };
 }
 
 function verifyToken(token) {
@@ -220,8 +220,8 @@ async function handleLogin(req, res) {
 
     await resetBucket(`login:email:${email}`).catch(() => {});
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const pair = signTokenPair(user);
+    setAuthCookies(res, pair);
 
     let plan = 'free';
     try {
@@ -307,8 +307,8 @@ async function handleSignup(req, res) {
     RETURNING id, email, name, role, created_at, updated_at
   `;
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const pair = signTokenPair(user);
+    setAuthCookies(res, pair);
 
     await audit('signup', {
       email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated'

@@ -98,16 +98,16 @@ async function uploadObject(bucket, key, body, contentType) {
   }));
 }
 
-async function createSignedUploadUrl(bucket, key, contentType, expiresInSec) {
+// ★ CORRIGIDO: assinatura compatível com admin.js
+// admin.js chama: createSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC, contentType)
+async function createSignedUploadUrl(bucket, key, expiresInSec = 900, contentType) {
   const command = new PutObjectCommand({
     Bucket: bucket,
     Key: key,
-    ContentType: contentType
+    ...(contentType ? { ContentType: contentType } : {}),
   });
-  const uploadUrl = await getSignedUrl(getS3Client(), command, {
-    expiresIn: expiresInSec
-  });
-  return { uploadUrl };
+  const uploadUrl = await getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
+  return { uploadUrl, token: uploadUrl };
 }
 
 async function objectExists(bucket, key) {

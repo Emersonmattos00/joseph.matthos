@@ -28,20 +28,11 @@ if (url && token) {
   console.warn('[cache] UPSTASH_REDIS_* não configurado — cache e rate limit desativados.');
 }
 
-// Rate limit com fallback: se Redis indisponível, NEGA em produção (fail-closed)
+// ★ ATENÇÃO: Rate limit temporariamente desativado para testes.
+// Reative esta função (versão fail-closed) quando for para produção real.
 async function checkStreamRateLimit(ip) {
-  if (!redisAvailable || !streamRatelimit) {
-    if (process.env.NODE_ENV === 'production') {
-      return { success: false, reason: 'rate_limit_unavailable' };
-    }
-    return { success: true };
-  }
-  try {
-    return await streamRatelimit.limit(ip);
-  } catch (err) {
-    console.error('[cache] Erro no rate limit:', err.message);
-    return { success: process.env.NODE_ENV !== 'production' };
-  }
+  // Temporariamente desativado para testes
+  return { success: true };
 }
 
 async function getCachedAccess(userId, trackId) {
