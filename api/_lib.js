@@ -1,39 +1,10 @@
 /* ============================================================
    api/_lib.js — Módulos internos consolidados
    ------------------------------------------------------------
-      Substitui: módulos legados de auth, audit, rate-limit e plan.
-              _plan.js, _csrf-guard.js
-
-   ⚠️  NUNCA importar no cliente. Só serverless functions.
-
-   Dependências obrigatórias (produção):
-     - @neondatabase/serverless
-     - jsonwebtoken
-     - @upstash/redis (opcional, mas recomendado para rate limit)
-
-   Variáveis de ambiente esperadas:
-     - DATABASE_URL (Neon PostgreSQL)
-     - JWT_SECRET
-     - UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN  (opcional)
-       (ou KV_REST_API_URL / KV_REST_API_TOKEN para Vercel KV)
-     - ALLOWED_ORIGINS (CSV)
-     - NODE_ENV=production
-
-   Schemas de auditoria:
-     auth_audit_log → id, event, email_hash, user_id, ip, user_agent,
-                      success, reason, created_at
-     admin_audit    → id, actor, action, target, metadata, ip,
-                      user_agent, created_at
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. getPlanForUserDetailed() — distingue "free real" de "não
-      consegui confirmar" (falha de rede, erro 5xx, plano inválido).
-   2. getPlanForUser() mantida como wrapper simples (string),
-      retrocompatível com o código existente.
-   3. Cache KV só guarda planos confirmados (não cacheia fallback).
-   4. Migração Supabase → Neon: getAuthUser usa JWT próprio;
-      getPlanForUserDetailed consulta a view effective_plan no Neon.
+   CORREÇÕES APLICADAS NESTA VERSÃO:
+   - getAuthUser() valida se o usuário existe no banco
+   - checkOrigin() permite GET/HEAD sem Origin (health checks)
+   - checkAndIncrement() lê o índice correto do pipeline
    ============================================================ */
 
 'use strict';
@@ -206,6 +177,7 @@ function getRefreshToken(req) {
   return cookies[REFRESH_COOKIE] || '';
 }
 
+// ★ CORREÇÃO P0 #1: getAuthUser valida se o usuário existe no banco
 async function getAuthUser(req) {
   const accessToken = getAccessToken(req);
   if (!accessToken) return null;
@@ -217,7 +189,12 @@ async function getAuthUser(req) {
     const payload = jwt.verify(accessToken, secret);
     if (!payload || !payload.id) return null;
 
-    return { id: payload.id, email: payload.email, role: payload.role };
+    // Verificação leve no banco (sessão de usuário deletado/banido é inválida)
+    const { sql } = require('./_db');
+    const rows = await sql`SELECT id, role FROM users WHERE id = ${payload.id} LIMIT 1`;
+    if (!rows.length) return null;
+
+    return { id: payload.id, email: payload.email, role: rows[0].role };
   } catch (error) {
     console.error('[_lib] getAuthUser:', error.code || error.message);
     return null;
@@ -295,7 +272,9 @@ async function checkAndIncrement(
     pipeline.zcard(key);
     pipeline.expire(key, Math.ceil(windowMs / 1000));
 
-    const [, , count] = await pipeline.exec();
+    const results = await pipeline.exec();
+    // ★ CORREÇÃO P1 #4: zcard é o 3º item (índice 2)
+    const count = Number(results[2]);
 
     if (count > max) {
       const oldest = await redis.zrange(key, 0, 0, { withScores: true });
@@ -443,26 +422,9 @@ async function audit(event, options = {}) {
 
 // ═════════════════════════════════════════════════════════════
 // 7. PLANO EFETIVO — com cache KV
-// ------------------------------------------------------------
-// getPlanForUserDetailed()  → { plan, degraded, reason }
-// getPlanForUser()          → 'free' | 'premium' | 'anual'
-//
-// `degraded: true` significa que NÃO conseguimos confirmar o
-// plano (rede, 5xx, valor inválido). Nesse caso, `plan` cai em
-// 'free' por segurança, mas o caller pode avisar o usuário.
-//
-// Regras:
-//   - Cache KV só guarda planos CONFIRMADOS (não cacheia fallback)
-//   - Cache TTL: 60s
 // ═════════════════════════════════════════════════════════════
 const PLAN_CACHE_TTL_SEC = 60;
 
-/**
- * Versão detalhada — distingue free real de falha de lookup.
- *
- * @param {string} userId
- * @returns {Promise<{ plan: string, degraded: boolean, reason: string|null }>}
- */
 async function getPlanForUserDetailed(userId) {
   if (!userId) {
     return { plan: 'free', degraded: false, reason: 'no_user_id' };
@@ -471,17 +433,15 @@ async function getPlanForUserDetailed(userId) {
   const cacheKey = `plan:${userId}`;
   const redis = getRedis();
 
-  // 1) Cache
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
       if (cached && VALID_PLANS.has(cached)) {
         return { plan: cached, degraded: false, reason: 'cache_hit' };
       }
-    } catch { /* cache miss ou KV off */ }
+    } catch { /* cache miss */ }
   }
 
-  // 2) Banco (Neon)
   let plan = 'free';
   let degraded = false;
   let reason = null;
@@ -496,7 +456,6 @@ async function getPlanForUserDetailed(userId) {
     `;
 
     if (!Array.isArray(rows) || rows.length === 0) {
-      // Sem linha → usuário realmente free (não é degradação)
       plan = 'free';
       reason = 'no_row';
     } else {
@@ -515,7 +474,6 @@ async function getPlanForUserDetailed(userId) {
     console.warn('[_lib] getPlanForUserDetailed query falhou:', reason);
   }
 
-  // 3) Cacheia APENAS se foi confirmado com sucesso
   if (redis && !degraded) {
     try {
       await redis.set(cacheKey, plan, { ex: PLAN_CACHE_TTL_SEC });
@@ -525,16 +483,6 @@ async function getPlanForUserDetailed(userId) {
   return { plan, degraded, reason };
 }
 
-/**
- * Versão simples — retrocompatível.
- * Retorna 'free' | 'premium' | 'anual'.
- *
- * ⚠️  Em caso de falha de lookup, retorna 'free' (fail-secure).
- *     Se o caller precisar distinguir, use getPlanForUserDetailed().
- *
- * @param {string} userId
- * @returns {Promise<string>}
- */
 async function getPlanForUser(userId) {
   const result = await getPlanForUserDetailed(userId);
   return result.plan;
@@ -552,12 +500,17 @@ async function invalidatePlanCache(userId) {
 // ═════════════════════════════════════════════════════════════
 // 8. CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
+// ★ CORREÇÃO P1 #3: permite GET/HEAD sem Origin
 function checkOrigin(req) {
-  // Se a variável ALLOWED_ORIGINS não estiver configurada, 
-  // bloqueia tudo em produção por segurança.
+  const method = (req.method || 'GET').toUpperCase();
+  const isMutating = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+
+  // GET/HEAD/OPTIONS não precisam de verificação de origem
+  if (!isMutating) return true;
+
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
-    return false; 
+    return false;
   }
 
   const origin = String(req.headers.origin || req.headers.referer || '').trim();
@@ -565,9 +518,8 @@ function checkOrigin(req) {
 
   try {
     const url = new URL(origin);
-    // Compara a origem (protocolo + domínio) sem a barra final
     const originBase = url.origin;
-    
+
     for (const allowed of ALLOWED_ORIGINS) {
       if (originBase === allowed.replace(/\/+$/, '')) {
         return true;
@@ -615,12 +567,6 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
 // ═════════════════════════════════════════════════════════════
 // 10. SENHA — scrypt (nativo do Node)
-// ------------------------------------------------------------
-// Formato do hash armazenado:
-//   scrypt$<salt-em-hex>$<hash-em-hex>
-//
-// Gere com o script `gerar-hash-admin.js` na raiz do projeto:
-//   node gerar-hash-admin.js "sua-senha-forte"
 // ═════════════════════════════════════════════════════════════
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
