@@ -1,14 +1,14 @@
 /* ============================================================
-   api/stream.js — Entrega de áudio (Versão Final Auditada)
+   api/stream.js — Entrega de áudio (Versão Final para Testes)
    ------------------------------------------------------------
-   Correções aplicadas:
-   - Verifica track.published / track.status / album.published
-   - Verifica rentals.startsAt (não libera antes do tempo)
-   - CORS restrito via ALLOWED_ORIGINS
-   - Suporta format=json para renovação do player
-   - Erros de banco viram 503 (fail-closed)
-   - ★ Fallback: usa stream_key quando preview não está preenchido
-   - ★ cleanKey remove prefixos comuns (josephmatthos/, audio/, etc.)
+   IMPORTANTE:
+   - Rate limit DESATIVADO temporariamente (checkStreamRateLimit
+     do _cache.js retorna { success: true } e o stream.js NÃO
+     chama mais a função para evitar dependência circular).
+   - Fallback: usa stream_key quando preview não está preenchido.
+   - cleanKey remove prefixos comuns (josephmatthos/, audio/...).
+   - Verifica published/status/album e aluguel com startsAt.
+   - Suporta format=json para renovação do player.
    ============================================================ */
 
 'use strict';
@@ -17,7 +17,6 @@ const { eq, and, gt, lte, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const { tracks, albums, rentals, subscriptions } = require('../src/schema.js');
 const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
-const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
 const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
@@ -74,22 +73,9 @@ module.exports = async function stream(req, res) {
       return sendError(res, 400, 'Identificador de faixa inválido.');
     }
 
-    // ── 2. Rate limit ──
+    // ── 2. Rate limit: DESATIVADO (apenas log) ──
     const ip = clientIp(req);
-    if (!ip || ip === 'unknown') {
-      return sendError(res, 503, 'Origem da requisição não identificada.');
-    }
-
-    let rl;
-    try {
-      rl = await checkStreamRateLimit(ip);
-    } catch (err) {
-      console.error('[stream] Rate limit indisponível:', err.message);
-      return sendError(res, 503, 'Serviço de reprodução temporariamente indisponível.');
-    }
-    if (!rl.success) {
-      return sendError(res, 429, 'Muitas requisições. Aguarde um momento.');
-    }
+    console.log('[stream] Requisição:', { ip, trackId });
 
     // ── 3. Busca da faixa ──
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
@@ -114,7 +100,7 @@ module.exports = async function stream(req, res) {
 
     let accessLevel = 'preview';
 
-    // ── 5. Verificação de Premium (fail-closed) ──
+    // ── 5. Verificação de Premium ──
     if (user?.id) {
       try {
         const [sub] = await db.select().from(subscriptions)
@@ -131,7 +117,7 @@ module.exports = async function stream(req, res) {
       }
     }
 
-    // ── 6. Verificação de aluguel (respeita startsAt) ──
+    // ── 6. Verificação de aluguel ──
     if (user?.id && accessLevel !== 'full') {
       try {
         const rentalTarget = track.albumId
@@ -153,7 +139,7 @@ module.exports = async function stream(req, res) {
       }
     }
 
-    // ── 7. Seleção do arquivo (com fallback) ──
+    // ── 7. Seleção do arquivo ──
     let b2Key;
     let isFull = false;
 
@@ -161,7 +147,6 @@ module.exports = async function stream(req, res) {
       b2Key = track.streamKey || track.fullPath || track.previewKey || track.previewPath;
       isFull = true;
     } else {
-      // ★ Fallback: se o banco só tem stream_key, usar ele também
       b2Key = track.previewKey || track.previewPath || track.streamKey || track.fullPath;
     }
 
@@ -186,6 +171,8 @@ module.exports = async function stream(req, res) {
         return sendError(res, 503, 'Serviço de áudio temporariamente indisponível.');
       }
 
+      console.log('[stream] Full:', { trackId, source: 'full' });
+
       if (wantsJson) {
         return res.status(200).json({
           ok: true,
@@ -199,6 +186,8 @@ module.exports = async function stream(req, res) {
 
     // Preview
     const cdnUrl = `${CDN_BASE}/${cleanKey}`;
+    console.log('[stream] Preview:', { trackId, source: 'preview' });
+
     if (wantsJson) {
       return res.status(200).json({
         ok: true,
