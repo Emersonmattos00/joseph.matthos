@@ -140,6 +140,11 @@ async function handleLogin(req, res) {
   const body = parseBody(req);
   const user = String(body.user || '').trim();
   const pass = String(body.pass || '');
+
+  if (!user || !pass || user.length > 150 || pass.length > 1024) {
+    return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
+  }
+
   const expectedUser = String(process.env.ADMIN_USER || '').trim();
   const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
 
@@ -182,17 +187,42 @@ async function handleGetContent(req, res) {
 async function handlePutContent(req, res, session) {
   const body = parseBody(req);
   const data = body.data;
-  if (!data || typeof data !== 'object') return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
-  
-  const [currentRow] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
-  const currentVersion = currentRow?.version || 0;
+  const baseVersion = Number(body.baseVersion);
+
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !Number.isInteger(baseVersion) || baseVersion < 0) {
+    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  }
+
+  const [current] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
+  const currentVersion = current?.version ?? 0;
+
+  if (currentVersion !== baseVersion) {
+    return sendJson(res, 409, { ok: false, error: 'O conteúdo foi alterado por outra sessão. Atualize a página antes de salvar.', currentVersion });
+  }
+
   const newVersion = currentVersion + 1;
+  const now = new Date().toISOString();
 
-  await db.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: newVersion, updatedAt: new Date().toISOString() })
-    .onConflictDoUpdate({ target: schema.siteContent.key, set: { data, version: newVersion, updatedAt: new Date().toISOString() } });
+  try {
+    if (current) {
+      const updated = await db.update(schema.siteContent)
+        .set({ data, version: newVersion, updatedAt: now })
+        .where(and(eq(schema.siteContent.key, CONTENT_KEY), eq(schema.siteContent.version, baseVersion)))
+        .returning();
 
-  await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
-  return sendJson(res, 200, { ok: true, version: newVersion });
+      if (!updated.length) {
+        return sendJson(res, 409, { ok: false, error: 'Conflito de atualização.' });
+      }
+    } else {
+      await db.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: newVersion, updatedAt: now });
+    }
+
+    await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
+    return sendJson(res, 200, { ok: true, version: newVersion });
+  } catch (err) {
+    console.error('[admin/content]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível salvar o conteúdo.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -233,32 +263,51 @@ async function handleUploadSign(req, res, session) {
 
 async function handleUploadConfirm(req, res, session) {
   const body = parseBody(req);
+
   const kind = String(body.kind || '').trim();
   const path = String(body.path || '').trim();
   const albumId = body.albumId ? String(body.albumId).trim() : null;
-  const trackIndex = Number(body.trackIndex);
+  const trackIndex = (body.trackIndex === undefined || body.trackIndex === null || body.trackIndex === '')
+    ? null
+    : Number(body.trackIndex);
 
   const bucket = BUCKET_BY_KIND[kind];
-  if (!bucket || !path) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  const exists = await b2ObjectExists(bucket, path);
-  if (!exists) return sendJson(res, 400, { ok: false, error: 'Arquivo não encontrado no Storage.' });
+  if (!bucket || !path) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
-  if (albumId && trackIndex !== null) {
-    const isFull = kind === 'audio-full';
-    const patch = isFull
-      ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
-      : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
-
-    const updated = await db.update(tracks).set(patch).where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex))).returning();
-    if (!updated.length) return sendJson(res, 502, { ok: false, error: 'Faixa não encontrada.' });
-
-    const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-    return sendJson(res, 200, { ok: true, url: publicUrl, path, bucket, track: updated[0] });
+  if (albumId && (!isUuid(albumId) || trackIndex === null || !Number.isInteger(trackIndex) || trackIndex < 1)) {
+    return sendJson(res, 400, { ok: false, error: 'Álbum ou número da faixa inválido.' });
   }
 
-  const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-  return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
+  try {
+    const exists = await b2ObjectExists(bucket, path);
+    if (!exists) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no armazenamento.' });
+
+    if (albumId && trackIndex !== null) {
+      const isFull = kind === 'audio-full';
+      const patch = isFull
+        ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
+        : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
+
+      const updated = await db.update(tracks).set(patch)
+        .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
+        .returning();
+
+      if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+      await audit('upload.track.confirm', { actor: session.user, target: updated[0].id, metadata: { kind, bucket, path } });
+
+      const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(bucket, path);
+      return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl, track: updated[0] });
+    }
+
+    const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(bucket, path);
+    await audit('upload.confirm', { actor: session.user, metadata: { kind, bucket, path } });
+    return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
+  } catch (err) {
+    console.error('[admin/upload-confirm]', err.code || err.message);
+    return sendJson(res, 502, { ok: false, error: 'Não foi possível confirmar o arquivo.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -267,7 +316,6 @@ async function handleUploadConfirm(req, res, session) {
 async function handleGetUsers(req, res) {
   const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
   
-  // Tentativa de ler a view effective_plan, mas à prova de falhas
   let planRows = [];
   try {
     planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
@@ -306,9 +354,13 @@ async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!userId || userId === session.user) return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
 
+  const [hasOrders] = await db.select({ count: sql`COUNT(*)` }).from(orders).where(eq(orders.userId, userId));
+  if (Number(hasOrders?.count) > 0) {
+    return sendJson(res, 409, { ok: false, error: 'Não é possível excluir um usuário com histórico financeiro. Desative a conta em vez disso.' });
+  }
+
   await audit('user.delete', { actor: session.user, target: userId });
   const deleted = await db.delete(schema.users).where(eq(schema.users.id, userId)).returning();
-  
   return deleted.length ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
 }
 
@@ -327,11 +379,44 @@ async function handleGetAlbum(req, res) {
 
 async function handleCreateAlbum(req, res, session) {
   const body = parseBody(req);
-  const [artist] = await db.select({ id: artists.id }).from(artists).limit(1);
-  const [created] = await db.insert(albums).values({
-    id: crypto.randomUUID(), title: body.title, slug: createSlug(body.title), artistId: artist.id, published: !!body.published
-  }).returning();
-  return sendJson(res, 200, { ok: true, album: created });
+  const title = String(body.title || '').trim();
+  const artistId = String(body.artistId || '').trim();
+
+  if (title.length < 1 || title.length > 200) {
+    return sendJson(res, 400, { ok: false, error: 'Título do álbum inválido.' });
+  }
+
+  if (!isUuid(artistId)) {
+    return sendJson(res, 400, { ok: false, error: 'Artista inválido.' });
+  }
+
+  const [artist] = await db.select({ id: artists.id }).from(artists).where(eq(artists.id, artistId)).limit(1);
+  if (!artist) return sendJson(res, 404, { ok: false, error: 'Artista não encontrado.' });
+
+  const slug = createSlug(title);
+  if (!slug) return sendJson(res, 400, { ok: false, error: 'Não foi possível gerar o identificador do álbum.' });
+
+  try {
+    const [created] = await db.insert(albums).values({
+      id: crypto.randomUUID(),
+      title,
+      slug,
+      artistId,
+      published: body.published === true,
+      coverUrl: body.coverUrl || null,
+      description: body.description || null,
+      year: Number.isInteger(Number(body.year)) ? Number(body.year) : null,
+      type: body.type || 'album',
+      sortOrder: Number.isInteger(Number(body.sortOrder)) ? Number(body.sortOrder) : 0
+    }).returning();
+
+    await audit('album.create', { actor: session.user, target: created.id });
+    return sendJson(res, 201, { ok: true, album: created });
+  } catch (err) {
+    if (err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Já existe um álbum com esse identificador.' });
+    console.error('[admin/album-create]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível criar o álbum.' });
+  }
 }
 
 async function handleUpdateAlbum(req, res, session) {
@@ -353,24 +438,53 @@ async function handleListTracks(req, res) {
 
 async function handleCreateTrack(req, res, session) {
   const body = parseBody(req);
-  const [album] = await db.select({ artistId: albums.artistId }).from(albums).where(eq(albums.id, body.album_id)).limit(1);
-  const [created] = await db.insert(tracks).values({
-    id: crypto.randomUUID(), albumId: body.album_id, artistId: album.artistId, title: body.title, slug: createSlug(body.title),
-    trackNumber: 1, status: 'DRAFT'
-  }).returning();
-  return sendJson(res, 200, { ok: true, track: created });
+  const albumId = String(body.album_id || '').trim();
+  const title = String(body.title || '').trim();
+
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
+  if (!title || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Título da faixa inválido.' });
+
+  const [album] = await db.select({ id: albums.id, artistId: albums.artistId }).from(albums).where(eq(albums.id, albumId)).limit(1);
+  if (!album) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+
+  const [lastTrack] = await db.select({ maxNumber: sql`MAX(${tracks.trackNumber})` }).from(tracks).where(eq(tracks.albumId, albumId));
+  const nextNumber = Number(lastTrack?.maxNumber || 0) + 1;
+
+  try {
+    const [created] = await db.insert(tracks).values({
+      id: crypto.randomUUID(),
+      albumId,
+      artistId: album.artistId,
+      title,
+      slug: createSlug(title),
+      trackNumber: nextNumber,
+      status: 'DRAFT',
+      lyrics: []
+    }).returning();
+
+    await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, trackNumber: nextNumber } });
+    return sendJson(res, 201, { ok: true, track: created });
+  } catch (err) {
+    console.error('[admin/track-create]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível cadastrar a faixa.' });
+  }
 }
 
 async function handleUpdateTrack(req, res, session) {
   const body = parseBody(req);
+  const trackId = String(req.query.id || body.id || '').trim();
+  if (!trackId) return sendJson(res, 400, { ok: false, error: 'ID obrigatório.' });
+
   const patch = {};
   if (body.title) patch.title = body.title;
   if (body.published !== undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
   if (body.full_path) { patch.fullPath = body.full_path; patch.streamKey = body.full_path; }
   if (body.preview_path) { patch.previewPath = body.preview_path; patch.previewKey = body.preview_path; }
 
-  const [updated] = await db.update(tracks).set(patch).where(eq(tracks.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, track: updated });
+  const [updated] = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
+  return updated
+    ? sendJson(res, 200, { ok: true, track: updated })
+    : sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 }
 
 async function handleDeleteTrack(req, res, session) {
@@ -412,18 +526,16 @@ async function handleDownloadAlbum(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// VENDAS E AUDITORIA (Funções que estavam faltando)
+// VENDAS E AUDITORIA
 // ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   try {
     const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
-    const sales = rows.map(o => ({
-      id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId
-    }));
+    const sales = rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId }));
     return sendJson(res, 200, { ok: true, sales });
   } catch (err) {
-    console.error('[admin] erro ao buscar vendas:', err);
-    return sendJson(res, 200, { ok: true, sales: [] }); 
+    console.error('[admin/sales]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível consultar as vendas.' });
   }
 }
 
@@ -432,7 +544,8 @@ async function handleGetAudit(req, res) {
     const rows = await db.select().from(adminAudit).orderBy(desc(adminAudit.createdAt)).limit(100);
     return sendJson(res, 200, { ok: true, audit: rows });
   } catch (err) {
-    return sendJson(res, 200, { ok: true, audit: [] });
+    console.error('[admin/audit]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível consultar a auditoria.' });
   }
 }
 
