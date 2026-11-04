@@ -351,9 +351,9 @@ body.immersive-mode .player-footer-actions {
   background-image: 
     linear-gradient(
       180deg,
-      rgba(11, 10, 12, 0.705) 10%,
-      rgba(11, 10, 12, 0.842) 50%,
-      rgba(11, 10, 12, 0.952) 100%
+      rgba(11,10,12,0.55) 10%,
+      rgba(11,10,12,0.75) 50%,
+      rgba(11,10,12,0.92) 100%
     ),
     var(--player-bg);
   background-size: cover;
