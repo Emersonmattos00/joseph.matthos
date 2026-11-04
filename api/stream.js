@@ -11,11 +11,9 @@ const { getAuthUser } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
-// ★ CDN fallback para previews gratuitas
 const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
 
 module.exports = async (req, res) => {
-  // CORS restrito
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
@@ -24,10 +22,19 @@ module.exports = async (req, res) => {
 
   try {
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
-    
-    // Rate limit com fail-closed (se Redis cair em prod, nega)
-    const rl = await checkStreamRateLimit(ip);
-    if (!rl.success) return res.status(429).json({ error: 'Muitas requisições' });
+
+    // ★ CORREÇÃO: diferencia 503 (Redis caiu) de 429 (excesso)
+    let rl;
+    try {
+      rl = await checkStreamRateLimit(ip);
+    } catch (err) {
+      console.error('[stream] Rate limit indisponível:', err.message);
+      return res.status(503).json({ error: 'Serviço de reprodução temporariamente indisponível.' });
+    }
+
+    if (!rl.success) {
+      return res.status(429).json({ error: 'Muitas requisições. Aguarde um momento.' });
+    }
 
     const { trackId } = req.query;
     if (!trackId) return res.status(400).json({ error: 'trackId obrigatório' });
@@ -42,8 +49,7 @@ module.exports = async (req, res) => {
 
     if (user) {
       const now = new Date().toISOString();
-      
-      // 1. Checa Assinatura Premium
+
       try {
         const [sub] = await db.select().from(subscriptions)
           .where(and(
@@ -56,7 +62,6 @@ module.exports = async (req, res) => {
         console.error('[stream] Erro ao checar assinatura:', e);
       }
 
-      // 2. Checa Aluguel (se não for Premium)
       if (accessLevel !== 'full') {
         try {
           const rentalCond = or(
@@ -77,16 +82,15 @@ module.exports = async (req, res) => {
       }
     }
 
-    // LÓGICA DE SEGURANÇA: Decide qual arquivo entregar
     let b2Key;
     if (accessLevel === 'full') {
       b2Key = track.streamKey || track.fullPath;
     } else {
       b2Key = track.previewKey;
       if (!b2Key) {
-        return res.status(403).json({ 
-          error: 'Prévia indisponível', 
-          message: 'Alugue ou assine para ouvir o áudio completo.' 
+        return res.status(403).json({
+          error: 'Prévia indisponível',
+          message: 'Alugue ou assine para ouvir o áudio completo.'
         });
       }
     }
@@ -95,12 +99,10 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
     }
 
-    // ★ CORREÇÃO P2: Padronização robusta do caminho
     const cleanKey = String(b2Key)
-      .replace(/^\/+/, '') // remove barras iniciais
-      .replace(/^(josephmatthos|audio|music|tracks)\//i, ''); // remove prefixos comuns do bucket
+      .replace(/^\/+/, '')
+      .replace(/^(josephmatthos|audio|music|tracks)\//i, '');
 
-    // ★ CORREÇÃO DE SEGURANÇA: URL assinada para áudio completo
     if (accessLevel === 'full') {
       try {
         const signedUrl = await getPlaybackUrl(cleanKey, true);
@@ -108,12 +110,10 @@ module.exports = async (req, res) => {
         return res.redirect(302, signedUrl);
       } catch (err) {
         console.error('[stream] Falha ao gerar URL assinada:', err.message);
-        // Fail-closed: se o B2 falhar, NÃO entrega o áudio completo.
         return res.status(503).json({ error: 'Serviço de áudio temporariamente indisponível.' });
       }
     }
 
-    // Preview: CDN público é aceitável (arquivo de 30s)
     const cdnUrl = `${CDN_BASE}/${cleanKey}`;
     res.setHeader('Cache-Control', 'no-store');
     return res.redirect(302, cdnUrl);
