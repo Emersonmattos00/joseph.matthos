@@ -353,7 +353,7 @@ body.immersive-mode .player-footer-actions {
   background-size: cover;
   background-position: center;
   /* Marca d'água sutil */
-  opacity: 0.15;
+  opacity: 0.9;
   z-index: 0;
   filter: blur(4px);
   pointer-events: none;
