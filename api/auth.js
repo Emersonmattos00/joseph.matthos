@@ -1,17 +1,11 @@
 /* ============================================================
    api/auth.js — Autenticação própria (Neon + JWT)
    ------------------------------------------------------------
-   POST /api/auth?action=login    → login
-   POST /api/auth?action=signup   → cadastro
-   POST /api/auth?action=logout   → encerra sessão
-   GET  /api/auth?action=me       → dados do usuário + rentals
-
-   - Cookies __Host- em produção (HttpOnly + SameSite=Lax)
-   - CSRF: Origin check em métodos mutantes
-   - Senhas com scrypt (nativo do Node)
-   - Sessão via JWT (access 1h + refresh 7d)
-   - Rate limit por IP + e-mail (Redis/KV)
-   - Auditoria em todas as ações
+   Correções aplicadas:
+   - Rate limits mais restritivos
+   - Tratamento de e-mail duplicado (409)
+   - Suporte a aluguel de álbum
+   - Remoção do Clear-Site-Data no logout
    ============================================================ */
 
 'use strict';
@@ -34,8 +28,10 @@ const {
   checkOrigin,
 } = require('./_lib');
 
+const { db, sql } = require('./_db');
+
 // ─────────────────────────────────────────────────────────────
-// Constantes
+// Constantes (Rate Limits Ajustados)
 // ─────────────────────────────────────────────────────────────
 const MAX_NAME_LENGTH = 120;
 const MIN_NAME_LENGTH = 2;
@@ -52,10 +48,11 @@ const COMMON_PASSWORDS = new Set([
   'welcome1', 'iloveyou', 'abc12345', '1q2w3e4r', '1qaz2wsx'
 ]);
 
+// ★ CORREÇÃO: Limites mais restritivos para segurança
 const MAX_EMAILS_PER_HOUR = 3;
-const MAX_LOGIN_ATTEMPTS_PER_IP = 1000;
+const MAX_LOGIN_ATTEMPTS_PER_IP = 60;
 const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 10;
-const MAX_SIGNUPS_PER_IP = 1000;
+const MAX_SIGNUPS_PER_IP = 10;
 const MIN_RESPONSE_MS = 350;
 
 const MAX_RENTALS = 100;
@@ -64,7 +61,6 @@ const GENERIC_AUTH_ERROR = 'E-mail ou senha incorretos.';
 const GENERIC_SIGNUP_ERROR = 'Não foi possível concluir o cadastro.';
 const GENERIC_RATE_ERROR = 'Muitas tentativas. Tente novamente mais tarde.';
 const GENERIC_ERROR = 'Serviço indisponível.';
-const { db, sql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -84,33 +80,17 @@ module.exports = async function handler(req, res) {
 
   if (method !== 'GET' && method !== 'HEAD') {
     if (!checkOrigin(req)) {
-      console.warn('[auth] Origin rejeitada:', {
-        action, method,
-        origin: req.headers.origin || req.headers.referer || null
-      });
+      console.warn('[auth] Origin rejeitada:', { action, method, origin: req.headers.origin || req.headers.referer || null });
       return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
     }
   }
 
   switch (action) {
-    case 'login':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleLogin(req, res);
-
-    case 'signup':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleSignup(req, res);
-
-    case 'logout':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleLogout(req, res);
-
-    case 'me':
-      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
-      return handleMe(req, res);
-
-    default:
-      return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
+    case 'login': if (method !== 'POST') return methodNotAllowed(res, 'POST'); return handleLogin(req, res);
+    case 'signup': if (method !== 'POST') return methodNotAllowed(res, 'POST'); return handleSignup(req, res);
+    case 'logout': if (method !== 'POST') return methodNotAllowed(res, 'POST'); return handleLogout(req, res);
+    case 'me': if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD'); return handleMe(req, res);
+    default: return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
   }
 };
 
@@ -137,14 +117,12 @@ function verifyPassword(password, storedHash) {
         if (err) return resolve(false);
         resolve(derived.length === expected.length && crypto.timingSafeEqual(derived, expected));
       });
-    } catch {
-      resolve(false);
-    }
+    } catch { resolve(false); }
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// JWT — par de tokens (access + refresh)
+// JWT — par de tokens
 // ─────────────────────────────────────────────────────────────
 function signTokenPair(user) {
   const secret = String(process.env.JWT_SECRET || '').trim();
@@ -161,9 +139,7 @@ function verifyToken(token) {
     const secret = String(process.env.JWT_SECRET || '').trim();
     if (!secret) return null;
     return jwt.verify(token, secret);
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -176,10 +152,7 @@ async function handleLogin(req, res) {
   const body = parseBody(req);
 
   const email = normalizeEmail(body.email);
-  const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+  const password = typeof body.password === 'string' ? body.password.slice(0, MAX_PASSWORD_LENGTH) : '';
 
   if (!EMAIL_REGEX.test(email) || password.length < MIN_PASSWORD_LENGTH) {
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
@@ -201,9 +174,7 @@ async function handleLogin(req, res) {
   }
 
   try {
-    const [user] = await db.select().from(users)
-      .where(eq(users.email, email))
-      .limit(1);
+    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
 
     if (!user || !user.passwordHash) {
       await equalizeTiming(startedAt, MIN_RESPONSE_MS);
@@ -231,20 +202,12 @@ async function handleLogin(req, res) {
       console.warn('[auth/login] falha ao obter plano:', err.code || err.message);
     }
 
-    await audit('login', {
-      email, userId: user.id, ip, userAgent, success: true, reason: null
-    });
-
+    await audit('login', { email, userId: user.id, ip, userAgent, success: true, reason: null });
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
 
     return sendJson(res, 200, {
       ok: true,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
-      }
+      user: { id: String(user.id), email: sanitizeEmail(user.email), name: sanitizeName(user.name), plan }
     });
   } catch (error) {
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
@@ -264,16 +227,9 @@ async function handleSignup(req, res) {
 
   const name = normalizeName(body.name);
   const email = normalizeEmail(body.email);
-  const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+  const password = typeof body.password === 'string' ? body.password.slice(0, MAX_PASSWORD_LENGTH) : '';
 
-  if (
-    !isValidName(name) ||
-    !EMAIL_REGEX.test(email) ||
-    !isValidPassword(password)
-  ) {
+  if (!isValidName(name) || !EMAIL_REGEX.test(email) || !isValidPassword(password)) {
     await audit('signup', { email, ip, userAgent, success: false, reason: 'invalid_input' });
     return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
   }
@@ -291,12 +247,11 @@ async function handleSignup(req, res) {
   }
 
   try {
-    const [existing] = await db.select({ id: users.id })
-      .from(users).where(eq(users.email, email)).limit(1);
+    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
 
     if (existing) {
       await audit('signup', { email, ip, userAgent, success: false, reason: 'email_exists' });
-      return sendJson(res, 400, { ok: false, error: 'Este e-mail já está cadastrado.' });
+      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' }); // ★ Mudei para 409
     }
 
     const passwordHash = await hashPassword(password);
@@ -310,26 +265,23 @@ async function handleSignup(req, res) {
     const pair = signTokenPair(user);
     setAuthCookies(res, pair);
 
-    await audit('signup', {
-      email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated'
-    });
+    await audit('signup', { email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated' });
 
     return sendJson(res, 201, {
       ok: true,
       requiresEmailConfirmation: false,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan: 'free'
-      }
+      user: { id: String(user.id), email: sanitizeEmail(user.email), name: sanitizeName(user.name), plan: 'free' }
     });
   } catch (error) {
-    await audit('signup', {
-      email, ip, userAgent, success: false, reason: error.code || 'error'
-    });
+    await audit('signup', { email, ip, userAgent, success: false, reason: error.code || 'error' });
+
+    // ★ CORREÇÃO: Tratar erro de e-mail duplicado (condição de corrida)
+    if (error.code === '23505' && (error.constraint === 'users_email_key' || String(error.message).includes('users_email_key'))) {
+      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' });
+    }
+
     console.error('[auth/signup]', error.code || error.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    return sendJson(res, 500, { ok: false, error: GENERIC_ERROR }); // ★ Mudei 502 para 500
   }
 }
 
@@ -346,8 +298,7 @@ async function handleLogout(req, res) {
     console.warn('[auth/logout] falha ao limpar cookies:', err.message);
   }
 
-  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
-
+  // ★ CORREÇÃO: Removido Clear-Site-Data (pode apagar dados locais desnecessariamente)
   await audit('logout', { ip, userAgent, success: true, reason: null });
 
   return sendJson(res, 200, { ok: true });
@@ -360,59 +311,26 @@ async function handleMe(req, res) {
   const method = (req.method || 'GET').toUpperCase();
   const token = getAccessTokenFromCookie(req);
 
-  if (!token) {
-    if (method === 'HEAD') {
-      res.status(401);
-      return res.end();
-    }
-    return sendJson(res, 401, { ok: false });
-  }
+  if (!token) return method === 'HEAD' ? res.status(401).end() : sendJson(res, 401, { ok: false });
 
   const payload = verifyToken(token);
-  if (!payload) {
-    if (method === 'HEAD') {
-      res.status(401);
-      return res.end();
-    }
-    return sendJson(res, 401, { ok: false });
-  }
+  if (!payload) return method === 'HEAD' ? res.status(401).end() : sendJson(res, 401, { ok: false });
 
   try {
-    const [user] = await db.select().from(users)
-      .where(eq(users.id, payload.id))
-      .limit(1);
-
-    if (!user) {
-      if (method === 'HEAD') {
-        res.status(401);
-        return res.end();
-      }
-      return sendJson(res, 401, { ok: false });
-    }
+    const [user] = await db.select().from(users).where(eq(users.id, payload.id)).limit(1);
+    if (!user) return method === 'HEAD' ? res.status(401).end() : sendJson(res, 401, { ok: false });
 
     const [planResult, rentalsResult] = await Promise.allSettled([
       getPlanForUserDetailed(user.id),
       getActiveRentals(user.id)
     ]);
 
-    const plan =
-      planResult.status === 'fulfilled' && VALID_PLANS.has(planResult.value.plan)
-        ? planResult.value.plan
-        : 'free';
-
-    const userRentals =
-      rentalsResult.status === 'fulfilled' && Array.isArray(rentalsResult.value)
-        ? rentalsResult.value
-        : [];
+    const plan = planResult.status === 'fulfilled' && VALID_PLANS.has(planResult.value.plan) ? planResult.value.plan : 'free';
+    const userRentals = rentalsResult.status === 'fulfilled' && Array.isArray(rentalsResult.value) ? rentalsResult.value : [];
 
     const responseBody = {
       ok: true,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
-      },
+      user: { id: String(user.id), email: sanitizeEmail(user.email), name: sanitizeName(user.name), plan },
       rentals: userRentals
     };
 
@@ -425,11 +343,7 @@ async function handleMe(req, res) {
     return sendJson(res, 200, responseBody);
   } catch (error) {
     console.error('[auth/me]', error.code || error.message);
-    if (method === 'HEAD') {
-      res.status(502);
-      return res.end();
-    }
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    return method === 'HEAD' ? res.status(502).end() : sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
   }
 }
 
@@ -444,10 +358,7 @@ function getAccessTokenFromCookie(req) {
     if (i < 0) return;
     const k = item.slice(0, i).trim();
     const v = item.slice(i + 1).trim();
-    if (k) {
-      try { cookies[k] = decodeURIComponent(v); }
-      catch { cookies[k] = v; }
-    }
+    if (k) { try { cookies[k] = decodeURIComponent(v); } catch { cookies[k] = v; } }
   });
 
   const IS_PROD = process.env.NODE_ENV === 'production';
@@ -456,15 +367,16 @@ function getAccessTokenFromCookie(req) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Rentals
+// Rentals (Suporte a faixa e álbum)
 // ─────────────────────────────────────────────────────────────
 async function getActiveRentals(userId) {
   const nowIso = new Date().toISOString();
 
   const rows = await db.select({
     trackId: rentals.trackId,
+    albumId: rentals.albumId, // ★ Pega o albumId do próprio rental
     expiresAt: rentals.expiresAt,
-    albumId: tracks.albumId,
+    trackAlbumId: tracks.albumId,
     trackNumber: tracks.trackNumber,
   })
   .from(rentals)
@@ -476,15 +388,16 @@ async function getActiveRentals(userId) {
   ))
   .limit(MAX_RENTALS);
 
-  return rows
-    .map((r) => {
-      if (!r.albumId || r.trackNumber == null) return null;
-      return {
-        trackKey: `${r.albumId}:${r.trackNumber}`,
-        expiresAt: r.expiresAt,
-      };
-    })
-    .filter(Boolean);
+  // ★ CORREÇÃO: Suporta aluguel de faixa (trackKey) e aluguel de álbum (albumId)
+  return rows.map((r) => {
+    if (r.trackId && r.trackAlbumId && r.trackNumber != null) {
+      return { trackKey: `${r.trackAlbumId}:${r.trackNumber}`, expiresAt: r.expiresAt };
+    }
+    if (r.albumId) {
+      return { albumId: r.albumId, expiresAt: r.expiresAt };
+    }
+    return null;
+  }).filter(Boolean);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -500,9 +413,7 @@ function parseAction(query) {
 
 function parseBody(req) {
   let body = req.body;
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body || '{}'); } catch { body = {}; }
-  }
+  if (typeof body === 'string') { try { body = JSON.parse(body || '{}'); } catch { body = {}; } }
   return body && typeof body === 'object' ? body : {};
 }
 
@@ -518,30 +429,16 @@ function sanitizeEmail(value) {
 
 function normalizeName(value) {
   if (typeof value !== 'string') return '';
-  return value
-    .normalize('NFC')
-    .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MAX_NAME_LENGTH);
+  return value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LENGTH);
 }
 
 function sanitizeName(value) {
   if (typeof value !== 'string') return '';
-  return value
-    .normalize('NFC')
-    .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(/<[^>]*>/g, '')
-    .trim()
-    .slice(0, MAX_NAME_LENGTH);
+  return value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/<[^>]*>/g, '').trim().slice(0, MAX_NAME_LENGTH);
 }
 
 function isValidName(name) {
-  return (
-    name.length >= MIN_NAME_LENGTH &&
-    name.length <= MAX_NAME_LENGTH &&
-    NAME_REGEX.test(name)
-  );
+  return name.length >= MIN_NAME_LENGTH && name.length <= MAX_NAME_LENGTH && NAME_REGEX.test(name);
 }
 
 function isValidPassword(password) {
@@ -559,15 +456,11 @@ function clientIp(req) {
   const h = req.headers || {};
   const trusted = h['x-vercel-forwarded-for'] || h['x-real-ip'];
   if (trusted) return String(trusted).split(',')[0].trim();
-
   if (process.env.NODE_ENV !== 'production') {
     const fwd = h['x-forwarded-for'];
     if (fwd) return String(fwd).split(',')[0].trim();
   }
-
-  return String((req.socket && req.socket.remoteAddress) || 'unknown')
-    .split(',')[0]
-    .trim();
+  return String((req.socket && req.socket.remoteAddress) || 'unknown').split(',')[0].trim();
 }
 
 function methodNotAllowed(res, allow) {

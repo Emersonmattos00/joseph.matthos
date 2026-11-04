@@ -102,19 +102,32 @@ function verifyWebhookSignature(req) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// HELPERS DE PEDIDO
+// HELPERS DE PEDIDO (Idempotente)
 // ─────────────────────────────────────────────────────────────
 async function createPendingOrder({ userId, totalCents, currency, idempotencyKey }) {
+  if (!userId || !idempotencyKey) throw new Error('Dados do pedido incompletos.');
+  if (!Number.isInteger(totalCents) || totalCents <= 0) throw new Error('Valor do pedido inválido.');
+
+  const [existing] = await db.select().from(orders).where(eq(orders.idempotencyKey, idempotencyKey)).limit(1);
+  if (existing) {
+    if (existing.userId !== userId) throw new Error('Chave de pedido inválida.');
+    if (existing.status !== 'PENDING') throw new Error('Este pedido já foi processado.');
+    return existing;
+  }
+
   const id = randomUUID();
-  const [row] = await db.insert(orders).values({
-    id,
-    userId,
-    status: 'PENDING',
-    totalCents,
-    currency,
-    idempotencyKey: idempotencyKey || null,
-  }).returning();
-  return row;
+  try {
+    const [row] = await db.insert(orders).values({
+      id, userId, status: 'PENDING', totalCents, currency, idempotencyKey
+    }).returning();
+    return row;
+  } catch (error) {
+    if (error.code === '23505') {
+      const [existingOrder] = await db.select().from(orders).where(eq(orders.idempotencyKey, idempotencyKey)).limit(1);
+      if (existingOrder && existingOrder.userId === userId) return existingOrder;
+    }
+    throw error;
+  }
 }
 
 async function markOrderPaid(orderId, externalPaymentId) {
@@ -136,9 +149,7 @@ async function handleRental(req, res, user) {
   if (!planId) return res.status(400).json({ ok: false, error: 'planId obrigatório' });
 
   const [plan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
-  if (!plan || !plan.active) {
-    return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
-  }
+  if (!plan || !plan.active) return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
 
   let trackId = null;
   if (albumId && trackIndex != null) {
@@ -155,12 +166,7 @@ async function handleRental(req, res, user) {
     ))
     .limit(1);
 
-  if (!product) {
-    return res.status(404).json({
-      ok: false,
-      error: 'Produto de aluguel não encontrado para este item',
-    });
-  }
+  if (!product) return res.status(404).json({ ok: false, error: 'Produto de aluguel não encontrado para este item' });
 
   const now = new Date();
   const conds = [
@@ -172,11 +178,7 @@ async function handleRental(req, res, user) {
   if (product.albumId) conds.push(eq(rentals.albumId, product.albumId));
   const [existing] = await db.select().from(rentals).where(and(...conds)).limit(1);
   if (existing) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Você já tem um aluguel ativo deste item',
-      expiresAt: existing.expiresAt,
-    });
+    return res.status(409).json({ ok: false, error: 'Você já tem um aluguel ativo deste item', expiresAt: existing.expiresAt });
   }
 
   const order = await createPendingOrder({
@@ -196,9 +198,7 @@ async function handleRental(req, res, user) {
   });
 
   const base = APP_URL();
-  if (!base) {
-    return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
-  }
+  if (!base) return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
 
   let preference;
   try {
@@ -255,19 +255,13 @@ async function handleSubscription(req, res, user) {
   if (!planId) return res.status(400).json({ ok: false, error: 'plan obrigatório' });
 
   const [plan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
-  if (!plan || !plan.active) {
-    return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
-  }
+  if (!plan || !plan.active) return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
 
   const [active] = await db.select().from(subscriptions)
     .where(and(eq(subscriptions.userId, user.id), eq(subscriptions.status, 'ACTIVE')))
     .limit(1);
   if (active) {
-    return res.status(409).json({
-      ok: false,
-      error: 'Você já tem uma assinatura ativa',
-      subscriptionId: active.id,
-    });
+    return res.status(409).json({ ok: false, error: 'Você já tem uma assinatura ativa', subscriptionId: active.id });
   }
 
   const order = await createPendingOrder({
@@ -296,9 +290,7 @@ async function handleSubscription(req, res, user) {
   }).returning();
 
   const base = APP_URL();
-  if (!base) {
-    return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
-  }
+  if (!base) return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
 
   let preapproval;
   try {
@@ -367,23 +359,26 @@ async function handleManage(req, res, user) {
 
   if (req.method === 'POST') {
     const body = req.body || {};
-    if (body.action !== 'cancel') {
-      return res.status(400).json({ ok: false, error: 'Ação inválida' });
-    }
+    if (body.action !== 'cancel') return res.status(400).json({ ok: false, error: 'Ação inválida' });
+
     const [sub] = await db.select().from(subscriptions)
       .where(and(eq(subscriptions.userId, user.id), eq(subscriptions.status, 'ACTIVE')))
       .limit(1);
     if (!sub) return res.status(404).json({ ok: false, error: 'Nenhuma assinatura ativa' });
 
-    if (sub.externalSubscriptionId && ACCESS_TOKEN()) {
-      try {
-        await mpFetch(`/preapproval/${encodeURIComponent(sub.externalSubscriptionId)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ status: 'cancelled' }),
-        });
-      } catch (err) {
-        console.warn('[payments][manage] MP cancel falhou, cancelando só localmente:', err.status);
-      }
+    // ★ CORREÇÃO: Só cancela localmente após confirmação do gateway
+    if (!sub.externalSubscriptionId) {
+      return res.status(409).json({ ok: false, error: 'Não foi possível identificar a assinatura no gateway.' });
+    }
+
+    try {
+      await mpFetch(`/preapproval/${encodeURIComponent(sub.externalSubscriptionId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'cancelled' }),
+      });
+    } catch (err) {
+      console.error('[payments] Erro ao cancelar no MP:', err.status || err.code);
+      return res.status(502).json({ ok: false, error: 'Não foi possível confirmar o cancelamento. Tente novamente.' });
     }
 
     await db.update(subscriptions)
@@ -391,14 +386,14 @@ async function handleManage(req, res, user) {
       .where(eq(subscriptions.id, sub.id));
 
     await invalidateAccessCache(user.id);
-    return res.status(200).json({ ok: true, message: 'Assinatura cancelada.' });
+    return res.status(200).json({ ok: true, message: 'Cancelamento solicitado e confirmado no gateway.' });
   }
 
   return res.status(405).json({ ok: false, error: 'Método não permitido' });
 }
 
 // ─────────────────────────────────────────────────────────────
-// WEBHOOK
+// WEBHOOK (Com Verificação de Valor e Idempotência Correta)
 // ─────────────────────────────────────────────────────────────
 async function handleWebhook(req, res) {
   if (req.method === 'GET') return res.status(200).json({ ok: true });
@@ -412,11 +407,18 @@ async function handleWebhook(req, res) {
   const dataId = String((event.data && event.data.id) || '');
   if (!type || !dataId) return res.status(400).json({ ok: false, error: 'Payload inválido' });
 
-  // Idempotência: unique(provider, providerEvent)
+  // Idempotência: unique(provider, providerEvent) - Distingue processado de falha
   const [existing] = await db.select().from(paymentsEvents)
     .where(eq(paymentsEvents.providerEvent, `${type}:${dataId}`))
     .limit(1);
-  if (existing) return res.status(200).json({ ok: true, duplicated: true });
+
+  if (existing) {
+    if (existing.processedAt) {
+      return res.status(200).json({ ok: true, duplicated: true });
+    }
+    // Se já existe mas não foi processado, deletamos para tentar de novo
+    await db.delete(paymentsEvents).where(eq(paymentsEvents.id, existing.id));
+  }
 
   const [eventRow] = await db.insert(paymentsEvents).values({
     provider: 'mercadopago',
@@ -431,30 +433,45 @@ async function handleWebhook(req, res) {
       const pay = await mpFetch(`/v1/payments/${encodeURIComponent(dataId)}`);
       const status = pay.status;
       const orderId = pay.external_reference;
+
       if (orderId && status === 'approved') {
+        const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+        if (!order) throw new Error('Pedido não encontrado.');
+        if (order.status === 'PAID') {
+          await db.update(paymentsEvents).set({ processedAt: new Date().toISOString() }).where(eq(paymentsEvents.id, eventRow.id));
+          return res.status(200).json({ ok: true, alreadyPaid: true });
+        }
+
+        const paidCents = Math.round(Number(pay.transaction_amount) * 100);
+        if (paidCents !== order.totalCents || pay.currency_id !== order.currency) {
+          throw new Error('Valor ou moeda divergente do pedido.');
+        }
+
         await markOrderPaid(orderId, String(pay.id));
 
-        const [item] = await db.select().from(orderItems)
-          .where(eq(orderItems.orderId, orderId)).limit(1);
+        const [item] = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId)).limit(1);
         if (item && item.productType === 'RENTAL') {
-          const [prod] = await db.select().from(rentalProducts)
-            .where(eq(rentalProducts.id, item.productId)).limit(1);
+          const [prod] = await db.select().from(rentalProducts).where(eq(rentalProducts.id, item.productId)).limit(1);
           if (prod) {
             const now = new Date();
             const expires = new Date(now.getTime() + (prod.durationHours || 24) * 3600 * 1000);
-            const [ord] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
-            await db.insert(rentals).values({
-              id: randomUUID(),
-              rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
-              userId: ord.userId,
-              trackId: prod.trackId,
-              albumId: prod.albumId,
-              orderId,
-              status: 'ACTIVE',
-              startsAt: now.toISOString(),
-              expiresAt: expires.toISOString(),
-            });
-            await invalidateAccessCache(ord.userId);
+            
+            // Verifica duplicidade de aluguel para este pedido
+            const [existingRental] = await db.select().from(rentals).where(eq(rentals.orderId, orderId)).limit(1);
+            if (!existingRental) {
+              await db.insert(rentals).values({
+                id: randomUUID(),
+                rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
+                userId: order.userId,
+                trackId: prod.trackId,
+                albumId: prod.albumId,
+                orderId,
+                status: 'ACTIVE',
+                startsAt: now.toISOString(),
+                expiresAt: expires.toISOString(),
+              });
+              await invalidateAccessCache(order.userId);
+            }
           }
         }
       }
@@ -483,6 +500,8 @@ async function handleWebhook(req, res) {
             status: 'CANCELLED',
             updatedAt: new Date().toISOString(),
           }).where(eq(subscriptions.id, subId));
+          const [sub] = await db.select().from(subscriptions).where(eq(subscriptions.id, subId)).limit(1);
+          if (sub) await invalidateAccessCache(sub.userId); // ★ Invalida cache no cancelamento via webhook
         }
       }
     }
@@ -502,17 +521,15 @@ async function handleWebhook(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ROTEADOR (Versão Final Corrigida)
+// ROTEADOR
 // ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
   const allowedOrigin = APP_URL();
 
-  // CORS Seguro: Só envia credenciais se a origem for exata
   if (allowedOrigin) {
     res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   } else {
-    // Fallback seguro: sem credenciais se não houver APP_URL
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
 
