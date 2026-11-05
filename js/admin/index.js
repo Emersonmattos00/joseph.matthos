@@ -1,28 +1,40 @@
 /* ============================================================
    js/admin/index.js — Entrypoint do painel administrativo
    ------------------------------------------------------------
-   Correções aplicadas (auditoria):
-   - loadAdminContentAndRender NÃO cai para DEFAULT_CONTENT em erro
-   - saveBtn atualiza contentUpdatedAt
-   - resetBtn salva antes de alterar o estado
-   - importFile salva antes de alterar o estado
-   - exportFile revoga URL com setTimeout
+   Correções aplicadas (auditoria final):
+   - loadAdminContentAndRender retorna false em erro (sem throw)
+   - saveBtn usa beginBusy + getDirtyRevision + markClean(revision)
+   - resetBtn salva antes de alterar o estado e usa markClean(revision)
+   - importFile valida tamanho/JSON/schema e usa markClean(revision)
+   - setByPath tem retorno verificado em bindContentInputs
+   - ensureContentStructure loga mutações em memória
+   - exportFile protege JSON.stringify e revoga URL com setTimeout
    - rebindAdminUI() centraliza o rebind
+   - __adminRebind protegido via Object.defineProperty
    ============================================================ */
 
-import { AdminState, markDirty, markClean } from './state.js';
+import {
+  AdminState,
+  markDirty,
+  markClean,
+  getDirtyRevision,
+  beginBusy
+} from './state.js';
+
 import {
   initAdminShortcuts,
   openAdminSite,
   openPublicSite,
   showAdminLogin
 } from './auth.js';
+
 import {
   loadContent,
   saveContent,
   validateContentSchema,
   normalizeContent
 } from './content.js';
+
 import { renderDashboard } from './dashboard.js';
 import { renderUsersTable, invalidateUsersCache } from './users.js';
 import { renderSales, invalidateSalesCache } from './sales.js';
@@ -55,6 +67,9 @@ const TAB_TITLES = {
   backup: 'Backup'
 };
 
+// ─────────────────────────────────────────────────────────────
+// Bootstrap
+// ─────────────────────────────────────────────────────────────
 async function bootstrap() {
   console.log('[admin] bootstrap iniciado');
 
@@ -80,6 +95,8 @@ function rebindAdminUI() {
 
 // ─────────────────────────────────────────────────────────────
 // Carregamento pós-login
+// ------------------------------------------------------------
+// Retorna true em sucesso, false em erro (não lança).
 // ─────────────────────────────────────────────────────────────
 export async function loadAdminContentAndRender() {
   console.log('[admin] carregando conteúdo pós-login...');
@@ -95,7 +112,7 @@ export async function loadAdminContentAndRender() {
 
     if (err?.status === 401 || err?.status === 403) {
       showAdminLogin();
-      return;
+      return false;
     }
 
     toast(
@@ -104,7 +121,7 @@ export async function loadAdminContentAndRender() {
       '⚠'
     );
 
-    throw err;
+    return false;
   }
 
   safeCall('applyContentToSite', AdminState.content);
@@ -120,6 +137,8 @@ export async function loadAdminContentAndRender() {
   });
 
   console.log('[admin] conteúdo aplicado e dashboard renderizado');
+
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -235,19 +254,30 @@ function safeRender(name, fn) {
 }
 
 function ensureContentStructure(content) {
-  if (!content.filosofia) content.filosofia = {};
-  if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
-  if (!content.discografia) content.discografia = {};
-  if (!Array.isArray(content.discografia.albums)) content.discografia.albums = [];
-  if (!Array.isArray(content.playlists)) content.playlists = [];
-  if (!content.planos) content.planos = {};
-  if (!Array.isArray(content.planos.plans)) content.planos.plans = [];
-  if (!content.contato) content.contato = {};
-  if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
-  if (!content.branding) content.branding = {};
-  if (!content.hero) content.hero = {};
-  if (!content.sobre) content.sobre = {};
-  if (!content.aparencia) content.aparencia = {};
+  let mutated = false;
+
+  if (!content.filosofia) { content.filosofia = {}; mutated = true; }
+  if (!Array.isArray(content.filosofia.frases)) { content.filosofia.frases = []; mutated = true; }
+
+  if (!content.discografia) { content.discografia = {}; mutated = true; }
+  if (!Array.isArray(content.discografia.albums)) { content.discografia.albums = []; mutated = true; }
+
+  if (!Array.isArray(content.playlists)) { content.playlists = []; mutated = true; }
+
+  if (!content.planos) { content.planos = {}; mutated = true; }
+  if (!Array.isArray(content.planos.plans)) { content.planos.plans = []; mutated = true; }
+
+  if (!content.contato) { content.contato = {}; mutated = true; }
+  if (!Array.isArray(content.contato.socials)) { content.contato.socials = []; mutated = true; }
+
+  if (!content.branding) { content.branding = {}; mutated = true; }
+  if (!content.hero) { content.hero = {}; mutated = true; }
+  if (!content.sobre) { content.sobre = {}; mutated = true; }
+  if (!content.aparencia) { content.aparencia = {}; mutated = true; }
+
+  if (mutated) {
+    console.warn('[admin] estrutura de conteúdo corrigida em memória.');
+  }
 }
 
 function bindContentInputs() {
@@ -263,7 +293,13 @@ function bindContentInputs() {
         else val = parseFloat(val);
       }
 
-      setByPath(AdminState.content, el.dataset.content, val);
+      const updated = setByPath(AdminState.content, el.dataset.content, val);
+
+      if (!updated) {
+        console.error('[admin] caminho de conteúdo inválido:', el.dataset.content);
+        return;
+      }
+
       markDirty();
 
       const key = el.dataset.content;
@@ -414,13 +450,15 @@ function bindRefreshButtons() {
 // Ações globais
 // ─────────────────────────────────────────────────────────────
 function bindGlobalActions() {
+  // ── Save
   const saveBtn = document.getElementById('adminSaveBtn');
   if (saveBtn && saveBtn.dataset.bound !== '1') {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       if (saveBtn.disabled) return;
-      saveBtn.disabled = true;
-      saveBtn.textContent = '💾 Salvando...';
+
+      const revisionAtStart = getDirtyRevision();
+      const releaseBusy = beginBusy('salvando');
 
       try {
         const saved = await saveContent(AdminState.content, {
@@ -429,8 +467,13 @@ function bindGlobalActions() {
         AdminState.contentVersion = saved.version;
         AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
 
-        markClean();
-        toast('Alterações salvas.', '💾');
+        const cleaned = markClean(revisionAtStart);
+
+        if (cleaned) {
+          toast('Alterações salvas.', '💾');
+        } else {
+          toast('Alterações salvas, mas você modificou o conteúdo durante o salvamento.', '⚠');
+        }
       } catch (err) {
         console.error('[admin] save:', err);
         if (err?.code === 'VERSION_CONFLICT' || err?.status === 409) {
@@ -442,14 +485,12 @@ function bindGlobalActions() {
           toast(err?.message || 'Não foi possível salvar.', '⚠');
         }
       } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = AdminState.dirty
-          ? '💾 Salvar alterações *'
-          : '💾 Salvar alterações';
+        releaseBusy();
       }
     });
   }
 
+  // ── Reset
   const resetBtn = document.getElementById('adminResetBtn');
   if (resetBtn && resetBtn.dataset.bound !== '1') {
     resetBtn.dataset.bound = '1';
@@ -461,6 +502,8 @@ function bindGlobalActions() {
       if (!confirmed) return;
 
       resetBtn.disabled = true;
+      const revisionAtStart = getDirtyRevision();
+      const releaseBusy = beginBusy('restaurando');
 
       try {
         const defaults = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
@@ -473,12 +516,17 @@ function bindGlobalActions() {
         AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
 
         loadAllAdminFields();
-        markClean();
+
+        const cleaned = markClean(revisionAtStart);
+        if (!cleaned) {
+          toast('Conteúdo restaurado, mas você modificou durante o processo.', '⚠');
+        } else {
+          toast('Conteúdo padrão restaurado.', '↺');
+        }
+
         safeCall('applyContentToSite', AdminState.content);
         safeCall('refreshFlatPlaylist');
         safeCall('refreshPlanConfig');
-
-        toast('Conteúdo padrão restaurado.', '↺');
       } catch (err) {
         console.error('[admin] reset:', err);
         toast(
@@ -488,11 +536,13 @@ function bindGlobalActions() {
           '⚠'
         );
       } finally {
+        releaseBusy();
         resetBtn.disabled = false;
       }
     });
   }
 
+  // ── Export
   const exportBtn = document.getElementById('exportBtn');
   if (exportBtn && exportBtn.dataset.bound !== '1') {
     exportBtn.dataset.bound = '1';
@@ -510,8 +560,17 @@ function bindGlobalActions() {
         content: AdminState.content
       };
 
+      let json;
+      try {
+        json = JSON.stringify(pack, null, 2);
+      } catch (e) {
+        console.error('[admin] export falhou:', e);
+        toast('Conteúdo não serializável. Contate o suporte.', '⚠');
+        return;
+      }
+
       const blob = new Blob(
-        [JSON.stringify(pack, null, 2)],
+        [json],
         { type: 'application/json;charset=utf-8' }
       );
 
@@ -531,12 +590,15 @@ function bindGlobalActions() {
     });
   }
 
+  // ── Import
   const importFile = document.getElementById('importFile');
   if (importFile && importFile.dataset.bound !== '1') {
     importFile.dataset.bound = '1';
     importFile.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
+
+      const releaseBusy = beginBusy('importando');
 
       try {
         if (file.size > 2_000_000) {
@@ -576,6 +638,8 @@ function bindGlobalActions() {
 
         if (!confirmed) return;
 
+        const revisionAtStart = getDirtyRevision();
+
         const saved = await saveContent(normalized, {
           baseVersion: AdminState.contentVersion
         });
@@ -585,12 +649,17 @@ function bindGlobalActions() {
         AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
 
         loadAllAdminFields();
-        markClean();
+
+        const cleaned = markClean(revisionAtStart);
+        if (!cleaned) {
+          toast('Backup importado, mas você modificou durante o processo.', '⚠');
+        } else {
+          toast('Backup importado e salvo com sucesso.', '⬆');
+        }
+
         safeCall('applyContentToSite', AdminState.content);
         safeCall('refreshFlatPlaylist');
         safeCall('refreshPlanConfig');
-
-        toast('Backup importado e salvo com sucesso.', '⬆');
       } catch (err) {
         console.error('[admin] import:', err);
         if (err?.status === 409) {
@@ -602,6 +671,7 @@ function bindGlobalActions() {
           toast(err?.message || 'Não foi possível importar o backup.', '⚠');
         }
       } finally {
+        releaseBusy();
         e.target.value = '';
       }
     });
@@ -658,16 +728,23 @@ function safeCall(name, ...args) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Start
+// ─────────────────────────────────────────────────────────────
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', bootstrap);
 } else {
   bootstrap();
 }
 
-window.__adminRebind = () => {
-  rebindAdminUI();
-  console.log('[admin] rebind executado');
-};
+Object.defineProperty(window, '__adminRebind', {
+  value: () => {
+    rebindAdminUI();
+    console.log('[admin] rebind executado');
+  },
+  writable: false,
+  configurable: false
+});
 
 Object.defineProperty(window, '__admin', {
   value: Object.freeze({
@@ -685,7 +762,7 @@ Object.defineProperty(window, '__admin', {
     },
     rebind: () => window.__adminRebind(),
     async reload() {
-      await loadAdminContentAndRender();
+      return await loadAdminContentAndRender();
     },
     bootContent: () => loadAdminContentAndRender()
   }),
