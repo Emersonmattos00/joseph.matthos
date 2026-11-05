@@ -1,11 +1,11 @@
 /* ============================================================
-   admin/editors/playlists.js — Editor de playlists (v3 auditada)
+   admin/editors/playlists.js — Editor de playlists (v2)
    ------------------------------------------------------------
-   Correções aplicadas (auditoria):
-   - getCatalog() usa normalizeCatalog(albums, tracks)
-   - IDs são UUID (string), nunca Number()
-   - byId usa String(trackId) como chave
-   - needsMigration só considera strings com ":" (formato legado)
+   - Referências por track.id (imutável)
+   - Migração automática de "albumId:index"
+   - Modal com busca de faixas por título
+   - Reordenar faixas dentro da playlist
+   - Exclusão com confirmação
    ============================================================ */
 
 import { AdminState, markDirty } from '../state.js';
@@ -13,7 +13,6 @@ import { esc } from '../ui/dom.js';
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { toast } from '../ui/toast.js';
 import {
-  normalizeCatalog,
   migrateAllPlaylists,
   migratePlaylistTracks,
   resolvePlaylistTracks,
@@ -27,38 +26,19 @@ let _catalog = null;
 
 /**
  * Carrega o catálogo de álbuns/faixas via /api/public.
- * Normaliza usando normalizeCatalog(albums, tracks).
+ * Cacheia em memória.
  */
 async function getCatalog() {
   if (_catalog) return _catalog;
-
   try {
-    const response = await fetch('/api/public', {
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' }
-    });
-
-    if (!response.ok) {
-      throw new Error(`Falha ao carregar catálogo: HTTP ${response.status}`);
-    }
-
-    const json = await response.json();
-
-    if (json?.ok !== true) {
-      throw new Error(json?.error || 'Resposta inválida do catálogo.');
-    }
-
-    _catalog = normalizeCatalog(
-      json.albums || [],
-      json.tracks || []
-    );
-
-    return _catalog;
+    const r = await fetch('/api/public', { credentials: 'same-origin' });
+    const json = await r.json();
+    _catalog = Array.isArray(json?.albums) ? json.albums : [];
   } catch (err) {
-    console.error('[playlists] catálogo indisponível:', err);
-    _catalog = null;
-    throw err;
+    console.warn('[playlists] catálogo indisponível:', err);
+    _catalog = [];
   }
+  return _catalog;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -70,22 +50,12 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
 
   if (!Array.isArray(content.playlists)) content.playlists = [];
 
-  let albums = [];
-  try {
-    albums = await getCatalog();
-  } catch (err) {
-    console.warn('[playlists] catálogo indisponível; edição sem resolver faixas:', err);
-  }
-
-  // ★ Migração apenas de refs legadas (albumId:index)
-  const needsMigration = content.playlists.some(pl =>
-    Array.isArray(pl.tracks) &&
-    pl.tracks.some(track =>
-      typeof track === 'string' && track.includes(':')
-    )
+  // ── Migração automática (uma vez)
+  const albums = await getCatalog();
+  const needsMigration = content.playlists.some((pl) =>
+    Array.isArray(pl.tracks) && pl.tracks.some((t) => typeof t === 'string')
   );
-
-  if (needsMigration && albums.length) {
+  if (needsMigration) {
     content.playlists = migrateAllPlaylists(content.playlists, albums);
     markDirty();
     toast('Playlists migradas para IDs de faixa. Salve para confirmar.', '🔄');
@@ -93,6 +63,7 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
 
   const playlists = content.playlists;
 
+  // Cabeçalho
   const header = `
     <div class="playlists-editor__header">
       <span class="playlists-editor__count">
@@ -114,6 +85,7 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
     return;
   }
 
+  // Lista
   wrap.innerHTML = `
     ${header}
     <div class="playlists-editor__list">
@@ -167,7 +139,7 @@ function renderPlaylistCard(pl, i, total, albums) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Binds
+// Bind: cabeçalho
 // ─────────────────────────────────────────────────────────────
 function bindHeader(content, albums) {
   const addTop = document.getElementById('playlistAddTop');
@@ -177,36 +149,31 @@ function bindHeader(content, albums) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Bind: cards
+// ─────────────────────────────────────────────────────────────
 function bindCards(content, albums) {
   document.querySelectorAll('[data-action="edit"]').forEach((btn) => {
-    if (btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
     btn.addEventListener('click', () => {
       openPlaylistModal(content, Number(btn.dataset.i), albums);
     });
   });
 
   document.querySelectorAll('[data-action="remove"]').forEach((btn) => {
-    if (btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
     btn.addEventListener('click', () => removePlaylist(content, Number(btn.dataset.i)));
   });
 
   document.querySelectorAll('[data-action="move-up"]').forEach((btn) => {
-    if (btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
     btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), -1));
   });
 
   document.querySelectorAll('[data-action="move-down"]').forEach((btn) => {
-    if (btn.dataset.bound === '1') return;
-    btn.dataset.bound = '1';
     btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), +1));
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Ações
+// Ações da lista
 // ─────────────────────────────────────────────────────────────
 function addPlaylist(content, albums) {
   content.playlists.push({
@@ -246,17 +213,18 @@ function movePlaylist(content, i, delta) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal
+// Modal de edição
 // ─────────────────────────────────────────────────────────────
 function openPlaylistModal(content, i, albums) {
   const pl = content.playlists[i];
   if (!pl) return;
 
+  // Estado local do modal
   const draft = {
     title: pl.title || '',
     description: pl.description || '',
     cover: pl.cover || '♪',
-    tracks: Array.isArray(pl.tracks) ? pl.tracks.map(t => String(t)) : []
+    tracks: Array.isArray(pl.tracks) ? [...pl.tracks] : []
   };
 
   openAdminModal(`
@@ -303,8 +271,10 @@ function openPlaylistModal(content, i, albums) {
     </div>
   `);
 
+  // Render inicial da lista de tracks
   renderTrackList();
 
+  // Bind: busca
   const searchInput = document.getElementById('plTrackSearch');
   const resultsWrap = document.getElementById('plSearchResults');
   let searchDebounce;
@@ -323,6 +293,7 @@ function openPlaylistModal(content, i, albums) {
     }, 200);
   });
 
+  // Fecha resultados ao clicar fora
   document.addEventListener('click', (e) => {
     if (!resultsWrap.contains(e.target) && e.target !== searchInput) {
       resultsWrap.hidden = true;
@@ -336,32 +307,26 @@ function openPlaylistModal(content, i, albums) {
       return;
     }
 
-    resultsWrap.innerHTML = results.map((r) => {
-      const already = draft.tracks.includes(String(r.trackId));
-      return `
-        <button type="button"
-                class="playlist-search-result"
-                data-track-id="${esc(r.trackId)}"
-                ${already ? 'disabled' : ''}>
-          <span class="playlist-search-result__title">${esc(r.title)}</span>
-          <span class="playlist-search-result__album">${esc(r.albumTitle)} · ${esc(r.duration)}</span>
-          ${already ? '<span class="playlist-search-result__added">já adicionada</span>' : '<span class="playlist-search-result__add">+ Adicionar</span>'}
-        </button>`;
-    }).join('');
+    resultsWrap.innerHTML = results.map((r) => `
+      <button type="button"
+              class="playlist-search-result"
+              data-track-id="${r.trackId}"
+              ${draft.tracks.includes(r.trackId) ? 'disabled' : ''}>
+        <span class="playlist-search-result__title">${esc(r.title)}</span>
+        <span class="playlist-search-result__album">${esc(r.albumTitle)} · ${esc(r.duration)}</span>
+        ${draft.tracks.includes(r.trackId) ? '<span class="playlist-search-result__added">já adicionada</span>' : '<span class="playlist-search-result__add">+ Adicionar</span>'}
+      </button>
+    `).join('');
     resultsWrap.hidden = false;
 
     resultsWrap.querySelectorAll('[data-track-id]').forEach((btn) => {
       btn.addEventListener('click', () => {
         if (btn.disabled) return;
-
-        // ★ String, nunca Number
-        const id = String(btn.dataset.trackId || '').trim();
-        if (!id) return;
-
+        const id = Number(btn.dataset.trackId);
         if (!draft.tracks.includes(id)) {
           draft.tracks.push(id);
           renderTrackList();
-
+          // Re-renderiza busca para marcar como "já adicionada"
           const q = searchInput.value.trim();
           if (q) renderSearchResults(searchTracks(q, albums, 15));
         }
@@ -379,10 +344,10 @@ function openPlaylistModal(content, i, albums) {
     }
 
     const resolved = resolvePlaylistTracks({ tracks: draft.tracks }, albums);
-    const byId = new Map(resolved.map((r) => [String(r.trackId), r]));
+    const byId = new Map(resolved.map((r) => [r.trackId, r]));
 
     list.innerHTML = draft.tracks.map((trackId, idx) => {
-      const entry = byId.get(String(trackId));
+      const entry = byId.get(trackId);
       const title = entry ? entry.track.title : '(faixa não encontrada)';
       const album = entry ? entry.album.title : '—';
       const duration = entry ? (entry.track.duration || '—') : '—';
@@ -402,6 +367,7 @@ function openPlaylistModal(content, i, albums) {
         </div>`;
     }).join('');
 
+    // Binds internos
     list.querySelectorAll('[data-action="track-up"]').forEach((b) => {
       b.addEventListener('click', () => moveTrack(Number(b.dataset.idx), -1));
     });
@@ -425,8 +391,10 @@ function openPlaylistModal(content, i, albums) {
     renderTrackList();
   }
 
+  // Bind: cancelar
   document.getElementById('plCancel').addEventListener('click', closeAdminModal);
 
+  // Bind: salvar
   document.getElementById('plSave').addEventListener('click', () => {
     const errEl = document.getElementById('plError');
     const title = document.getElementById('plTitle').value.trim();
@@ -451,7 +419,7 @@ function openPlaylistModal(content, i, albums) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Compat
+// Compat: bindPlaylistsAddButton
 // ─────────────────────────────────────────────────────────────
 export function bindPlaylistsAddButton() {
   const btn = document.getElementById('addPlaylistBtn');

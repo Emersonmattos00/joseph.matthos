@@ -6,21 +6,15 @@
    - Sem dependências externas
    - Funciona no site público E no painel admin
    - Não usa innerHTML (seguro contra XSS)
-   - Acessibilidade: role="status"/"alert", aria-live
+   - Acessibilidade: role="status", aria-live="polite"
    - Fila: múltiplos toasts simultâneos (max 3)
    - Tipos: success, error, warning, info, music, cart, premium
-   - CSS injetado dinamicamente (namespace jm-toast*)
+   - CSS injetado dinamicamente (namespace jm-toast*, sem
+     colidir com `.toast` de css/style.css)
 
-   Correções aplicadas (auditoria):
-   - Remove delegação automática para window.toast (evita
-     conflito com o toast público de utils.js, que depende
-     de elementos #toast/#toastIcon/#toastMsg e pode falhar
-     silenciosamente no painel)
-   - enforceMaxVisible agora descarta o toast mais antigo
-     via dismissToast (mapa é a fonte da verdade)
-   - dismissToast usa el.remove() e limpa timer
-   - CSS: overflow-wrap, tamanho mínimo do botão fechar,
-     focus-visible e prefers-reduced-motion reforçado
+   ⚠️ Fallback: se `window.toast` existir (site público já
+      carregou utils.js), delega para ele. Isso evita dois
+      sistemas de toast concorrentes na mesma página.
    ============================================================ */
 
 'use strict';
@@ -31,7 +25,7 @@
 const TOAST_CONFIG = {
   duration: 3200,
   maxVisible: 3,
-  position: 'bottom-center',
+  position: 'bottom-center', // 'top-right' | 'top-center' | 'bottom-right' | 'bottom-center'
   animationDuration: 300
 };
 
@@ -53,16 +47,6 @@ const TOAST_ICONS = {
   gear: '⚙',
   clock: '⏱'
 };
-
-const VALID_TYPES = new Set([
-  'success',
-  'error',
-  'warning',
-  'info',
-  'music',
-  'cart',
-  'premium'
-]);
 
 // ─────────────────────────────────────────────────────────────
 // ESTADO INTERNO
@@ -100,16 +84,15 @@ function getContainer() {
 
 /**
  * Remove os toasts mais antigos se exceder o limite.
- * Usa dismissToast (mapa é a fonte da verdade), garantindo
- * que o timer seja limpo e o elemento saia com animação.
  */
 function enforceMaxVisible() {
   while (_activeToasts.size >= TOAST_CONFIG.maxVisible) {
     const firstKey = _activeToasts.keys().next().value;
-
-    if (!firstKey) break;
-
-    dismissToast(firstKey);
+    if (firstKey) {
+      dismissToast(firstKey);
+    } else {
+      break;
+    }
   }
 }
 
@@ -123,103 +106,106 @@ function enforceMaxVisible() {
  * @param {string} message - Mensagem a exibir
  * @param {string} [icon='ℹ'] - Ícone (emoji ou caractere)
  * @param {number} [duration] - Duração em ms (padrão: 3200)
- * @param {string} [type] - Tipo ('success', 'error', 'warning', 'info', ...)
+ * @param {string} [type] - Tipo ('success', 'error', 'warning', 'info')
  * @returns {string|null} ID do toast (para dismiss manual)
+ *
+ * @example
+ *   toast('Álbum salvo!', '💿');
+ *   toast('Erro ao salvar.', '⚠', 5000);
+ *   toast.success('Compra concluída!');
+ *   toast.error('Falha na conexão.');
+ *   toast.warning('Sessão expirando...');
+ *   toast.info('Nova versão disponível.');
  */
 export function toast(message, icon = 'ℹ', duration, type) {
-  if (message == null || String(message).trim() === '') {
-    console.warn('[admin-toast] Mensagem vazia ignorada');
+  // Fallback: se o site público já registrou window.toast, delega
+  // (evita dois sistemas de toast concorrentes na mesma página)
+  if (typeof window !== 'undefined' && typeof window.toast === 'function') {
+    return window.toast(message, icon);
+  }
+
+  if (message == null) {
+    console.warn('[toast] Mensagem vazia ignorada');
     return null;
   }
 
   if (typeof document === 'undefined') {
-    console.log('[admin-toast]', message);
+    console.log('[toast]', message);
     return null;
   }
 
-  const safeType = VALID_TYPES.has(type) ? type : 'info';
+  const finalDuration = typeof duration === 'number' && duration > 0
+    ? duration
+    : TOAST_CONFIG.duration;
 
-  const finalDuration =
-    Number.isFinite(duration) && duration > 0
-      ? Math.min(duration, 60000)
-      : TOAST_CONFIG.duration;
+  // Aplica ícone padrão do tipo (se tipo passado e ícone não)
+  let finalIcon = icon;
+  if (type && TOAST_ICONS[type] && (icon === 'ℹ' || icon == null)) {
+    finalIcon = TOAST_ICONS[type];
+  }
 
-  const finalIcon =
-    icon == null || icon === 'ℹ'
-      ? TOAST_ICONS[safeType] || 'ℹ'
-      : String(icon);
-
+  // Enforce limite
   enforceMaxVisible();
 
-  const id = `toast-${++_toastIdCounter}-${Date.now()}`;
+  // Cria ID único
+  const id = 'toast-' + (++_toastIdCounter) + '-' + Date.now();
 
+  // Cria elemento
   const el = document.createElement('div');
-
   el.className = 'jm-toast';
   el.id = id;
-
-  el.classList.add(`jm-toast--${safeType}`);
-
-  el.setAttribute(
-    'role',
-    safeType === 'error' ? 'alert' : 'status'
-  );
-
-  el.setAttribute(
-    'aria-live',
-    safeType === 'error' ? 'assertive' : 'polite'
-  );
-
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', 'polite');
   el.setAttribute('aria-atomic', 'true');
 
-  const iconSpan = document.createElement('span');
+  if (type) {
+    el.classList.add('jm-toast--' + type);
+  }
 
+  // Ícone
+  const iconSpan = document.createElement('span');
   iconSpan.className = 'jm-toast__icon';
   iconSpan.setAttribute('aria-hidden', 'true');
   iconSpan.textContent = finalIcon;
 
+  // Mensagem
   const msgSpan = document.createElement('span');
-
   msgSpan.className = 'jm-toast__message';
   msgSpan.textContent = String(message);
 
-  const closeBtn = document.createElement('button');
+  el.appendChild(iconSpan);
+  el.appendChild(msgSpan);
 
+  // Botão de fechar
+  const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.className = 'jm-toast__close';
   closeBtn.setAttribute('aria-label', 'Fechar notificação');
   closeBtn.textContent = '×';
-
   closeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     dismissToast(id);
   });
 
-  el.append(iconSpan, msgSpan, closeBtn);
+  el.appendChild(closeBtn);
 
-  getContainer().appendChild(el);
+  // Adiciona ao container
+  const container = getContainer();
+  container.appendChild(el);
 
+  // Registra no mapa
   const timeoutId = setTimeout(() => {
     dismissToast(id);
   }, finalDuration);
 
-  _activeToasts.set(id, {
-    el,
-    timeoutId
-  });
+  _activeToasts.set(id, { el, timeoutId });
 
-  const show = () => {
-    if (!_activeToasts.has(id)) return;
-    el.classList.add('jm-toast--visible');
-  };
-
-  if (typeof requestAnimationFrame === 'function') {
+  // Animação de entrada
+  requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      requestAnimationFrame(show);
+      el.classList.add('jm-toast--visible');
     });
-  } else {
-    show();
-  }
+  });
 
   return id;
 }
@@ -230,20 +216,21 @@ export function toast(message, icon = 'ℹ', duration, type) {
  */
 export function dismissToast(id) {
   const entry = _activeToasts.get(id);
-
   if (!entry) return;
 
   const { el, timeoutId } = entry;
 
   clearTimeout(timeoutId);
-
   _activeToasts.delete(id);
 
+  // Animação de saída
   el.classList.remove('jm-toast--visible');
   el.classList.add('jm-toast--leaving');
 
   setTimeout(() => {
-    el.remove();
+    if (el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
   }, TOAST_CONFIG.animationDuration);
 }
 
@@ -252,7 +239,6 @@ export function dismissToast(id) {
  */
 export function dismissAllToasts() {
   const ids = Array.from(_activeToasts.keys());
-
   ids.forEach((id) => dismissToast(id));
 }
 
@@ -291,7 +277,6 @@ toast.premium = function (message, duration) {
 // CSS DINÂMICO (injetado uma vez)
 // ─────────────────────────────────────────────────────────────
 function injectToastStyles() {
-  if (typeof document === 'undefined') return;
   if (document.getElementById('jm-toast-styles')) return;
 
   const style = document.createElement('style');
@@ -357,7 +342,6 @@ function injectToastStyles() {
       pointer-events: auto;
       max-width: 100%;
       word-break: break-word;
-      overflow-wrap: anywhere;
     }
 
     .jm-toast--visible {
@@ -398,11 +382,6 @@ function injectToastStyles() {
       border-radius: 50%;
       transition: color 0.2s, background 0.2s;
       opacity: 0.6;
-      min-width: 32px;
-      min-height: 32px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
     }
 
     .jm-toast__close:hover {
@@ -412,7 +391,7 @@ function injectToastStyles() {
 
     .jm-toast__close:focus-visible {
       outline: 2px solid var(--accent, #d4af37);
-      outline-offset: 3px;
+      outline-offset: 2px;
       opacity: 1;
     }
 
@@ -470,12 +449,10 @@ function injectToastStyles() {
 
     /* Acessibilidade */
     @media (prefers-reduced-motion: reduce) {
-      .jm-toast,
-      .jm-toast--visible,
-      .jm-toast--leaving {
-        transition: none !important;
-        transform: none !important;
+      .jm-toast {
+        transition: none;
         opacity: 1;
+        transform: none;
       }
     }
   `;
@@ -496,10 +473,9 @@ if (typeof document !== 'undefined') {
 
 // ─────────────────────────────────────────────────────────────
 // EXPORTAÇÃO GLOBAL (compatibilidade com onclick inline)
-// ─────────────────────────────────────────────────────────────
+// ------------------------------------------------------------
 // ⚠️ Só registra window.toast se ainda não existir — o site
-//    público (utils.js) tem prioridade. O módulo admin NÃO
-//    delega para window.toast; usa sempre o próprio container.
+//    público (utils.js) tem prioridade.
 // ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   if (typeof window.toast !== 'function') {

@@ -2,21 +2,13 @@
    admin/editors/frases.js — Editor de frases (filosofia)
    ------------------------------------------------------------
    - Adiciona / edita / remove / reordena
-   - Exclusão com confirmação (mostra prévia do texto)
+   - Exclusão com confirmação
    - Preview em tempo real (com tipografia do site)
    - Contador de frases
-   - Auto-scroll e foco ao adicionar
-   - markDirty() em TODAS as mutações (crítico)
-
-   Correções aplicadas (auditoria):
-   - importa markDirty de state.js
-   - inputs (text/author) marcam dirty
-   - addFrase / removeFrase / moveFrase marcam dirty
-   - validação de índices e campos antes de mutar
-   - addFrase exportada para reutilização em index.js
+   - Auto-scroll ao adicionar nova frase
    ============================================================ */
 
-import { AdminState, markDirty } from '../state.js';
+import { AdminState } from '../state.js';
 import { esc } from '../ui/dom.js';
 import { toast } from '../ui/toast.js';
 
@@ -27,13 +19,13 @@ export function renderFrasesEditor(content = AdminState.content) {
   const wrap = document.getElementById('frasesEditor');
   if (!wrap) return;
 
-  if (!content) return;
-
+  // Garante estrutura mínima
   if (!content.filosofia) content.filosofia = {};
   if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
 
   const frases = content.filosofia.frases;
 
+  // ── Cabeçalho com contador
   const header = `
     <div class="frases-editor__header">
       <span class="frases-editor__count">
@@ -45,6 +37,7 @@ export function renderFrasesEditor(content = AdminState.content) {
     </div>
   `;
 
+  // ── Estado vazio
   if (!frases.length) {
     wrap.innerHTML = `
       ${header}
@@ -56,6 +49,7 @@ export function renderFrasesEditor(content = AdminState.content) {
     return;
   }
 
+  // ── Lista de frases
   wrap.innerHTML = `
     ${header}
     <div class="frases-editor__list">
@@ -149,29 +143,22 @@ function bindHeader(wrap, content) {
 // Bind: ações das frases
 // ─────────────────────────────────────────────────────────────
 function bindFrases(wrap, content) {
-  // ── Inputs (texto e autor)
+  // ── Inputs (texto e autor) — atualizam modelo + preview em tempo real
   wrap.querySelectorAll('[data-field]').forEach((el) => {
     el.addEventListener('input', () => {
       const i = Number(el.dataset.i);
       const field = el.dataset.field;
+      if (!content.filosofia.frases[i]) content.filosofia.frases[i] = {};
+      content.filosofia.frases[i][field] = el.value;
 
-      if (!Number.isInteger(i) || i < 0) return;
-      if (!['text', 'author'].includes(field)) return;
-
-      const frase = content.filosofia.frases[i];
-      if (!frase) return;
-
-      frase[field] = el.value;
-
+      // Atualiza contador de caracteres
       if (field === 'text') {
         const hintEl = el.parentElement?.querySelector('.hint');
         if (hintEl) hintEl.textContent = `${el.value.length} caracteres`;
       }
 
-      updatePreview(wrap, i, frase);
-
-      // Crítico: avisa o painel que houve alteração.
-      markDirty();
+      // Atualiza preview sem re-renderizar tudo
+      updatePreview(wrap, i, content.filosofia.frases[i]);
     });
   });
 
@@ -221,92 +208,52 @@ function updatePreview(wrap, i, frase) {
 
 // ─────────────────────────────────────────────────────────────
 // Ações: adicionar / remover / mover
-// ------------------------------------------------------------
-// addFrase é EXPORTADA para que index.js (botão addFraseBtn)
-// possa reutilizar a mesma lógica, eliminando duplicidade.
 // ─────────────────────────────────────────────────────────────
-export function addFrase(content = AdminState.content) {
-  if (!content) {
-    toast('Não foi possível acessar o conteúdo de filosofia.', '⚠');
-    return;
-  }
-
-  if (!content.filosofia) content.filosofia = {};
-  if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
-
+function addFrase(content) {
   content.filosofia.frases.push({
     text: '',
     author: 'Joseph Matthos'
   });
-
-  markDirty();
-
   renderFrasesEditor(content);
 
-  const lastIdx = content.filosofia.frases.length - 1;
-
-  requestAnimationFrame(() => {
+  // Auto-focus + scroll na nova frase
+  setTimeout(() => {
+    const lastIdx = content.filosofia.frases.length - 1;
     const wrap = document.getElementById('frasesEditor');
     if (!wrap) return;
 
     const newCard = wrap.querySelector(`[data-i="${lastIdx}"].frase-editor`);
-    if (!newCard) return;
+    if (newCard) {
+      newCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const textarea = newCard.querySelector('[data-field="text"]');
+      textarea?.focus();
+    }
+  }, 0);
 
-    newCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    newCard.querySelector('[data-field="text"]')?.focus();
-  });
-
-  toast('Frase adicionada. Lembre-se de salvar.', '✦');
+  toast('Frase adicionada. Lembre de salvar.', '✦');
 }
 
 function removeFrase(content, index) {
-  const frases = content?.filosofia?.frases;
+  const frase = content.filosofia.frases[index];
+  if (!frase) return;
 
-  if (!Array.isArray(frases)) return;
-
-  if (!Number.isInteger(index) || index < 0 || index >= frases.length) {
-    return;
-  }
-
-  const frase = frases[index];
-  const texto = String(frase?.text || '').trim();
-  const preview = texto.slice(0, 60);
-
-  const mensagem = preview
-    ? `Remover esta frase?\n\n"${preview}${texto.length > 60 ? '…' : ''}"`
+  const preview = (frase.text || '').slice(0, 60);
+  const msg = preview
+    ? `Remover esta frase?\n\n"${preview}${frase.text.length > 60 ? '…' : ''}"`
     : 'Remover esta frase vazia?';
 
-  if (!window.confirm(mensagem)) return;
+  if (!window.confirm(msg)) return;
 
-  frases.splice(index, 1);
-
-  markDirty();
-
+  content.filosofia.frases.splice(index, 1);
   renderFrasesEditor(content);
-
-  toast('Frase removida. Lembre-se de salvar.', '🗑');
+  toast('Frase removida. Lembre de salvar.', '🗑');
 }
 
 function moveFrase(content, index, delta) {
-  const frases = content?.filosofia?.frases;
-
-  if (!Array.isArray(frases)) return;
-  if (!Number.isInteger(index) || !Number.isInteger(delta)) return;
-
+  const arr = content.filosofia.frases;
   const target = index + delta;
+  if (target < 0 || target >= arr.length) return;
 
-  if (
-    index < 0 ||
-    index >= frases.length ||
-    target < 0 ||
-    target >= frases.length
-  ) {
-    return;
-  }
-
-  [frases[index], frases[target]] = [frases[target], frases[index]];
-
-  markDirty();
-
+  [arr[index], arr[target]] = [arr[target], arr[index]];
   renderFrasesEditor(content);
 }

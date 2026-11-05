@@ -1,400 +1,237 @@
-'use strict';
-
 /* ============================================================
    SERVICE WORKER — Joseph Matthos
    ------------------------------------------------------------
-   - Pré-cache de páginas públicas e recursos essenciais
-   - HTML público: network-first com fallback offline
-   - Recursos estáticos: cache-first com revalidação em background
-   - JS administrativo: network-only (nunca cache)
-   - API: nunca interceptada
-   - Áudio e Range requests: nunca interceptados
-   - CDN e armazenamento externo: nunca interceptados
-   - Caches isolados por prefixo (jm-)
+   - Cache estático para assets (CSS, JS público, imagens)
+   - HTML: network-first (fallback offline.html)
+   - JS do admin: network-first (NUNCA cacheado)
+   - API: NUNCA cacheada (incluindo /api/stream)
+   - Range requests (áudio): passam direto, sem interceptação
+   - Cross-origin (Cloudflare CDN / Backblaze B2): passam direto
+   - Imagens: fallback para placeholder SVG em caso de falha
+
+   ⚠️  Ao fazer deploy de mudanças nos assets, bumpe CACHE_VERSION
+   ⚠️  Arquivos em /js/admin/** NÃO entram no cache — sempre frescos
+   ⚠️  /api/** NUNCA é interceptada — sempre vai à rede
+
+   🛡️  SEGURANÇA
+   ------------------------------------------------------------
+   - URLs do CDN da Cloudflare NUNCA são cacheadas
+   - O player pede /api/stream toda vez → URL nova a cada request
+   - Por isso há 3 guardas redundantes abaixo:
+       1. url.pathname.startsWith('/api/')
+       2. url.origin !== self.location.origin
+       3. req.headers.get('range')
    ============================================================ */
 
-const CACHE_PREFIX = 'jm-';
-const CACHE_VERSION = 'jm-v26'; // bump quando assets mudarem
+const CACHE_VERSION = 'jm-v24'; // <-- BUMPEI A VERSÃO PARA FORÇAR ATUALIZAÇÃO
 
-const MAX_CACHE_ENTRIES = 150;
-
-// ============================================================
-// PRÉ-CACHE
-// ============================================================
-
+// ─────────────────────────────────────────────────────────────
+// Precache — assets estáticos do site público
+// ─────────────────────────────────────────────────────────────
 const CACHE_STATIC = [
+  // Páginas
   '/',
   '/index.html',
   '/offline.html',
   '/politica-privacidade.html',
   '/termos-uso.html',
 
+  // CSS
   '/css/style.css',
 
+  // JS — site público
   '/js/utils.js',
   '/js/config.js',
   '/js/site.js',
 
+  // Imagens padrão (fallback de layout)
   '/assets/img/tema.webp',
   '/assets/img/vinil.webp',
   '/assets/img/josephmatthos.webp'
 ];
 
-const ALLOWED_PAGES = new Set([
-  '/',
-  '/index.html',
-  '/offline.html',
-  '/politica-privacidade.html',
-  '/termos-uso.html'
-]);
-
-// ============================================================
-// PLACEHOLDER SVG
-// ============================================================
-
-const IMAGE_PLACEHOLDER_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg"
-     viewBox="0 0 200 200"
-     fill="none">
+// ─────────────────────────────────────────────────────────────
+// Placeholder SVG — usado como fallback de imagem quebrada
+// ─────────────────────────────────────────────────────────────
+const IMAGE_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
   <rect width="200" height="200" fill="#131216"/>
-  <circle cx="100" cy="100" r="60"
-          fill="none"
-          stroke="#2b272f"
-          stroke-width="2"/>
-  <text x="100" y="110"
-        text-anchor="middle"
-        fill="#b0a9a0"
-        font-family="system-ui, sans-serif"
-        font-size="14">♪</text>
-</svg>`.trim();
+  <circle cx="100" cy="100" r="60" fill="none" stroke="#2b272f" stroke-width="2"/>
+  <text x="100" y="110" text-anchor="middle" fill="#b0a9a0" font-family="system-ui, sans-serif" font-size="14">♪</text>
+</svg>`;
 
-// ============================================================
-// UTILITÁRIOS
-// ============================================================
-
-function isAdminAsset(url) {
-  return url.pathname.startsWith('/js/admin/');
-}
-
-function isApiRequest(url) {
-  return (
-    url.pathname === '/api' ||
-    url.pathname.startsWith('/api/')
-  );
-}
-
-function isAllowedPage(url) {
-  return ALLOWED_PAGES.has(url.pathname) && !url.search;
-}
-
-function isStaticAsset(url) {
-  const pathname = url.pathname;
-
-  if (isAdminAsset(url)) return false;
-  if (url.search) return false;
-
-  if (pathname.startsWith('/css/') && /\.css$/i.test(pathname)) {
-    return true;
-  }
-
-  if (pathname.startsWith('/js/') && /\.js$/i.test(pathname)) {
-    return true;
-  }
-
-  if (
-    pathname.startsWith('/assets/img/') &&
-    /\.(avif|gif|jpe?g|png|svg|webp)$/i.test(pathname)
-  ) {
-    return true;
-  }
-
-  if (
-    pathname.startsWith('/assets/fonts/') &&
-    /\.(woff2?|ttf|otf)$/i.test(pathname)
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function isCacheableResponse(response) {
-  if (!response || !response.ok) return false;
-  if (response.status !== 200) return false;
-  if (response.type !== 'basic') return false;
-
-  const cacheControl = response.headers.get('Cache-Control') || '';
-
-  if (/\b(no-store|private)\b/i.test(cacheControl)) {
-    return false;
-  }
-
-  if (response.headers.get('Vary') === '*') {
-    return false;
-  }
-
-  return true;
-}
-
-function isCacheableRequest(request) {
-  if (request.method !== 'GET') return false;
-  if (request.headers.has('Authorization')) return false;
-  if (request.headers.has('Range')) return false;
-  if (request.cache === 'no-store') return false;
-  return true;
-}
-
-// ============================================================
-// ACESSO ISOLADO AO CACHE (nunca caches.match global)
-// ============================================================
-
-async function openCache() {
-  return caches.open(CACHE_VERSION);
-}
-
-async function cacheMatch(request) {
-  const cache = await openCache();
-  return cache.match(request);
-}
-
-// ============================================================
-// CONTROLE DO TAMANHO
-// ============================================================
-
-async function trimCache() {
-  const cache = await openCache();
-  const keys = await cache.keys();
-
-  if (keys.length <= MAX_CACHE_ENTRIES) return;
-
-  const excess = keys.length - MAX_CACHE_ENTRIES;
-
-  await Promise.all(
-    keys.slice(0, excess).map(request => cache.delete(request))
-  );
-}
-
-// ============================================================
-// INSTALL
-// ============================================================
-
-self.addEventListener('install', event => {
+// ─────────────────────────────────────────────────────────────
+// INSTALL — precacheia assets estáticos
+// ─────────────────────────────────────────────────────────────
+self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      const cache = await openCache();
+      const cache = await caches.open(CACHE_VERSION);
 
-      // Se algum essencial falhar, a instalação falha.
-      // Assim, não ficamos com cache parcial.
-      try {
-        await cache.addAll(CACHE_STATIC);
-      } catch (error) {
-        await caches.delete(CACHE_VERSION);
-        console.error('[SW] Pré-cache obrigatório falhou:', error);
-        throw error;
-      }
+      const results = await Promise.allSettled(
+        CACHE_STATIC.map((url) => cache.add(url))
+      );
 
-      console.log('[SW] Instalação concluída.');
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') {
+          console.warn(
+            '[SW] Falha ao cachear:',
+            CACHE_STATIC[i],
+            r.reason?.message
+          );
+        }
+      });
+
+      await self.skipWaiting();
     })()
   );
 });
 
-// ============================================================
-// ACTIVATE — limpa apenas caches da plataforma (prefixo jm-)
-// ============================================================
-
-self.addEventListener('activate', event => {
+// ─────────────────────────────────────────────────────────────
+// ACTIVATE — limpa caches antigos e assume controle
+// ─────────────────────────────────────────────────────────────
+self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-
       await Promise.all(
         keys
-          .filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION)
-          .map(key => caches.delete(key))
+          .filter((key) => key !== CACHE_VERSION)
+          .map((key) => caches.delete(key))
       );
-
       await self.clients.claim();
-      console.log('[SW] Ativado:', CACHE_VERSION);
     })()
   );
 });
 
-// ============================================================
-// FETCH
-// ============================================================
+// ─────────────────────────────────────────────────────────────
+// FETCH — roteia por tipo de requisição
+// ─────────────────────────────────────────────────────────────
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
 
-self.addEventListener('fetch', event => {
-  const request = event.request;
+  // 1) Só intercepta GET
+  if (req.method !== 'GET') return;
 
-  if (request.method !== 'GET') return;
+  const url = new URL(req.url);
 
-  const url = new URL(request.url);
-
-  // Cross-origin: CDN, B2, MP — nunca intercepta
+  // 2) Guarda: NUNCA intercepta cross-origin (Cloudflare, B2, MP)
+  //    O áudio vem de cdn.josephmatthos.com.br — o SW nem vê.
   if (url.origin !== self.location.origin) return;
 
-  // API — nunca intercepta
-  if (isApiRequest(url)) return;
+  // 3) Guarda: NUNCA intercepta /api/* (inclui /api/stream)
+  if (url.pathname.startsWith('/api/')) return;
 
-  // Áudio e Range — nunca intercepta
-  if (
-    request.headers.has('Range') ||
-    request.destination === 'audio' ||
-    url.pathname.startsWith('/assets/audio/')
-  ) {
+  // 4) Guarda: NUNCA intercepta Range requests (áudio com seek)
+  if (req.headers.get('range')) return;
+
+  // ── Navegação (HTML) → network-first + fallback offline
+  if (req.mode === 'navigate') {
+    event.respondWith(handleNavigation(req));
     return;
   }
 
-  // JS admin — network only
-  if (isAdminAsset(url)) {
-    event.respondWith(handleAdminAsset(request));
+  // ── JS do admin → network-first (nunca cacheia)
+  if (url.pathname.startsWith('/js/admin/')) {
+    event.respondWith(handleAdminAsset(req));
     return;
   }
 
-  // Navegação
-  if (request.mode === 'navigate') {
-    event.respondWith(handleNavigation(request));
-    return;
-  }
-
-  // Estáticos públicos
-  if (isStaticAsset(url) && isCacheableRequest(request)) {
-    event.respondWith(handleStaticAsset(request));
-  }
+  // ── Assets estáticos → cache-first + revalidate em background
+  event.respondWith(handleAsset(req));
 });
 
-// ============================================================
-// NAVEGAÇÃO — NETWORK FIRST
-// ============================================================
+// ─────────────────────────────────────────────────────────────
+// HANDLERS
+// ─────────────────────────────────────────────────────────────
 
-async function handleNavigation(request) {
-  const url = new URL(request.url);
-  const cacheable = isAllowedPage(url);
-
+async function handleNavigation(req) {
   try {
-    const response = await fetch(request);
+    const res = await fetch(req);
 
-    if (cacheable && isCacheableResponse(response) && !response.redirected) {
-      const cache = await openCache();
-      await cache.put(request, response.clone());
+    if (res && res.ok && !res.redirected) {
+      const clone = res.clone();
+      caches.open(CACHE_VERSION).then((c) => c.put(req, clone)).catch(() => {});
     }
 
-    return response;
-  } catch (error) {
-    console.warn('[SW] Navegação offline:', url.pathname);
+    return res;
+  } catch {
+    const cached =
+      (await caches.match(req)) ||
+      (await caches.match('/offline.html'));
 
-    if (cacheable) {
-      const cached = await cacheMatch(request);
-      if (cached) return cached;
-    }
-
-    const offlinePage = await cacheMatch('/offline.html');
-    if (offlinePage) return offlinePage;
+    if (cached) return cached;
 
     return new Response(
-      'Sem conexão. Verifique sua internet e tente novamente.',
+      `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Offline</title></head><body style="background:#0b0a0c;color:#eee9e0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:2rem;"><div><h1 style="color:#d4af37;">Sem conexão</h1><p>Verifique sua internet e tente novamente.</p></div></body></html>`,
       {
         status: 503,
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store'
-        }
+        headers: { 'Content-Type': 'text/html; charset=utf-8' }
       }
     );
   }
 }
 
-// ============================================================
-// ADMIN — NETWORK ONLY
-// ============================================================
-
-async function handleAdminAsset(request) {
+async function handleAdminAsset(req) {
   try {
-    return await fetch(request);
+    return await fetch(req);
   } catch {
-    return new Response(
-      'Recurso administrativo indisponível offline.',
-      {
-        status: 504,
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store'
-        }
-      }
-    );
+    const cached = await caches.match(req);
+    if (cached) return cached;
+
+    return new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
-// ============================================================
-// ESTÁTICOS — CACHE FIRST + REVALIDAÇÃO
-// ============================================================
-
-async function handleStaticAsset(request) {
-  const cached = await cacheMatch(request);
+async function handleAsset(req) {
+  const cached = await caches.match(req);
 
   if (cached) {
-    revalidate(request).catch(error => {
-      console.warn('[SW] Revalidação falhou:', error);
-    });
-
+    if (navigator.onLine) {
+      revalidate(req).catch(() => {});
+    }
     return cached;
   }
 
   try {
-    const response = await fetch(request);
+    const res = await fetch(req);
 
-    if (isCacheableResponse(response)) {
-      const cache = await openCache();
-      await cache.put(request, response.clone());
-      await trimCache();
+    if (res && res.ok && res.status === 200 && res.type === 'basic') {
+      const clone = res.clone();
+      caches.open(CACHE_VERSION).then((c) => c.put(req, clone)).catch(() => {});
     }
 
-    return response;
+    return res;
   } catch {
-    if (request.destination === 'image') {
+    if (req.destination === 'image') {
       return new Response(IMAGE_PLACEHOLDER_SVG, {
         status: 200,
         headers: {
-          'Content-Type': 'image/svg+xml; charset=utf-8',
+          'Content-Type': 'image/svg+xml',
           'Cache-Control': 'no-store'
         }
       });
     }
 
-    return new Response(
-      'Recurso indisponível offline.',
-      {
-        status: 504,
-        headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store'
-        }
-      }
-    );
+    return new Response('', { status: 504, statusText: 'Offline' });
   }
 }
 
-// ============================================================
-// REVALIDAÇÃO EM BACKGROUND
-// ============================================================
-
-async function revalidate(request) {
-  if (!isCacheableRequest(request)) return;
-
-  const response = await fetch(request);
-
-  if (!isCacheableResponse(response)) return;
-
-  const cache = await openCache();
-  await cache.put(request, response.clone());
-  await trimCache();
+async function revalidate(req) {
+  try {
+    const res = await fetch(req);
+    if (res && res.ok && res.status === 200 && res.type === 'basic') {
+      const cache = await caches.open(CACHE_VERSION);
+      await cache.put(req, res.clone());
+    }
+  } catch {
+    // Silencioso
+  }
 }
 
-// ============================================================
-// MENSAGENS DO CLIENTE
-// ============================================================
-
-self.addEventListener('message', event => {
+// ─────────────────────────────────────────────────────────────
+// MESSAGE — permite ao cliente forçar skipWaiting
+// ─────────────────────────────────────────────────────────────
+self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') {
     self.skipWaiting();
   }
