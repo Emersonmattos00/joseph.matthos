@@ -1,13 +1,13 @@
 /* ============================================================
    admin/content.js — Conteúdo do site (GET/PUT)
    ------------------------------------------------------------
-   - GET: tenta API, propaga 401/403, cai para DEFAULT_CONTENT
-     só em falha de rede/5xx
-   - PUT: envia baseVersion (controle de conflito otimista),
-     preserva status/code do erro, marca "clean" ao salvar
-   - ✅ NOVO: validateContentSchema() antes do PUT — garante
-     integridade mínima das seções conhecidas sem bloquear
-     extensões futuras
+   Correções aplicadas (auditoria):
+   - loadContent NÃO cai para DEFAULT_CONTENT em erros HTTP/5xx
+   - loadContent valida schema antes de retornar
+   - Tamanho medido em bytes reais (TextEncoder), não .length
+   - baseVersion validado (Number.isSafeInteger >= 0)
+   - normalizeContent usa mergeDefaults recursivo
+   - Validação de IDs duplicados em playlists/planos
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -23,37 +23,49 @@ export async function loadContent() {
   try {
     const result = await apiFetch('content', { method: 'GET' });
 
-    if (result && result.ok) {
-      const rawData =
-        result.data && typeof result.data === 'object'
-          ? result.data
-          : {};
-
-      // Normaliza/valida antes de devolver ao caller
-      const data = normalizeContent(rawData);
-
-      return {
-        data,
-        version: Number(result.version) || 0,
-        updatedAt: result.updatedAt || null
-      };
-    }
-
-    throw new Error(result?.error || 'Resposta inválida do servidor.');
-  } catch (err) {
-    if (err && (err.status === 401 || err.status === 403)) {
+    if (!result || result.ok !== true) {
+      const err = new Error(result?.error || 'Resposta inválida do servidor.');
+      err.status = result?.status || 502;
       throw err;
     }
 
-    console.warn(
-      '[content] API indisponível, usando DEFAULT_CONTENT:',
-      err?.message || err
-    );
+    const rawData = result.data;
+
+    if (!rawData || typeof rawData !== 'object' || Array.isArray(rawData)) {
+      const err = new Error('O servidor retornou um conteúdo inválido.');
+      err.status = 422;
+      err.code = 'STORED_CONTENT_INVALID';
+      throw err;
+    }
+
+    const validation = validateContentSchema(rawData);
+
+    if (!validation.valid) {
+      const err = new Error(
+        'O conteúdo armazenado possui inconsistências: ' + validation.errors.join(' ')
+      );
+      err.code = 'STORED_CONTENT_INVALID';
+      err.status = 422;
+      throw err;
+    }
+
     return {
-      data: JSON.parse(JSON.stringify(DEFAULT_CONTENT)),
-      version: 0,
-      updatedAt: null
+      data: normalizeContent(rawData),
+      version: Number.isInteger(Number(result.version)) ? Number(result.version) : 0,
+      updatedAt: result.updatedAt || null
     };
+
+  } catch (err) {
+    // Nunca substituir silenciosamente dados por defaults em erros HTTP/autenticação
+    if (err?.status || err?.code === 'STORED_CONTENT_INVALID') {
+      throw err;
+    }
+
+    // Fallback somente quando a API está realmente indisponível
+    console.warn('[content] Falha de comunicação com a API:', err?.message || err);
+    throw new Error(
+      'Não foi possível carregar o conteúdo do servidor. Verifique a conexão e tente novamente.'
+    );
   }
 }
 
@@ -65,34 +77,42 @@ export async function saveContent(data, options = {}) {
     throw new Error('Conteúdo inválido.');
   }
 
-  // ── Validação de schema (best-effort) ──────────────────────
+  // Validação de schema
   const validation = validateContentSchema(data);
   if (!validation.valid) {
-    const err = new Error(
-      `Conteúdo inválido: ${validation.errors.join(' ')}`
-    );
+    const err = new Error(`Conteúdo inválido: ${validation.errors.join(' ')}`);
     err.status = 422;
     err.code = 'SCHEMA_INVALID';
     err.errors = validation.errors;
     throw err;
   }
 
-  // Aplica normalização (defaults + coerção segura)
+  // Normalização
   const normalized = normalizeContent(validation.data);
 
-  // Check local de tamanho
+  // Tamanho em bytes reais (UTF-8)
   const serialized = JSON.stringify(normalized);
-  if (serialized.length > MAX_PAYLOAD_BYTES) {
-    const err = new Error('Conteúdo muito grande. Reduza imagens ou remova itens.');
+  const payloadBytes = new TextEncoder().encode(serialized).byteLength;
+
+  if (payloadBytes > MAX_PAYLOAD_BYTES) {
+    const err = new Error('Conteúdo muito grande. O limite é de 2 MB.');
     err.status = 413;
     err.code = 'PAYLOAD_TOO_LARGE';
     throw err;
   }
 
-  // Versão base para controle de concorrência otimista
-  const baseVersion = Number.isFinite(options.baseVersion)
-    ? Number(options.baseVersion)
-    : undefined;
+  // baseVersion validado
+  let baseVersion;
+  if (options.baseVersion !== undefined) {
+    baseVersion = Number(options.baseVersion);
+
+    if (!Number.isSafeInteger(baseVersion) || baseVersion < 0) {
+      const err = new Error('A versão base do conteúdo é inválida. Recarregue o painel.');
+      err.status = 400;
+      err.code = 'INVALID_BASE_VERSION';
+      throw err;
+    }
+  }
 
   let result;
   try {
@@ -130,12 +150,6 @@ export async function saveContent(data, options = {}) {
 
 // ─────────────────────────────────────────────────────────────
 // SCHEMA — Validação mínima
-// ------------------------------------------------------------
-// Regras:
-//  - Se a seção existe, deve ser do tipo esperado (object/array)
-//  - Se não existe, é tolerada (será preenchida com default)
-//  - Campos internos desconhecidos NÃO são removidos (extensível)
-//  - Campos internos críticos são validados por tipo
 // ─────────────────────────────────────────────────────────────
 export function validateContentSchema(content) {
   const errors = [];
@@ -144,7 +158,6 @@ export function validateContentSchema(content) {
     return { valid: false, errors: ['Conteúdo deve ser um objeto.'], data: null };
   }
 
-  // Helper: valida se um campo (se presente) é do tipo esperado
   const checkType = (path, value, expectedType, { required = false } = {}) => {
     if (value === undefined || value === null) {
       if (required) errors.push(`"${path}" é obrigatório.`);
@@ -158,7 +171,6 @@ export function validateContentSchema(content) {
     return true;
   };
 
-  // Helper: valida array de objetos com pelo menos 1 campo obrigatório
   const checkArrayOfObjects = (path, arr, requiredField) => {
     if (!Array.isArray(arr)) return;
     arr.forEach((item, idx) => {
@@ -172,7 +184,22 @@ export function validateContentSchema(content) {
     });
   };
 
-  // ── branding ──────────────────────────────────────────────
+  const validateUniqueIds = (items, path) => {
+    if (!Array.isArray(items)) return;
+    const ids = new Set();
+    items.forEach((item, index) => {
+      if (!item || typeof item.id !== 'string') return;
+      const id = item.id.trim();
+      if (!id) {
+        errors.push(`${path}[${index}].id não pode ser vazio.`);
+        return;
+      }
+      if (ids.has(id)) errors.push(`ID duplicado em ${path}: ${id}.`);
+      ids.add(id);
+    });
+  };
+
+  // branding
   if (checkType('branding', content.branding, 'object')) {
     const b = content.branding;
     if (b) {
@@ -184,7 +211,7 @@ export function validateContentSchema(content) {
     }
   }
 
-  // ── hero ──────────────────────────────────────────────────
+  // hero
   if (checkType('hero', content.hero, 'object')) {
     const h = content.hero;
     if (h) {
@@ -196,7 +223,7 @@ export function validateContentSchema(content) {
     }
   }
 
-  // ── sobre ─────────────────────────────────────────────────
+  // sobre
   if (checkType('sobre', content.sobre, 'object')) {
     const s = content.sobre;
     if (s) {
@@ -208,20 +235,18 @@ export function validateContentSchema(content) {
     }
   }
 
-  // ── filosofia ─────────────────────────────────────────────
+  // filosofia
   if (checkType('filosofia', content.filosofia, 'object')) {
     const f = content.filosofia;
     if (f) {
       checkType('filosofia.title', f.title, 'string');
       checkType('filosofia.subtitle', f.subtitle, 'string');
       checkType('filosofia.frases', f.frases, 'array');
-      if (Array.isArray(f.frases)) {
-        checkArrayOfObjects('filosofia.frases', f.frases, 'text');
-      }
+      if (Array.isArray(f.frases)) checkArrayOfObjects('filosofia.frases', f.frases, 'text');
     }
   }
 
-  // ── discografia ───────────────────────────────────────────
+  // discografia
   if (checkType('discografia', content.discografia, 'object')) {
     const d = content.discografia;
     if (d) {
@@ -230,7 +255,7 @@ export function validateContentSchema(content) {
     }
   }
 
-  // ── playlists ─────────────────────────────────────────────
+  // playlists
   if (checkType('playlists', content.playlists, 'array')) {
     if (Array.isArray(content.playlists)) {
       content.playlists.forEach((p, idx) => {
@@ -242,10 +267,11 @@ export function validateContentSchema(content) {
         if (!p.title) errors.push(`"playlists[${idx}].title" é obrigatório.`);
         checkType(`playlists[${idx}].tracks`, p.tracks, 'array');
       });
+      validateUniqueIds(content.playlists, 'playlists');
     }
   }
 
-  // ── planos ────────────────────────────────────────────────
+  // planos
   if (checkType('planos', content.planos, 'object')) {
     const p = content.planos;
     if (p) {
@@ -262,11 +288,12 @@ export function validateContentSchema(content) {
           if (!plan.name) errors.push(`"planos.plans[${idx}].name" é obrigatório.`);
           checkType(`planos.plans[${idx}].features`, plan.features, 'array');
         });
+        validateUniqueIds(p.plans, 'planos.plans');
       }
     }
   }
 
-  // ── contato ───────────────────────────────────────────────
+  // contato
   if (checkType('contato', content.contato, 'object')) {
     const c = content.contato;
     if (c) {
@@ -281,16 +308,14 @@ export function validateContentSchema(content) {
             errors.push(`"contato.socials[${idx}]" deve ser um objeto.`);
             return;
           }
-          if (!s.network && !s.icon) {
-            errors.push(`"contato.socials[${idx}].network" é obrigatório.`);
-          }
+          if (!s.network && !s.icon) errors.push(`"contato.socials[${idx}].network" é obrigatório.`);
           if (!s.url) errors.push(`"contato.socials[${idx}].url" é obrigatório.`);
         });
       }
     }
   }
 
-  // ── aparencia ─────────────────────────────────────────────
+  // aparencia
   if (checkType('aparencia', content.aparencia, 'object')) {
     const a = content.aparencia;
     if (a) {
@@ -302,99 +327,45 @@ export function validateContentSchema(content) {
     }
   }
 
-  return {
-    valid: errors.length === 0,
-    errors,
-    data: content
-  };
+  return { valid: errors.length === 0, errors, data: content };
 }
 
 // ─────────────────────────────────────────────────────────────
-// NORMALIZE — Preenche defaults sem quebrar extensões
-// ------------------------------------------------------------
-// Regras:
-//  - Se uma seção não existe → usa default do DEFAULT_CONTENT
-//  - Se existe mas faltam campos → preenche com default
-//  - Se existe e é tipo errado → mantém o default (substitui)
-//  - Campos extras NÃO são removidos
+// NORMALIZE — mergeDefaults recursivo
 // ─────────────────────────────────────────────────────────────
+function mergeDefaults(defaults, current) {
+  if (Array.isArray(defaults)) {
+    return Array.isArray(current) ? JSON.parse(JSON.stringify(current)) : JSON.parse(JSON.stringify(defaults));
+  }
+
+  if (
+    defaults &&
+    typeof defaults === 'object' &&
+    current &&
+    typeof current === 'object' &&
+    !Array.isArray(current)
+  ) {
+    const result = JSON.parse(JSON.stringify(defaults));
+
+    for (const key of Object.keys(current)) {
+      if (Object.prototype.hasOwnProperty.call(defaults, key)) {
+        result[key] = mergeDefaults(defaults[key], current[key]);
+      } else {
+        result[key] = JSON.parse(JSON.stringify(current[key]));
+      }
+    }
+
+    return result;
+  }
+
+  return current === undefined || current === null
+    ? JSON.parse(JSON.stringify(defaults))
+    : current;
+}
+
 export function normalizeContent(content) {
   if (!content || typeof content !== 'object' || Array.isArray(content)) {
     return JSON.parse(JSON.stringify(DEFAULT_CONTENT));
   }
-
-  const out = JSON.parse(JSON.stringify(content));
-  const def = DEFAULT_CONTENT;
-
-  // Helper: se campo não existe ou é tipo errado, usa default
-  const ensureType = (obj, key, expectedType) => {
-    const val = obj[key];
-    const actualType = Array.isArray(val) ? 'array' : typeof val;
-    if (val === undefined || val === null || actualType !== expectedType) {
-      // Só substitui se for tipo errado E o default existir
-      if (def[key] !== undefined) {
-        obj[key] = JSON.parse(JSON.stringify(def[key]));
-      }
-    }
-  };
-
-  // branding
-  if (typeof out.branding !== 'object' || out.branding === null || Array.isArray(out.branding)) {
-    out.branding = JSON.parse(JSON.stringify(def.branding || {}));
-  } else {
-    ensureType(out.branding, 'nameParts', 'object');
-    ensureType(out.branding, 'meta', 'object');
-  }
-
-  // hero
-  if (typeof out.hero !== 'object' || out.hero === null || Array.isArray(out.hero)) {
-    out.hero = JSON.parse(JSON.stringify(def.hero || {}));
-  } else {
-    ensureType(out.hero, 'primaryBtn', 'object');
-    ensureType(out.hero, 'secondaryBtn', 'object');
-    ensureType(out.hero, 'vinyl', 'object');
-  }
-
-  // sobre
-  if (typeof out.sobre !== 'object' || out.sobre === null || Array.isArray(out.sobre)) {
-    out.sobre = JSON.parse(JSON.stringify(def.sobre || {}));
-  }
-
-  // filosofia
-  if (typeof out.filosofia !== 'object' || out.filosofia === null || Array.isArray(out.filosofia)) {
-    out.filosofia = JSON.parse(JSON.stringify(def.filosofia || {}));
-  } else {
-    ensureType(out.filosofia, 'frases', 'array');
-  }
-
-  // discografia
-  if (typeof out.discografia !== 'object' || out.discografia === null || Array.isArray(out.discografia)) {
-    out.discografia = JSON.parse(JSON.stringify(def.discografia || {}));
-  }
-
-  // playlists
-  if (!Array.isArray(out.playlists)) {
-    out.playlists = JSON.parse(JSON.stringify(def.playlists || []));
-  }
-
-  // planos
-  if (typeof out.planos !== 'object' || out.planos === null || Array.isArray(out.planos)) {
-    out.planos = JSON.parse(JSON.stringify(def.planos || {}));
-  } else {
-    ensureType(out.planos, 'plans', 'array');
-  }
-
-  // contato
-  if (typeof out.contato !== 'object' || out.contato === null || Array.isArray(out.contato)) {
-    out.contato = JSON.parse(JSON.stringify(def.contato || {}));
-  } else {
-    ensureType(out.contato, 'socials', 'array');
-  }
-
-  // aparencia
-  if (typeof out.aparencia !== 'object' || out.aparencia === null || Array.isArray(out.aparencia)) {
-    out.aparencia = JSON.parse(JSON.stringify(def.aparencia || {}));
-  }
-
-  return out;
+  return mergeDefaults(DEFAULT_CONTENT, content);
 }
