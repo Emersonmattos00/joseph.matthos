@@ -1,11 +1,13 @@
 /* ============================================================
    api/admin.js — Painel administrativo (Versão Final Auditada)
    ------------------------------------------------------------
-   Correções aplicadas (Etapa 10):
+   Correções aplicadas:
    - upload-sign: passa contentType correto para createSignedUploadUrl
    - upload / upload-confirm: usa kind lógico (não nome físico)
-   - BUCKET_BY_KIND: mapeia kind → kind (storage resolve o físico)
-   - Download: usa kind lógico 'audio-full'
+   - Valida MIME, extensão e tamanho dos uploads
+   - Sincroniza published/status em handleUpdateTrack
+   - Transação em handleDeleteAlbum
+   - Validações de payload em álbuns e faixas
    ============================================================ */
 
 'use strict';
@@ -42,8 +44,27 @@ const CONTENT_KEY = 'default';
 const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
 
-// ★ CORREÇÃO: kinds lógicos (storage resolve para o bucket físico)
+// ★ Kinds lógicos (o storage resolve para o bucket físico)
 const VALID_KINDS = new Set(['image', 'audio-preview', 'audio-full']);
+
+// ★ Regras de upload
+const UPLOAD_RULES = {
+  image: {
+    extensions: ['jpg', 'jpeg', 'png', 'webp'],
+    mimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+    maxBytes: 10 * 1024 * 1024
+  },
+  'audio-preview': {
+    extensions: ['mp3', 'm4a', 'ogg', 'wav'],
+    mimeTypes: ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/x-wav'],
+    maxBytes: 30 * 1024 * 1024
+  },
+  'audio-full': {
+    extensions: ['mp3', 'm4a', 'ogg', 'wav'],
+    mimeTypes: ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/x-wav'],
+    maxBytes: 300 * 1024 * 1024
+  }
+};
 
 const VALID_ACTIONS = new Set([
   'login', 'session', 'logout', 'content',
@@ -229,31 +250,59 @@ async function handlePutContent(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOADS (★ corrigidos para usar kind lógico)
+// UTILS de upload
+// ─────────────────────────────────────────────────────────────
+function validateUploadInput(body) {
+  const kind = String(body.kind || '').trim();
+  const filename = String(body.filename || '').trim();
+  const contentType = String(body.contentType || '').trim().toLowerCase();
+  const size = Number(body.size) || 0;
+  const rule = UPLOAD_RULES[kind];
+
+  if (!rule) throw new Error('Tipo de upload não permitido.');
+  if (!filename || filename.length > 180 || /[\/\\\r\n]/.test(filename)) {
+    throw new Error('Nome de arquivo inválido.');
+  }
+
+  const ext = filename.split('.').pop().toLowerCase();
+  if (!rule.extensions.includes(ext)) throw new Error('Extensão não permitida.');
+  if (!rule.mimeTypes.includes(contentType)) throw new Error('MIME não permitido.');
+  if (size > 0 && size > rule.maxBytes) throw new Error('Arquivo muito grande.');
+
+  return { kind, filename, ext, contentType, size };
+}
+
+function createUploadPath(kind, extension) {
+  const directory = kind === 'image'
+    ? 'images'
+    : kind === 'audio-preview'
+      ? 'audio/previews'
+      : 'audio/full';
+
+  const filename = `${Date.now()}_${crypto.randomBytes(12).toString('hex')}.${extension}`;
+  return `${directory}/${filename}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// UPLOADS
 // ─────────────────────────────────────────────────────────────
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
-  const kind = String(body.kind || '').trim();
+
+  let file;
+  try { file = validateUploadInput(body); }
+  catch (err) { return sendJson(res, 400, { ok: false, error: err.message }); }
+
   const buffer = Buffer.from(String(body.base64 || ''), 'base64');
+  if (!buffer.length) return sendJson(res, 400, { ok: false, error: 'Arquivo vazio.' });
 
-  if (!VALID_KINDS.has(kind)) {
-    return sendJson(res, 400, { ok: false, error: 'Tipo de upload inválido.' });
-  }
-  if (!buffer.length) {
-    return sendJson(res, 400, { ok: false, error: 'Arquivo vazio.' });
-  }
-  if (!body.contentType) {
-    return sendJson(res, 400, { ok: false, error: 'contentType obrigatório.' });
-  }
-
-  const ext = String(body.filename || '').split('.').pop().toLowerCase();
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
+  const path = createUploadPath(file.kind, file.ext);
 
   try {
-    await uploadObject(kind, path, buffer, body.contentType);
-    const publicUrl = kind !== 'audio-full' ? b2GetPublicUrl(kind, path) : null;
-    return sendJson(res, 200, { ok: true, url: publicUrl, path, kind });
+    await uploadObject(file.kind, path, buffer, file.contentType);
+    const publicUrl = file.kind !== 'audio-full' ? b2GetPublicUrl(file.kind, path) : null;
+    await audit('upload.direct', { actor: session.user, metadata: { kind: file.kind, path } });
+    return sendJson(res, 200, { ok: true, url: publicUrl, path, kind: file.kind });
   } catch (err) {
     console.error('[admin/upload]', err.message);
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
@@ -262,30 +311,22 @@ async function handleUpload(req, res, session) {
 
 async function handleUploadSign(req, res, session) {
   const body = parseBody(req);
-  const kind = String(body.kind || '').trim();
-  const filename = String(body.filename || '').trim();
-  const contentType = String(body.contentType || '').trim();
 
-  if (!VALID_KINDS.has(kind)) {
-    return sendJson(res, 400, { ok: false, error: 'Tipo de upload inválido.' });
-  }
-  if (!filename || !contentType) {
-    return sendJson(res, 400, { ok: false, error: 'filename e contentType obrigatórios.' });
-  }
+  let file;
+  try { file = validateUploadInput(body); }
+  catch (err) { return sendJson(res, 400, { ok: false, error: err.message }); }
 
-  const ext = filename.split('.').pop().toLowerCase();
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
+  const path = createUploadPath(file.kind, file.ext);
 
   try {
-    // ★ CORREÇÃO: 4 argumentos — (kind, path, contentType, TTL)
-    const signed = await b2CreateSignedUploadUrl(kind, path, contentType, SIGNED_UPLOAD_TTL_SEC);
+    const signed = await b2CreateSignedUploadUrl(file.kind, path, file.contentType, SIGNED_UPLOAD_TTL_SEC);
+    await audit('admin.upload.sign', { actor: session.user, metadata: { kind: file.kind, path } });
     return sendJson(res, 200, {
       ok: true,
       uploadUrl: signed.uploadUrl,
-      token: signed.token,
       path,
-      kind
+      kind: file.kind,
+      expiresIn: SIGNED_UPLOAD_TTL_SEC
     });
   } catch (err) {
     console.error('[admin/upload-sign]', err.message);
@@ -307,16 +348,31 @@ async function handleUploadConfirm(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
   }
 
-  if (albumId && (!isUuid(albumId) || trackIndex === null || !Number.isInteger(trackIndex) || trackIndex < 1)) {
-    return sendJson(res, 400, { ok: false, error: 'Álbum ou número da faixa inválido.' });
+  if (path.startsWith('/') || path.includes('\\') || path.split('/').some(p => !p || p === '.' || p === '..')) {
+    return sendJson(res, 400, { ok: false, error: 'Caminho de arquivo inválido.' });
+  }
+
+  if (albumId && !isUuid(albumId)) {
+    return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
+  }
+
+  if (trackIndex !== null && (!Number.isInteger(trackIndex) || trackIndex < 1)) {
+    return sendJson(res, 400, { ok: false, error: 'Número da faixa inválido.' });
+  }
+
+  if ((albumId && !trackIndex) || (!albumId && trackIndex)) {
+    return sendJson(res, 400, { ok: false, error: 'Álbum e número da faixa devem ser informados juntos.' });
   }
 
   try {
-    // ★ CORREÇÃO: kind lógico
     const exists = await b2ObjectExists(kind, path);
     if (!exists) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no armazenamento.' });
 
     if (albumId && trackIndex !== null) {
+      if (kind === 'image') {
+        return sendJson(res, 400, { ok: false, error: 'Imagem não pode ser associada como áudio.' });
+      }
+
       const isFull = kind === 'audio-full';
       const patch = isFull
         ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
@@ -470,13 +526,27 @@ async function handleUpdateAlbum(req, res, session) {
 }
 
 async function handleDeleteAlbum(req, res, session) {
-  await db.delete(tracks).where(eq(tracks.albumId, req.query.id));
-  await db.delete(albums).where(eq(albums.id, req.query.id));
-  return sendJson(res, 200, { ok: true });
+  const albumId = String(req.query.id || '').trim();
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx.delete(tracks).where(eq(tracks.albumId, albumId));
+      await tx.delete(albums).where(eq(albums.id, albumId));
+    });
+    await audit('album.delete', { actor: session.user, target: albumId });
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    console.error('[admin/album-delete]', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível excluir o álbum.' });
+  }
 }
 
 async function handleListTracks(req, res) {
-  const rows = await db.select().from(tracks).where(eq(tracks.albumId, req.query.albumId)).orderBy(asc(tracks.trackNumber));
+  const albumId = String(req.query.albumId || '').trim();
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
+
+  const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
   return sendJson(res, 200, { ok: true, tracks: rows });
 }
 
@@ -521,7 +591,11 @@ async function handleUpdateTrack(req, res, session) {
 
   const patch = {};
   if (body.title) patch.title = body.title;
-  if (body.published !== undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
+  if (body.published !== undefined) {
+    const published = body.published === true;
+    patch.status = published ? 'PUBLISHED' : 'DRAFT';
+    patch.published = published;
+  }
   if (body.full_path) { patch.fullPath = body.full_path; patch.streamKey = body.full_path; }
   if (body.preview_path) { patch.previewPath = body.preview_path; patch.previewKey = body.preview_path; }
 
@@ -538,8 +612,12 @@ async function handleDeleteTrack(req, res, session) {
 
 async function handleReorderTracks(req, res, session) {
   const body = parseBody(req);
-  for (const item of body.order) {
-    await db.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
+  const order = Array.isArray(body.order) ? body.order : [];
+  if (!order.length) return sendJson(res, 400, { ok: false, error: 'Lista de reordenação vazia.' });
+
+  for (const item of order) {
+    if (!isUuid(item.id) || !Number.isInteger(Number(item.track_number)) || Number(item.track_number) < 1) continue;
+    await db.update(tracks).set({ trackNumber: Number(item.track_number) }).where(eq(tracks.id, item.id));
   }
   return sendJson(res, 200, { ok: true });
 }
@@ -550,7 +628,7 @@ async function handleUpdateLyrics(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DOWNLOADS (★ corrigidos para usar kind lógico)
+// DOWNLOADS
 // ─────────────────────────────────────────────────────────────
 async function handleDownloadUrl(req, res, session) {
   const [track] = await db.select().from(tracks).where(eq(tracks.id, req.query.id)).limit(1);
