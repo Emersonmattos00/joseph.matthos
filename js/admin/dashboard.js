@@ -1,34 +1,26 @@
 /* ============================================================
    admin/dashboard.js — Cards de estatísticas do painel
    ------------------------------------------------------------
-   - Endpoints consolidados: /api/admin?action=users|sales
-   - Usa `summary` do endpoint de sales quando disponível
-   - ✅ Loading, erro e retry INDIVIDUAIS por painel:
-       - users  → card de usuários + recentes
-       - sales  → cards de assinaturas/aluguéis/receita
-   - Se ambos falharem com 401/403, propaga para o index.js
-     redirecionar para login
-   - Falha de rede/5xx em um painel NÃO bloqueia o outro
+   Correções aplicadas (auditoria):
+   - Aceita o contrato real da API (sales: [...])
+   - Não inventa indicadores de assinaturas/aluguéis
+   - Retry sem depender de :last-of-type
+   - Sessão expirada detectada com 1 painel (não os 2)
+   - Normalização de plano (lowercase/trim)
    ============================================================ */
 
 import { apiFetch } from './api.js';
 import { esc, formatCents, formatDate } from './ui/format.js';
 
-// ─────────────────────────────────────────────────────────────
-// Estado interno do dashboard
-// ------------------------------------------------------------
-// Cada painel tem seu próprio estado para permitir
-// loading/erro/retry individual.
-// ─────────────────────────────────────────────────────────────
 const DashState = {
   users: {
-    status: 'idle', // idle | loading | ready | error
+    status: 'idle',
     data: [],
     error: null
   },
   sales: {
     status: 'idle',
-    data: { subscriptions: [], rentals: [], summary: null },
+    data: { orders: [] },
     error: null
   }
 };
@@ -37,32 +29,21 @@ const DashState = {
 // Entrada pública
 // ─────────────────────────────────────────────────────────────
 export async function renderDashboard() {
-  // 1) Skeleton inicial (ambos os painéis)
   paintUsersLoading();
   paintSalesLoading();
 
-  // 2) Dispara em paralelo (não bloqueia um pelo outro)
-  await Promise.allSettled([
-    fetchUsers(),
-    fetchSales()
-  ]);
+  await Promise.allSettled([fetchUsers(), fetchSales()]);
 
-  // 3) Se AMBOS falharam com 401/403, propaga (login expirou)
-  const usersAuthFail =
-    DashState.users.status === 'error' &&
-    (DashState.users.error?.status === 401 || DashState.users.error?.status === 403);
+  // Se qualquer painel falhou com 401/403, propaga
+  const authError =
+    [DashState.users.error, DashState.sales.error]
+      .find(err => err?.status === 401 || err?.status === 403);
 
-  const salesAuthFail =
-    DashState.sales.status === 'error' &&
-    (DashState.sales.error?.status === 401 || DashState.sales.error?.status === 403);
-
-  if (usersAuthFail && salesAuthFail) {
-    throw DashState.users.error || DashState.sales.error;
-  }
+  if (authError) throw authError;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch individual — USERS
+// Fetch — USERS
 // ─────────────────────────────────────────────────────────────
 async function fetchUsers() {
   DashState.users.status = 'loading';
@@ -79,21 +60,16 @@ async function fetchUsers() {
     paintRecent(users);
   } catch (err) {
     console.error('[dashboard] users:', err);
-
-    if (err?.status === 401 || err?.status === 403) {
-      DashState.users.status = 'error';
-      DashState.users.error = err;
-      throw err; // propaga para o renderDashboard decidir
-    }
-
     DashState.users.status = 'error';
     DashState.users.error = err;
+
+    if (err?.status === 401 || err?.status === 403) throw err;
     paintUsersError(err);
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch individual — SALES
+// Fetch — SALES (contrato real: sales: [...])
 // ─────────────────────────────────────────────────────────────
 async function fetchSales() {
   DashState.sales.status = 'loading';
@@ -102,73 +78,57 @@ async function fetchSales() {
   try {
     const res = await apiFetch('sales', { method: 'GET' });
 
-    const data = {
-      subscriptions: Array.isArray(res?.subscriptions) ? res.subscriptions : [],
-      rentals: Array.isArray(res?.rentals) ? res.rentals : [],
-      summary: res?.summary || null
-    };
+    if (res?.ok !== true || !Array.isArray(res.sales)) {
+      throw new Error('O servidor retornou uma lista de vendas inválida.');
+    }
 
-    DashState.sales.data = data;
+    DashState.sales.data = { orders: res.sales };
     DashState.sales.status = 'ready';
 
     paintSalesReady();
   } catch (err) {
     console.error('[dashboard] sales:', err);
-
-    if (err?.status === 401 || err?.status === 403) {
-      DashState.sales.status = 'error';
-      DashState.sales.error = err;
-      throw err;
-    }
-
     DashState.sales.status = 'error';
     DashState.sales.error = err;
+
+    if (err?.status === 401 || err?.status === 403) throw err;
     paintSalesError(err);
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Retry individual — expostos no window para os botões
+// Retry
 // ─────────────────────────────────────────────────────────────
 export async function retryUsers() {
-  try {
-    await fetchUsers();
-  } catch (err) {
-    if (err?.status === 401 || err?.status === 403) {
-      throw err; // index.js trata redirecionando para login
-    }
+  try { await fetchUsers(); }
+  catch (err) {
+    if (err?.status === 401 || err?.status === 403) throw err;
   }
 }
 
 export async function retrySales() {
-  try {
-    await fetchSales();
-  } catch (err) {
-    if (err?.status === 401 || err?.status === 403) {
-      throw err;
-    }
+  try { await fetchSales(); }
+  catch (err) {
+    if (err?.status === 401 || err?.status === 403) throw err;
   }
 }
 
-// Expõe no window para os botões onclick inline
 if (typeof window !== 'undefined') {
   window.__dashboardRetryUsers = () => {
-    retryUsers().catch((e) => console.warn('[dashboard] retryUsers:', e));
+    retryUsers().catch(e => console.warn('[dashboard] retryUsers:', e));
   };
   window.__dashboardRetrySales = () => {
-    retrySales().catch((e) => console.warn('[dashboard] retrySales:', e));
+    retrySales().catch(e => console.warn('[dashboard] retrySales:', e));
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-// PINTURA — USERS
+// Pintura — USERS
 // ─────────────────────────────────────────────────────────────
 function paintUsersLoading() {
   const el = document.getElementById('statsGrid');
   if (!el) return;
 
-  // Não apaga os cards já pintados de sales — só adiciona placeholder
-  // Se ainda não temos nada, mostra skeleton geral
   if (!el.querySelector('.stat-card[data-panel="sales"]')) {
     el.innerHTML = `
       <div class="stat-card" data-panel="users">
@@ -177,23 +137,22 @@ function paintUsersLoading() {
         <div class="hint loading-hint">Carregando…</div>
       </div>
       <div class="stat-card" data-panel="sales">
-        <div class="label">Assinaturas ativas</div>
+        <div class="label">Pedidos consultados</div>
         <div class="value">—</div>
         <div class="hint loading-hint">Carregando…</div>
       </div>
       <div class="stat-card" data-panel="sales">
-        <div class="label">Receita aluguéis</div>
+        <div class="label">Pedidos pagos</div>
         <div class="value">—</div>
         <div class="hint loading-hint">Carregando…</div>
       </div>
       <div class="stat-card" data-panel="sales">
-        <div class="label">Aluguéis</div>
+        <div class="label">Receita dos pedidos pagos</div>
         <div class="value">—</div>
         <div class="hint loading-hint">Carregando…</div>
       </div>
     `;
   } else {
-    // Só atualiza o card de users
     const card = el.querySelector('.stat-card[data-panel="users"]');
     if (card) {
       card.innerHTML = `
@@ -210,10 +169,14 @@ function paintUsersReady() {
   if (!el) return;
 
   const users = DashState.users.data;
-  const premium = users.filter(
-    (u) => u.plan === 'premium' || u.plan === 'anual'
-  ).length;
-  const free = users.length - premium;
+
+  // ★ Normalização de plano (case-insensitive + trim)
+  const premium = users.filter(user => {
+    const plan = String(user.plan || '').trim().toLowerCase();
+    return ['premium', 'anual'].includes(plan);
+  }).length;
+
+  const free = Math.max(0, users.length - premium);
 
   const card = el.querySelector('.stat-card[data-panel="users"]');
   if (card) {
@@ -230,7 +193,6 @@ function paintUsersError(err) {
   if (!el) return;
 
   const msg = friendlyError(err, 'usuários');
-
   const card = el.querySelector('.stat-card[data-panel="users"]');
   if (card) {
     card.classList.add('is-error');
@@ -248,15 +210,13 @@ function paintUsersError(err) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// PINTURA — SALES
+// Pintura — SALES (baseado em `orders`)
 // ─────────────────────────────────────────────────────────────
 function paintSalesLoading() {
   const el = document.getElementById('statsGrid');
   if (!el) return;
 
-  // Os 3 cards de sales já foram criados no paintUsersLoading
-  // Aqui só garante que estão no estado loading
-  el.querySelectorAll('.stat-card[data-panel="sales"]').forEach((card) => {
+  el.querySelectorAll('.stat-card[data-panel="sales"]').forEach(card => {
     card.classList.remove('is-error');
     const hint = card.querySelector('.hint');
     if (hint && !hint.classList.contains('loading-hint')) {
@@ -271,45 +231,35 @@ function paintSalesReady() {
   const el = document.getElementById('statsGrid');
   if (!el) return;
 
-  const sales = DashState.sales.data;
-  const users = DashState.users.data;
+  const orders = DashState.sales.data.orders || [];
+  const paidOrders = orders.filter(o => o.status === 'PAID');
 
-  const summary = sales.summary;
-  const activeSubs =
-    summary?.subscriptions?.active ??
-    sales.subscriptions.filter((s) => s.status === 'authorized').length;
-  const totalRentals = summary?.rentals?.total ?? sales.rentals.length;
-  const rentalRevenueCents =
-    summary?.rentals?.revenueCents ??
-    sales.rentals.reduce((sum, r) => sum + normalizeCents(r), 0);
+  const paidRevenueCents = paidOrders.reduce((total, order) => {
+    const amount = Number(order.totalCents);
+    return Number.isSafeInteger(amount) && amount >= 0 ? total + amount : total;
+  }, 0);
 
-  // Atualiza cada card de sales
   const cards = el.querySelectorAll('.stat-card[data-panel="sales"]');
-  if (cards.length >= 3) {
-    // Card 1: Assinaturas ativas
-    cards[0].classList.remove('is-error');
-    cards[0].innerHTML = `
-      <div class="label">Assinaturas ativas</div>
-      <div class="value">${activeSubs}</div>
-      <div class="hint">${users.length ? Math.round((activeSubs / users.length) * 100) : 0}% do total</div>
-    `;
-
-    // Card 2: Receita aluguéis
-    cards[1].classList.remove('is-error');
-    cards[1].innerHTML = `
-      <div class="label">Receita aluguéis</div>
-      <div class="value">${formatCents(rentalRevenueCents)}</div>
-      <div class="hint">todos os tempos</div>
-    `;
-
-    // Card 3: Aluguéis
-    cards[2].classList.remove('is-error');
-    cards[2].innerHTML = `
-      <div class="label">Aluguéis</div>
-      <div class="value">${totalRentals}</div>
-      <div class="hint">total</div>
-    `;
+  if (cards.length < 3) {
+    console.error('[dashboard] Cards de vendas não encontrados.');
+    return;
   }
+
+  const cardData = [
+    { label: 'Pedidos consultados', value: orders.length, hint: 'amostra de até 50 pedidos' },
+    { label: 'Pedidos pagos', value: paidOrders.length, hint: 'dentro dos pedidos consultados' },
+    { label: 'Receita dos pedidos pagos', value: formatCents(paidRevenueCents), hint: 'amostra de até 50 pedidos' }
+  ];
+
+  cards.forEach((card, index) => {
+    const item = cardData[index];
+    card.classList.remove('is-error');
+    card.innerHTML = `
+      <div class="label">${esc(item.label)}</div>
+      <div class="value">${esc(item.value)}</div>
+      <div class="hint">${esc(item.hint)}</div>
+    `;
+  });
 }
 
 function paintSalesError(err) {
@@ -317,33 +267,37 @@ function paintSalesError(err) {
   if (!el) return;
 
   const msg = friendlyError(err, 'vendas');
+  const cards = el.querySelectorAll('.stat-card[data-panel="sales"]');
 
-  el.querySelectorAll('.stat-card[data-panel="sales"]').forEach((card) => {
+  cards.forEach(card => {
+    const label = card.querySelector('.label')?.textContent || 'Vendas';
     card.classList.add('is-error');
     card.innerHTML = `
-      <div class="label">${esc(card.querySelector('.label')?.textContent || 'Vendas')}</div>
+      <div class="label">${esc(label)}</div>
       <div class="value" style="color:var(--danger);font-size:1rem;">⚠</div>
-      <div class="hint" style="color:var(--danger);">
-        ${esc(msg)}
-      </div>
+      <div class="hint" style="color:var(--danger);">${esc(msg)}</div>
     `;
   });
 
-  // Adiciona botão de retry apenas no último card para não poluir
-  const last = el.querySelector('.stat-card[data-panel="sales"]:last-of-type .hint');
-  if (last && !last.querySelector('.btn-retry')) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn-retry';
-    btn.textContent = 'Tentar novamente';
-    btn.onclick = () => window.__dashboardRetrySales?.();
-    last.appendChild(document.createElement('br'));
-    last.appendChild(btn);
+  const lastCard = cards[cards.length - 1];
+  if (lastCard) {
+    const hint = lastCard.querySelector('.hint');
+    if (hint && !hint.querySelector('.btn-retry')) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn-retry';
+      button.textContent = 'Tentar novamente';
+      button.addEventListener('click', () => {
+        retrySales().catch(err => console.warn('[dashboard] retrySales:', err));
+      });
+      hint.appendChild(document.createElement('br'));
+      hint.appendChild(button);
+    }
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// PINTURA — RECENTES (dependente de users)
+// Recentes
 // ─────────────────────────────────────────────────────────────
 function paintRecent(users) {
   const recentEl = document.getElementById('recentUsersTable');
@@ -351,8 +305,7 @@ function paintRecent(users) {
 
   const recent = users.slice(0, 5);
   if (!recent.length) {
-    recentEl.innerHTML =
-      '<p style="color:var(--text-dim);">Nenhum usuário cadastrado ainda.</p>';
+    recentEl.innerHTML = '<p style="color:var(--text-dim);">Nenhum usuário cadastrado ainda.</p>';
     return;
   }
 
@@ -362,17 +315,13 @@ function paintRecent(users) {
         <th>Nome</th><th>E-mail</th><th>Plano</th><th>Cadastro</th>
       </tr></thead>
       <tbody>
-        ${recent
-          .map(
-            (u) => `
+        ${recent.map(u => `
           <tr>
             <td>${esc(u.name)}</td>
             <td>${esc(u.email)}</td>
             <td>${badgePlan(u.plan)}</td>
             <td>${formatDate(u.createdAt)}</td>
-          </tr>`
-          )
-          .join('')}
+          </tr>`).join('')}
       </tbody>
     </table>`;
 }
@@ -381,16 +330,11 @@ function paintRecent(users) {
 // Helpers
 // ─────────────────────────────────────────────────────────────
 function badgePlan(plan) {
-  if (plan === 'free') return '<span class="badge-mini badge-free">Free</span>';
-  if (plan === 'premium') return '<span class="badge-mini badge-premium">Premium</span>';
-  if (plan === 'anual') return '<span class="badge-mini badge-anual">Anual</span>';
+  const normalized = String(plan || '').trim().toLowerCase();
+  if (normalized === 'free') return '<span class="badge-mini badge-free">Free</span>';
+  if (normalized === 'premium') return '<span class="badge-mini badge-premium">Premium</span>';
+  if (normalized === 'anual') return '<span class="badge-mini badge-anual">Anual</span>';
   return `<span class="badge-mini">${esc(plan || '—')}</span>`;
-}
-
-function normalizeCents(r) {
-  if (Number.isFinite(r?.amount_cents)) return r.amount_cents;
-  if (Number.isFinite(r?.amount)) return Math.round(r.amount * 100);
-  return 0;
 }
 
 function friendlyError(err, label) {
