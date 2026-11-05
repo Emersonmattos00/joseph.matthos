@@ -319,22 +319,14 @@ function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
   try { bindSocialsAddButton(); } catch (e) { console.warn(e); }
 
-  const addFraseBtn = document.getElementById('addFraseBtn');
-  if (addFraseBtn && addFraseBtn.dataset.bound !== '1') {
-    addFraseBtn.dataset.bound = '1';
-    addFraseBtn.addEventListener('click', () => {
-      if (!AdminState.content) return;
-      if (!AdminState.content.filosofia) AdminState.content.filosofia = {};
-      if (!Array.isArray(AdminState.content.filosofia.frases)) AdminState.content.filosofia.frases = [];
-      AdminState.content.filosofia.frases.push({
-        text: 'Nova frase',
-        author: 'Joseph Matthos'
-      });
-      renderFrasesEditor(AdminState.content);
-      markDirty();
-      safeCall('applyContentToSite', AdminState.content);
-    });
-  }
+const addFraseBtn = document.getElementById('addFraseBtn');
+if (addFraseBtn && addFraseBtn.dataset.bound !== '1') {
+  addFraseBtn.dataset.bound = '1';
+  addFraseBtn.addEventListener('click', () => {
+    addFrase(AdminState.content);
+    safeCall('applyContentToSite', AdminState.content);
+  });
+}
 }
 
 // ─────────────────────────────────────────────────────────────
