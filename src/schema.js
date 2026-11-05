@@ -2,7 +2,10 @@
 // Versão CJS pura — sem bundling do drizzle-kit
 'use strict';
 
-const { pgTable, text, uuid, timestamp, integer, boolean, jsonb, pgEnum, date, char, bigserial, index, uniqueIndex, foreignKey } = require('drizzle-orm/pg-core');
+const {
+  pgTable, text, uuid, timestamp, integer, boolean, jsonb, pgEnum,
+  date, char, bigserial, index, uniqueIndex
+} = require('drizzle-orm/pg-core');
 const { sql } = require('drizzle-orm');
 
 // ─── Enums ──────────────────────────────────────────
@@ -54,7 +57,7 @@ const albums = pgTable('albums', {
   year: integer(),
   type: text().default('album'),
   description: text(),
-  published: boolean().default(false),   // ✅ ADICIONADO
+  published: boolean().default(false),
   coverInitials: text('cover_initials'),
   orderIndex: integer('order_index').default(0)
 }, (t) => [
@@ -85,8 +88,8 @@ const tracks = pgTable('tracks', {
   trackNumber: integer('track_number'),
   fullPath: text('full_path'),
   previewPath: text('preview_path'),
-  published: boolean().default(false),   // ✅ ADICIONADO
-  locked: boolean().default(false)       // ✅ ADICIONADO
+  published: boolean().default(false),
+  locked: boolean().default(false)
 }, (t) => [
   index('tracks_album_id_idx').on(t.albumId),
   index('tracks_album_id_track_number_idx').on(t.albumId, t.trackNumber),
@@ -218,7 +221,11 @@ const paymentsEvents = pgTable('payments_events', {
   processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
   failureReason: text('failure_reason'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
-});
+}, (t) => [
+  uniqueIndex('payments_events_provider_event_key').on(t.provider, t.providerEvent),
+  index('payments_events_external_id_idx').on(t.externalId),
+  index('payments_events_created_at_idx').on(t.createdAt)
+]);
 
 // ─── Orders ──────────────────────────────────────────
 const orders = pgTable('orders', {
@@ -231,7 +238,10 @@ const orders = pgTable('orders', {
   idempotencyKey: text('idempotency_key'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
   paidAt: timestamp('paid_at', { withTimezone: true, mode: 'string' })
-}, (t) => [uniqueIndex('orders_idempotency_key_key').on(t.idempotencyKey), index('orders_user_id_idx').on(t.userId)]);
+}, (t) => [
+  uniqueIndex('orders_idempotency_key_key').on(t.idempotencyKey),
+  index('orders_user_id_idx').on(t.userId)
+]);
 
 const orderItems = pgTable('order_items', {
   id: uuid().primaryKey().defaultRandom(),
@@ -242,13 +252,80 @@ const orderItems = pgTable('order_items', {
   unitPriceCents: integer('unit_price_cents').notNull()
 });
 
-// ─── Outros (mantidos para compatibilidade) ──────────────
-const refreshTokens = pgTable('refresh_tokens', { id: uuid().primaryKey().defaultRandom() });
-const passwordResetTokens = pgTable('password_reset_tokens', { id: uuid().primaryKey().defaultRandom() });
-const emailVerificationTokens = pgTable('email_verification_tokens', { id: uuid().primaryKey().defaultRandom() });
-const newsletterSubscribers = pgTable('newsletter_subscribers', { id: uuid().primaryKey().defaultRandom() });
-const socialLinks = pgTable('social_links', { id: uuid().primaryKey().defaultRandom() });
-const playbackEvents = pgTable('playback_events', { id: bigserial({ mode: 'bigint' }).primaryKey().notNull() });
+// ─── Refresh Tokens (completo) ──────────────────────
+const refreshTokens = pgTable('refresh_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [
+  uniqueIndex('refresh_tokens_token_hash_key').on(t.tokenHash),
+  index('refresh_tokens_user_id_idx').on(t.userId)
+]);
+
+// ─── Password Reset Tokens (completo) ───────────────
+const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [
+  uniqueIndex('password_reset_tokens_token_hash_key').on(t.tokenHash),
+  index('password_reset_tokens_user_id_idx').on(t.userId)
+]);
+
+// ─── Email Verification Tokens (completo) ───────────
+const emailVerificationTokens = pgTable('email_verification_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [
+  uniqueIndex('email_verification_tokens_token_hash_key').on(t.tokenHash),
+  index('email_verification_tokens_user_id_idx').on(t.userId)
+]);
+
+// ─── Newsletter (completo) ──────────────────────────
+const newsletterSubscribers = pgTable('newsletter_subscribers', {
+  id: uuid().primaryKey().defaultRandom(),
+  email: text().notNull(),
+  name: text(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [uniqueIndex('newsletter_subscribers_email_key').on(t.email)]);
+
+// ─── Social Links (completo) ────────────────────────
+const socialLinks = pgTable('social_links', {
+  id: uuid().primaryKey().defaultRandom(),
+  platform: text().notNull(),
+  label: text().notNull(),
+  url: text().notNull(),
+  sortOrder: integer('sort_order').default(0).notNull(),
+  active: boolean().default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [
+  uniqueIndex('social_links_platform_key').on(t.platform)
+]);
+
+// ─── Playback Events (completo) ─────────────────────
+const playbackEvents = pgTable('playback_events', {
+  id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  trackId: uuid('track_id').notNull().references(() => tracks.id, { onDelete: 'restrict' }),
+  source: text().notNull(),
+  secondsPlayed: integer('seconds_played').default(0).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+}, (t) => [
+  index('playback_events_track_id_created_at_idx').on(t.trackId, t.createdAt),
+  index('playback_events_user_id_idx').on(t.userId)
+]);
+
+// ─── Compatibilidade ───────────────────────────────
 const prismaMigrations = pgTable('_prisma_migrations', { id: text().primaryKey() });
 
 // ─── Exporta tudo ──────────────────────────────────────

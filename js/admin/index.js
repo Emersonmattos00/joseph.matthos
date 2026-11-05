@@ -1,36 +1,40 @@
 /* ============================================================
    js/admin/index.js — Entrypoint do painel administrativo
    ------------------------------------------------------------
-   - Registra atalho Ctrl+Shift+A antes de qualquer API
-   - Detecta URL /?admin e abre o painel automaticamente
-   - FLUXO: sessão → conteúdo → dashboard
-   - Binds resilientes (try/catch por editor)
-   - Nav tabs com bind único (MutationObserver só no <nav>)
-   - Uploads de imagem (bg, vinil, sobre) via Base64
-   - Uploads de áudio vivem em editors/albums.js
-     (presigned URL + PATCH automático em tracks.*_path)
-   - Downloads de faixa/álbum vivem em editors/albums.js
-     (URLs assinadas via /api/admin?action=download-*)
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Removidos binds órfãos de previewUpload / fullUpload
-   2. Adicionado handler para a tab 'discografia'
-   3. Comentários atualizados para refletir o fluxo real
-   4. bindUpload de imagem mantido (imagens continuam Base64)
-   5. Resiliente a falhas (safeRender, safeCall)
-   6. Aba "Downloads" removida — funcionalidade embutida
-      em editors/albums.js (ícone por faixa + botão por álbum)
+   Correções aplicadas (auditoria final):
+   - loadAdminContentAndRender retorna false em erro (sem throw)
+   - saveBtn usa beginBusy + getDirtyRevision + markClean(revision)
+   - resetBtn salva antes de alterar o estado e usa markClean(revision)
+   - importFile valida tamanho/JSON/schema e usa markClean(revision)
+   - setByPath tem retorno verificado em bindContentInputs
+   - ensureContentStructure loga mutações em memória
+   - exportFile protege JSON.stringify e revoga URL com setTimeout
+   - rebindAdminUI() centraliza o rebind
+   - __adminRebind protegido via Object.defineProperty
    ============================================================ */
 
-import { AdminState, markDirty, markClean } from './state.js';
+import {
+  AdminState,
+  markDirty,
+  markClean,
+  getDirtyRevision,
+  beginBusy
+} from './state.js';
+
 import {
   initAdminShortcuts,
   openAdminSite,
   openPublicSite,
   showAdminLogin
 } from './auth.js';
-import { loadContent, saveContent } from './content.js';
+
+import {
+  loadContent,
+  saveContent,
+  validateContentSchema,
+  normalizeContent
+} from './content.js';
+
 import { renderDashboard } from './dashboard.js';
 import { renderUsersTable, invalidateUsersCache } from './users.js';
 import { renderSales, invalidateSalesCache } from './sales.js';
@@ -64,38 +68,35 @@ const TAB_TITLES = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Bootstrap — NÃO carrega conteúdo. Apenas prepara a UI e,
-// se estivermos na rota admin, delega para openAdminSite().
+// Bootstrap
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
   console.log('[admin] bootstrap iniciado');
 
-  // 1) Atalho SEMPRE primeiro (não depende de sessão)
   initAdminShortcuts();
+  rebindAdminUI();
 
-  // 2) Binds de navegação e ações (idempotentes, seguros sem sessão)
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.has('admin')) {
+    setTimeout(() => { openAdminSite(); }, 0);
+  }
+
+  console.log('[admin] bootstrap completo');
+}
+
+function rebindAdminUI() {
   bindNavTabs();
   bindContentInputs();
   bindGlobalActions();
   bindEditorButtons();
   bindUploadZones();
   bindRefreshButtons();
-
-  // 3) Só orquestra o admin se estivermos na rota ?admin
-  //    openAdminSite() verifica a sessão ANTES de carregar conteúdo.
-  const urlParams = new URLSearchParams(window.location.search);
-  if (urlParams.has('admin')) {
-    setTimeout(() => {
-      openAdminSite();
-    }, 0);
-  }
-
-  console.log('[admin] bootstrap completo');
 }
 
 // ─────────────────────────────────────────────────────────────
-// FLUXO PÓS-LOGIN — chamado por auth.js após autenticar.
-// Exposto em window.__admin.bootContent para o auth.js invocar.
+// Carregamento pós-login
+// ------------------------------------------------------------
+// Retorna true em sucesso, false em erro (não lança).
 // ─────────────────────────────────────────────────────────────
 export async function loadAdminContentAndRender() {
   console.log('[admin] carregando conteúdo pós-login...');
@@ -107,42 +108,41 @@ export async function loadAdminContentAndRender() {
     AdminState.contentUpdatedAt = loaded.updatedAt || null;
     console.log('[admin] conteúdo carregado, versão', loaded.version);
   } catch (err) {
-    if (err && (err.status === 401 || err.status === 403)) {
-      console.warn('[admin] sessão inválida ao carregar conteúdo');
-      showAdminLogin();
-      return;
-    }
     console.error('[admin] loadContent falhou:', err);
-    AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
-    AdminState.contentVersion = 0;
+
+    if (err?.status === 401 || err?.status === 403) {
+      showAdminLogin();
+      return false;
+    }
+
+    toast(
+      'Não foi possível carregar o conteúdo do servidor. ' +
+      'O painel não será inicializado para evitar perda de dados.',
+      '⚠'
+    );
+
+    return false;
   }
 
-  // Aplica no site público
   safeCall('applyContentToSite', AdminState.content);
   safeCall('refreshFlatPlaylist');
   safeCall('refreshPlanConfig');
   safeCall('updateCartFab');
 
-  // Preenche campos (resiliente)
   loadAllAdminFields();
 
-  // Dashboard assíncrono — não bloqueia
   renderDashboard().catch((err) => {
     if (err && (err.status === 401 || err.status === 403)) return;
     console.warn('[admin] dashboard:', err);
   });
 
   console.log('[admin] conteúdo aplicado e dashboard renderizado');
+
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────
 // Nav tabs
-// ------------------------------------------------------------
-// Estratégia:
-//  - attach() roda imediatamente (caso os botões já existam)
-//  - MutationObserver observa APENAS o <nav class="admin-nav">
-//    para re-bindar quando os botões aparecerem depois do login
-//  - Guard dataset.bound evita bind duplicado
 // ─────────────────────────────────────────────────────────────
 function bindNavTabs() {
   const attach = () => {
@@ -168,20 +168,6 @@ function bindNavTabs() {
     nav.dataset.observed = '1';
     const observer = new MutationObserver(attach);
     observer.observe(nav, { childList: true, subtree: true });
-    console.log('[admin] MutationObserver ativo no .admin-nav');
-  } else if (!nav) {
-    const observer = new MutationObserver(() => {
-      const navNow = document.querySelector('.admin-nav');
-      if (navNow && !navNow.dataset.observed) {
-        navNow.dataset.observed = '1';
-        attach();
-        observer.disconnect();
-        const obs2 = new MutationObserver(attach);
-        obs2.observe(navNow, { childList: true, subtree: true });
-        console.log('[admin] nav detectado e observado');
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
   }
 }
 
@@ -190,12 +176,16 @@ async function onClickNavButton(event) {
   const tab = btn.dataset.tab;
   if (!tab) return;
 
+  const section = document.getElementById('tab-' + tab);
+  if (!section) {
+    console.warn(`[admin] tab ${tab} sem seção correspondente.`);
+    return;
+  }
+
   document.querySelectorAll('.admin-nav button').forEach((b) => b.classList.remove('active'));
   document.querySelectorAll('.admin-section').forEach((s) => s.classList.remove('active'));
   btn.classList.add('active');
-
-  const section = document.getElementById('tab-' + tab);
-  if (section) section.classList.add('active');
+  section.classList.add('active');
 
   const titleEl = document.getElementById('adminTabTitle');
   if (titleEl) titleEl.textContent = TAB_TITLES[tab] || tab;
@@ -214,7 +204,6 @@ async function onClickNavButton(event) {
     } else if (tab === 'contato') {
       renderSocialEditor(AdminState.content);
     } else if (tab === 'discografia') {
-      // Editor de álbuns/faixas — funcional (CRUD + upload + downloads)
       renderAlbumsEditor(AdminState.content);
     }
   } catch (err) {
@@ -229,7 +218,7 @@ async function onClickNavButton(event) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Aplica conteúdo nos campos data-content — RESILIENTE
+// Campos
 // ─────────────────────────────────────────────────────────────
 function loadAllAdminFields() {
   const content = AdminState.content;
@@ -260,39 +249,37 @@ function loadAllAdminFields() {
 }
 
 function safeRender(name, fn) {
-  try {
-    fn();
-  } catch (err) {
-    console.error(`[admin] erro em render${name}:`, err);
-  }
+  try { fn(); }
+  catch (err) { console.error(`[admin] erro em render${name}:`, err); }
 }
 
 function ensureContentStructure(content) {
-  if (!content.filosofia) content.filosofia = {};
-  if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
+  let mutated = false;
 
-  // `discografia.albums` não é mais usado — mantido só para compatibilidade
-  // caso algum componente antigo ainda leia. O site lê de SITE.albums.
-  if (!content.discografia) content.discografia = {};
-  if (!Array.isArray(content.discografia.albums)) content.discografia.albums = [];
+  if (!content.filosofia) { content.filosofia = {}; mutated = true; }
+  if (!Array.isArray(content.filosofia.frases)) { content.filosofia.frases = []; mutated = true; }
 
-  if (!Array.isArray(content.playlists)) content.playlists = [];
+  if (!content.discografia) { content.discografia = {}; mutated = true; }
+  if (!Array.isArray(content.discografia.albums)) { content.discografia.albums = []; mutated = true; }
 
-  if (!content.planos) content.planos = {};
-  if (!Array.isArray(content.planos.plans)) content.planos.plans = [];
+  if (!Array.isArray(content.playlists)) { content.playlists = []; mutated = true; }
 
-  if (!content.contato) content.contato = {};
-  if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
+  if (!content.planos) { content.planos = {}; mutated = true; }
+  if (!Array.isArray(content.planos.plans)) { content.planos.plans = []; mutated = true; }
 
-  if (!content.branding) content.branding = {};
-  if (!content.hero) content.hero = {};
-  if (!content.sobre) content.sobre = {};
-  if (!content.aparencia) content.aparencia = {};
+  if (!content.contato) { content.contato = {}; mutated = true; }
+  if (!Array.isArray(content.contato.socials)) { content.contato.socials = []; mutated = true; }
+
+  if (!content.branding) { content.branding = {}; mutated = true; }
+  if (!content.hero) { content.hero = {}; mutated = true; }
+  if (!content.sobre) { content.sobre = {}; mutated = true; }
+  if (!content.aparencia) { content.aparencia = {}; mutated = true; }
+
+  if (mutated) {
+    console.warn('[admin] estrutura de conteúdo corrigida em memória.');
+  }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Bind dos inputs genéricos data-content
-// ─────────────────────────────────────────────────────────────
 function bindContentInputs() {
   document.querySelectorAll('[data-content]').forEach((el) => {
     if (el.dataset.bound === '1') return;
@@ -301,9 +288,18 @@ function bindContentInputs() {
     el.addEventListener('input', () => {
       let val = el.value;
       if (el.type === 'checkbox') val = el.checked;
-      else if (el.type === 'number') val = parseFloat(val) || 0;
+      else if (el.type === 'number') {
+        if (val === '') val = null;
+        else val = parseFloat(val);
+      }
 
-      setByPath(AdminState.content, el.dataset.content, val);
+      const updated = setByPath(AdminState.content, el.dataset.content, val);
+
+      if (!updated) {
+        console.error('[admin] caminho de conteúdo inválido:', el.dataset.content);
+        return;
+      }
+
       markDirty();
 
       const key = el.dataset.content;
@@ -317,41 +313,24 @@ function bindContentInputs() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Botões dos editores
-// ------------------------------------------------------------
-// Nota: bindAlbumsAddButton foi removido — o editor de álbuns
-// agora cuida dos próprios binds (CRUD + upload + downloads).
+// Editores
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
   try { bindSocialsAddButton(); } catch (e) { console.warn(e); }
 
-  const addFraseBtn = document.getElementById('addFraseBtn');
-  if (addFraseBtn && addFraseBtn.dataset.bound !== '1') {
-    addFraseBtn.dataset.bound = '1';
-    addFraseBtn.addEventListener('click', () => {
-      if (!AdminState.content.filosofia) AdminState.content.filosofia = {};
-      if (!Array.isArray(AdminState.content.filosofia.frases)) AdminState.content.filosofia.frases = [];
-      AdminState.content.filosofia.frases.push({
-        text: 'Nova frase',
-        author: 'Joseph Matthos'
-      });
-      renderFrasesEditor(AdminState.content);
-      markDirty();
-      safeCall('applyContentToSite', AdminState.content);
-    });
-  }
+const addFraseBtn = document.getElementById('addFraseBtn');
+if (addFraseBtn && addFraseBtn.dataset.bound !== '1') {
+  addFraseBtn.dataset.bound = '1';
+  addFraseBtn.addEventListener('click', () => {
+    addFrase(AdminState.content);
+    safeCall('applyContentToSite', AdminState.content);
+  });
+}
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload zones — IMAGENS
-// ------------------------------------------------------------
-// Uploads de imagem retornam { url, path, bucket } e continuam
-// via Base64 (imagens são pequenas e cabem no body da Vercel).
-//
-// ⚠️  Uploads de ÁUDIO não são tratados aqui.
-//     Eles vivem em editors/albums.js, com presigned URL
-//     e PATCH automático em tracks.preview_path / full_path.
+// Uploads (imagens)
 // ─────────────────────────────────────────────────────────────
 function bindUploadZones() {
   document.querySelectorAll('[data-upload-target]').forEach((zone) => {
@@ -378,7 +357,6 @@ function bindUploadZones() {
     });
   });
 
-  // ── Imagem de fundo
   try {
     bindUpload('bgUpload', ({ url }) => {
       if (!url) return;
@@ -391,7 +369,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem do vinil
   try {
     bindUpload('vinylUpload', ({ url }) => {
       if (!url) return;
@@ -405,7 +382,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem da seção Sobre
   try {
     bindUpload('sobreUpload', ({ url }) => {
       if (!url) return;
@@ -417,13 +393,10 @@ function bindUploadZones() {
       toast('Imagem da seção Sobre atualizada.', '🖼');
     }, 'image');
   } catch (e) { console.warn(e); }
-
-  // ⚠️  Uploads de áudio (previewUpload / fullUpload) vivem em
-  //     editors/albums.js (presigned URL + PATCH automático).
 }
 
 // ─────────────────────────────────────────────────────────────
-// Botões de refresh
+// Refresh
 // ─────────────────────────────────────────────────────────────
 function bindRefreshButtons() {
   const salesRefresh = document.getElementById('salesRefresh');
@@ -469,21 +442,30 @@ function bindRefreshButtons() {
 // Ações globais
 // ─────────────────────────────────────────────────────────────
 function bindGlobalActions() {
+  // ── Save
   const saveBtn = document.getElementById('adminSaveBtn');
   if (saveBtn && saveBtn.dataset.bound !== '1') {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       if (saveBtn.disabled) return;
-      saveBtn.disabled = true;
-      saveBtn.textContent = '💾 Salvando...';
+
+      const revisionAtStart = getDirtyRevision();
+      const releaseBusy = beginBusy('salvando');
 
       try {
         const saved = await saveContent(AdminState.content, {
           baseVersion: AdminState.contentVersion
         });
         AdminState.contentVersion = saved.version;
-        markClean();
-        toast('Alterações salvas.', '💾');
+        AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
+
+        const cleaned = markClean(revisionAtStart);
+
+        if (cleaned) {
+          toast('Alterações salvas.', '💾');
+        } else {
+          toast('Alterações salvas, mas você modificou o conteúdo durante o salvamento.', '⚠');
+        }
       } catch (err) {
         console.error('[admin] save:', err);
         if (err?.code === 'VERSION_CONFLICT' || err?.status === 409) {
@@ -495,77 +477,193 @@ function bindGlobalActions() {
           toast(err?.message || 'Não foi possível salvar.', '⚠');
         }
       } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = AdminState.dirty
-          ? '💾 Salvar alterações *'
-          : '💾 Salvar alterações';
+        releaseBusy();
       }
     });
   }
 
+  // ── Reset
   const resetBtn = document.getElementById('adminResetBtn');
   if (resetBtn && resetBtn.dataset.bound !== '1') {
     resetBtn.dataset.bound = '1';
     resetBtn.addEventListener('click', async () => {
-      if (!confirm('Restaurar todo o conteúdo para o padrão?')) return;
+      const confirmed = confirm(
+        'Restaurar todo o conteúdo editorial para o padrão?\n\n' +
+        'Essa operação substituirá as alterações atuais.'
+      );
+      if (!confirmed) return;
+
+      resetBtn.disabled = true;
+      const revisionAtStart = getDirtyRevision();
+      const releaseBusy = beginBusy('restaurando');
+
       try {
-        AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
-        await saveContent(AdminState.content, { baseVersion: AdminState.contentVersion });
+        const defaults = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
+        const saved = await saveContent(defaults, {
+          baseVersion: AdminState.contentVersion
+        });
+
+        AdminState.content = defaults;
+        AdminState.contentVersion = saved.version;
+        AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
+
         loadAllAdminFields();
-        markClean();
+
+        const cleaned = markClean(revisionAtStart);
+        if (!cleaned) {
+          toast('Conteúdo restaurado, mas você modificou durante o processo.', '⚠');
+        } else {
+          toast('Conteúdo padrão restaurado.', '↺');
+        }
+
         safeCall('applyContentToSite', AdminState.content);
         safeCall('refreshFlatPlaylist');
         safeCall('refreshPlanConfig');
-        toast('Conteúdo restaurado.', '↺');
       } catch (err) {
         console.error('[admin] reset:', err);
-        toast(err?.message || 'Falha ao restaurar.', '⚠');
+        toast(
+          err?.status === 409
+            ? 'O conteúdo foi alterado por outro administrador. Recarregue.'
+            : err?.message || 'Falha ao restaurar o conteúdo.',
+          '⚠'
+        );
+      } finally {
+        releaseBusy();
+        resetBtn.disabled = false;
       }
     });
   }
 
+  // ── Export
   const exportBtn = document.getElementById('exportBtn');
   if (exportBtn && exportBtn.dataset.bound !== '1') {
     exportBtn.dataset.bound = '1';
     exportBtn.addEventListener('click', () => {
+      if (!AdminState.content || AdminState.dirty) {
+        toast('Salve as alterações antes de exportar o backup.', '⚠');
+        return;
+      }
+
       const pack = {
+        schemaVersion: 1,
+        application: 'Joseph Matthos',
         _version: AdminState.contentVersion,
         _exportedAt: new Date().toISOString(),
         content: AdminState.content
       };
-      const blob = new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' });
+
+      let json;
+      try {
+        json = JSON.stringify(pack, null, 2);
+      } catch (e) {
+        console.error('[admin] export falhou:', e);
+        toast('Conteúdo não serializável. Contate o suporte.', '⚠');
+        return;
+      }
+
+      const blob = new Blob(
+        [json],
+        { type: 'application/json;charset=utf-8' }
+      );
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
+
       a.href = url;
-      a.download = `joseph-matthos-content-${Date.now()}.json`;
+      a.download = `joseph-matthos-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
-      toast('Exportado.', '⬇');
+
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      toast('Backup editorial exportado.', '⬇');
     });
   }
 
+  // ── Import
   const importFile = document.getElementById('importFile');
   if (importFile && importFile.dataset.bound !== '1') {
     importFile.dataset.bound = '1';
     importFile.addEventListener('change', async (e) => {
-      const f = e.target.files[0];
-      if (!f) return;
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const releaseBusy = beginBusy('importando');
+
       try {
-        const text = await f.text();
+        if (file.size > 2_000_000) {
+          throw new Error('O arquivo ultrapassa o limite de 2 MB.');
+        }
+
+        if (!file.name.toLowerCase().endsWith('.json')) {
+          throw new Error('Selecione um arquivo JSON.');
+        }
+
+        const text = await file.text();
         const parsed = JSON.parse(text);
+
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Estrutura de backup inválida.');
+        }
+
         const data = parsed.content || parsed;
-        AdminState.content = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONTENT)), data);
-        await saveContent(AdminState.content, { baseVersion: AdminState.contentVersion });
+        const validation = validateContentSchema(data);
+
+        if (!validation.valid) {
+          throw new Error('Backup inválido: ' + validation.errors.join(' '));
+        }
+
+        const normalized = normalizeContent(validation.data);
+        const bytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
+
+        if (bytes > 2_000_000) {
+          throw new Error('O conteúdo importado ultrapassa 2 MB.');
+        }
+
+        const confirmed = confirm(
+          'Deseja importar este backup?\n\n' +
+          'O conteúdo editorial atual será substituído. ' +
+          'Recomenda-se exportar um backup antes de continuar.'
+        );
+
+        if (!confirmed) return;
+
+        const revisionAtStart = getDirtyRevision();
+
+        const saved = await saveContent(normalized, {
+          baseVersion: AdminState.contentVersion
+        });
+
+        AdminState.content = normalized;
+        AdminState.contentVersion = saved.version;
+        AdminState.contentUpdatedAt = saved.updatedAt || new Date().toISOString();
+
         loadAllAdminFields();
-        markClean();
+
+        const cleaned = markClean(revisionAtStart);
+        if (!cleaned) {
+          toast('Backup importado, mas você modificou durante o processo.', '⚠');
+        } else {
+          toast('Backup importado e salvo com sucesso.', '⬆');
+        }
+
         safeCall('applyContentToSite', AdminState.content);
-        toast('Conteúdo importado.', '⬆');
+        safeCall('refreshFlatPlaylist');
+        safeCall('refreshPlanConfig');
       } catch (err) {
         console.error('[admin] import:', err);
-        toast('Arquivo inválido.', '⚠');
+        if (err?.status === 409) {
+          toast('O conteúdo foi alterado por outro administrador. Recarregue antes de importar.', '⚠');
+        } else if (err?.status === 401 || err?.status === 403) {
+          toast('Sessão expirada.', '⚠');
+          showAdminLogin();
+        } else {
+          toast(err?.message || 'Não foi possível importar o backup.', '⚠');
+        }
       } finally {
+        releaseBusy();
         e.target.value = '';
       }
     });
@@ -614,23 +712,6 @@ function updateSobrePreview(content = AdminState.content) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Utils
-// ─────────────────────────────────────────────────────────────
-function deepMerge(target, source) {
-  if (Array.isArray(source)) return JSON.parse(JSON.stringify(source));
-  if (!source || typeof source !== 'object') return source === undefined ? target : source;
-  const out = { ...target };
-  for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      out[key] = deepMerge(target[key] || {}, source[key]);
-    } else {
-      out[key] = source[key];
-    }
-  }
-  return out;
-}
-
 function safeCall(name, ...args) {
   const fn = window[name];
   if (typeof fn === 'function') {
@@ -648,12 +729,14 @@ if (document.readyState === 'loading') {
   bootstrap();
 }
 
-// Expor rebind manual (útil para debug)
-window.__adminRebind = () => {
-  document.querySelectorAll('.admin-nav button').forEach((b) => delete b.dataset.bound);
-  bindNavTabs();
-  console.log('[admin] rebind manual executado');
-};
+Object.defineProperty(window, '__adminRebind', {
+  value: () => {
+    rebindAdminUI();
+    console.log('[admin] rebind executado');
+  },
+  writable: false,
+  configurable: false
+});
 
 Object.defineProperty(window, '__admin', {
   value: Object.freeze({
@@ -671,7 +754,7 @@ Object.defineProperty(window, '__admin', {
     },
     rebind: () => window.__adminRebind(),
     async reload() {
-      await loadAdminContentAndRender();
+      return await loadAdminContentAndRender();
     },
     bootContent: () => loadAdminContentAndRender()
   }),

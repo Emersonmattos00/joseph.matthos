@@ -5,12 +5,16 @@
   "private": true,
   "main": "server.js",
   "engines": {
-  "node": "24.x"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node server.js",
     "dev": "node dev-server.js",
     "hash-admin": "node scripts/hash-admin-password.js",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.mjs",
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.mjs",
+    "db:studio": "drizzle-kit studio --config=drizzle.config.mjs",
+    "db:check": "drizzle-kit check --config=drizzle.config.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -21,7 +25,8 @@
     "@neondatabase/serverless": "^0.10.4",
     "@upstash/ratelimit": "^2.2.0",
     "@upstash/redis": "^1.39.0",
-    "drizzle-orm": "^0.44.0",
+    "aws4fetch": "^1.0.20",
+    "drizzle-orm": "^0.45.4",
     "express": "^4.22.3",
     "howler": "^2.2.4",
     "jsonwebtoken": "^9.0.3",
@@ -30,11 +35,14 @@
     "sigv4-lite": "^1.0.1"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.1.0",
-    "dotenv": "18.0.8",
+    "@vitest/coverage-v8": "^5.1.0",
+    "dotenv": "^18.0.8",
     "drizzle-kit": "^0.31.11",
     "jsdom": "^25.0.0",
     "typescript": "^7.0.2",
-    "vitest": "^2.1.0"
+    "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "esbuild": "^0.25.12"
   }
 }

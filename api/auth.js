@@ -1,24 +1,31 @@
 /* ============================================================
    api/auth.js — Autenticação própria (Neon + JWT)
    ------------------------------------------------------------
-   POST /api/auth?action=login    → login
-   POST /api/auth?action=signup   → cadastro
-   POST /api/auth?action=logout   → encerra sessão
-   GET  /api/auth?action=me       → dados do usuário + rentals
+   Correções aplicadas (auditoria auth):
+   - Remove `noTimestamp: true` (defesa em profundidade)
+   - Adiciona `tokenType: 'access' | 'refresh'` nos JWTs
+   - Implementa `?action=refresh` (valida tokenType + emite novos)
+   - getActiveRentals: `trackKey: 'album:${albumId}'` e
+     `trackKey: '${albumId}:${trackNumber}'` (compatível com
+     frontend) + `trackId`/`albumId` para retrocompat
+   - /me: plano degradado ou rentals falho → 503 explícito
+   - readPassword/readEmail: rejeita excesso (não trunca)
+   - assertJwtConfiguration() antes de login/signup
+   - parseAction exige string
+   - verifyPassword valida formato do hash (mesmo padrão _lib)
+   - Login DB down → 503 (não 502)
+   - signup DB down → 503
 
-   - Cookies __Host- em produção (HttpOnly + SameSite=Lax)
-   - CSRF: Origin check em métodos mutantes
-   - Senhas com scrypt (nativo do Node)
-   - Sessão via JWT (7 dias)
-   - Rate limit por IP + e-mail (Redis/KV)
-   - Auditoria em todas as ações
+   TODO (próxima rodada, não bloqueia deploy):
+   - Tabela `auth_sessions` para revogar refresh no logout
+   - Migração de hashes antigos para `verifyScrypt` do _lib.js
    ============================================================ */
 
 'use strict';
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { eq, and, gt } = require('drizzle-orm');
+const { eq, and, gt, lte } = require('drizzle-orm');
 
 const { users, rentals, tracks } = require('../src/schema.js');
 
@@ -27,12 +34,16 @@ const {
   setAuthCookies,
   clearAuthCookies,
   getPlanForUserDetailed,
+  getAuthUser,
   VALID_PLANS,
   checkAndIncrement,
   resetBucket,
   audit,
   checkOrigin,
+  clientIp,
 } = require('./_lib');
+
+const { db, neonSql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -41,6 +52,7 @@ const MAX_NAME_LENGTH = 120;
 const MIN_NAME_LENGTH = 2;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_PASSWORD_LENGTH = 256;
+const MAX_PASSWORD_BYTES = 1024;
 const MIN_PASSWORD_LENGTH = 8;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -53,18 +65,30 @@ const COMMON_PASSWORDS = new Set([
 ]);
 
 const MAX_EMAILS_PER_HOUR = 3;
-const MAX_LOGIN_ATTEMPTS_PER_IP = 1000;
+const MAX_LOGIN_ATTEMPTS_PER_IP = 60;
 const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 10;
-const MAX_SIGNUPS_PER_IP = 1000;
+const MAX_SIGNUPS_PER_IP = 10;
 const MIN_RESPONSE_MS = 350;
 
 const MAX_RENTALS = 100;
+
+const ACCESS_MAX_AGE_SEC = 60 * 60;
+const REFRESH_MAX_AGE_SEC = 7 * 24 * 60 * 60;
 
 const GENERIC_AUTH_ERROR = 'E-mail ou senha incorretos.';
 const GENERIC_SIGNUP_ERROR = 'Não foi possível concluir o cadastro.';
 const GENERIC_RATE_ERROR = 'Muitas tentativas. Tente novamente mais tarde.';
 const GENERIC_ERROR = 'Serviço indisponível.';
-const { db, sql } = require('./_db');
+
+const DB_DOWN_CODES = new Set([
+  'AUTH_DATABASE_UNAVAILABLE',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'ENOTFOUND',
+  '08006',
+  '08001',
+  '08003'
+]);
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -85,7 +109,8 @@ module.exports = async function handler(req, res) {
   if (method !== 'GET' && method !== 'HEAD') {
     if (!checkOrigin(req)) {
       console.warn('[auth] Origin rejeitada:', {
-        action, method,
+        action,
+        method,
         origin: req.headers.origin || req.headers.referer || null
       });
       return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
@@ -96,33 +121,115 @@ module.exports = async function handler(req, res) {
     case 'login':
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return handleLogin(req, res);
-
     case 'signup':
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return handleSignup(req, res);
-
     case 'logout':
       if (method !== 'POST') return methodNotAllowed(res, 'POST');
       return handleLogout(req, res);
-
+    case 'refresh':
+      if (method !== 'POST') return methodNotAllowed(res, 'POST');
+      return handleRefresh(req, res);
     case 'me':
-      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
+      if (method !== 'GET' && method !== 'HEAD') {
+        return methodNotAllowed(res, 'GET, HEAD');
+      }
       return handleMe(req, res);
-
     default:
       return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
   }
 };
 
 // ─────────────────────────────────────────────────────────────
-// Hash de senha (scrypt)
+// JWT — par de tokens (tokenType + iat/exp explícitos)
+// ─────────────────────────────────────────────────────────────
+function assertJwtConfiguration() {
+  const secret = String(process.env.JWT_SECRET || '').trim();
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    const err = new Error('JWT_SECRET ausente ou insuficiente.');
+    err.code = 'JWT_CONFIGURATION_ERROR';
+    throw err;
+  }
+  return secret;
+}
+
+function signTokenPair(user) {
+  const secret = assertJwtConfiguration();
+
+  const now = Math.floor(Date.now() / 1000);
+  const accessExp = now + ACCESS_MAX_AGE_SEC;
+  const refreshExp = now + REFRESH_MAX_AGE_SEC;
+
+  const base = { id: user.id, email: user.email };
+
+  // NÃO usar noTimestamp: o jsonwebtoken adiciona iat
+  // automaticamente — e nós também passamos explicitamente.
+  // O token sai com iat correto em ambos os casos.
+  const options = {
+    algorithm: 'HS256',
+    issuer: 'josephmatthos',
+    audience: 'josephmatthos-platform'
+  };
+
+  const access_token = jwt.sign(
+    { ...base, tokenType: 'access', iat: now, exp: accessExp },
+    secret,
+    options
+  );
+
+  const refresh_token = jwt.sign(
+    { ...base, tokenType: 'refresh', iat: now, exp: refreshExp },
+    secret,
+    options
+  );
+
+  return {
+    access_token,
+    refresh_token,
+    iat: now,
+    exp: accessExp
+  };
+}
+
+function verifyRefreshToken(token) {
+  try {
+    const secret = assertJwtConfiguration();
+    const payload = jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+      issuer: 'josephmatthos',
+      audience: 'josephmatthos-platform'
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      payload.tokenType !== 'refresh' ||
+      !Number.isInteger(payload.iat) ||
+      !Number.isInteger(payload.exp) ||
+      payload.exp <= now ||
+      payload.iat > now + 30 ||
+      payload.exp - payload.iat > REFRESH_MAX_AGE_SEC
+    ) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Hash de senha (scrypt) — formato compatível com _lib.verifyScrypt
 // ─────────────────────────────────────────────────────────────
 function hashPassword(password) {
   return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16).toString('hex');
+    const salt = crypto.randomBytes(16);
     crypto.scrypt(password, salt, 64, (err, derivedKey) => {
-      if (err) reject(err);
-      resolve(`scrypt$${salt}$${derivedKey.toString('hex')}`);
+      if (err) return reject(err);
+      resolve(`scrypt$${salt.toString('hex')}$${derivedKey.toString('hex')}`);
     });
   });
 }
@@ -130,40 +237,37 @@ function hashPassword(password) {
 function verifyPassword(password, storedHash) {
   return new Promise((resolve) => {
     try {
-      const [algo, salt, hash] = String(storedHash).split('$');
-      if (algo !== 'scrypt') return resolve(false);
-      const expected = Buffer.from(hash, 'hex');
+      const parts = String(storedHash).split('$');
+      if (parts.length !== 3) return resolve(false);
+
+      const [algo, saltHex, hashHex] = parts;
+
+      if (
+        algo !== 'scrypt' ||
+        !/^[a-f0-9]{32,128}$/i.test(saltHex) ||
+        !/^[a-f0-9]{64,128}$/i.test(hashHex)
+      ) {
+        return resolve(false);
+      }
+
+      const salt = Buffer.from(saltHex, 'hex');
+      const expected = Buffer.from(hashHex, 'hex');
+
       crypto.scrypt(password, salt, expected.length, (err, derived) => {
         if (err) return resolve(false);
-        resolve(derived.length === expected.length && crypto.timingSafeEqual(derived, expected));
+        try {
+          resolve(
+            derived.length === expected.length &&
+            crypto.timingSafeEqual(derived, expected)
+          );
+        } catch {
+          resolve(false);
+        }
       });
     } catch {
       resolve(false);
     }
   });
-}
-
-// ─────────────────────────────────────────────────────────────
-// JWT
-// ─────────────────────────────────────────────────────────────
-function signToken(user) {
-  const secret = String(process.env.JWT_SECRET || '').trim();
-  if (!secret) throw new Error('JWT_SECRET não configurado.');
-  return jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
-    secret,
-    { expiresIn: '7d' }
-  );
-}
-
-function verifyToken(token) {
-  try {
-    const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret) return null;
-    return jwt.verify(token, secret);
-  } catch {
-    return null;
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -175,21 +279,25 @@ async function handleLogin(req, res) {
   const userAgent = req.headers['user-agent'] || '';
   const body = parseBody(req);
 
-  const email = normalizeEmail(body.email);
-  const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+  try {
+    assertJwtConfiguration();
+  } catch {
+    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
+    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
+  }
 
-  if (!EMAIL_REGEX.test(email) || password.length < MIN_PASSWORD_LENGTH) {
+  const email = readEmail(body.email);
+  const password = readPassword(body.password);
+
+  if (!EMAIL_REGEX.test(email) || password === null) {
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
     await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_input' });
     return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
   }
 
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000),
-    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000)
+    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -201,9 +309,7 @@ async function handleLogin(req, res) {
   }
 
   try {
-    const [user] = await db.select().from(users)
-      .where(eq(users.email, email))
-      .limit(1);
+    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
 
     if (!user || !user.passwordHash) {
       await equalizeTiming(startedAt, MIN_RESPONSE_MS);
@@ -220,21 +326,18 @@ async function handleLogin(req, res) {
 
     await resetBucket(`login:email:${email}`).catch(() => {});
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const pair = signTokenPair(user);
+    setAuthCookies(res, pair);
 
     let plan = 'free';
     try {
       const planResult = await getPlanForUserDetailed(user.id);
-      plan = planResult.plan;
+      if (!planResult.degraded) plan = planResult.plan;
     } catch (err) {
-      console.warn('[auth/login] falha ao obter plano:', err.code || err.message);
+      console.warn('[auth/login] plano:', err.code || err.message);
     }
 
-    await audit('login', {
-      email, userId: user.id, ip, userAgent, success: true, reason: null
-    });
-
+    await audit('login', { email, userId: user.id, ip, userAgent, success: true, reason: null });
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
 
     return sendJson(res, 200, {
@@ -250,7 +353,9 @@ async function handleLogin(req, res) {
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
     await audit('login', { email, ip, userAgent, success: false, reason: error.code || 'error' });
     console.error('[auth/login]', error.code || error.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+
+    const status = DB_DOWN_CODES.has(error.code) ? 503 : 502;
+    return sendJson(res, status, { ok: false, error: GENERIC_ERROR });
   }
 }
 
@@ -262,25 +367,24 @@ async function handleSignup(req, res) {
   const userAgent = req.headers['user-agent'] || '';
   const body = parseBody(req);
 
-  const name = normalizeName(body.name);
-  const email = normalizeEmail(body.email);
-  const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+  try {
+    assertJwtConfiguration();
+  } catch {
+    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
+  }
 
-  if (
-    !isValidName(name) ||
-    !EMAIL_REGEX.test(email) ||
-    !isValidPassword(password)
-  ) {
+  const name = normalizeName(body.name);
+  const email = readEmail(body.email);
+  const password = readPassword(body.password);
+
+  if (!isValidName(name) || !EMAIL_REGEX.test(email) || password === null || !isValidPassword(password)) {
     await audit('signup', { email, ip, userAgent, success: false, reason: 'invalid_input' });
     return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
   }
 
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000),
-    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000)
+    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -291,28 +395,29 @@ async function handleSignup(req, res) {
   }
 
   try {
-    const [existing] = await db.select({ id: users.id })
-      .from(users).where(eq(users.email, email)).limit(1);
+    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
 
     if (existing) {
       await audit('signup', { email, ip, userAgent, success: false, reason: 'email_exists' });
-      return sendJson(res, 400, { ok: false, error: 'Este e-mail já está cadastrado.' });
+      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' });
     }
 
     const passwordHash = await hashPassword(password);
 
-    const [user] = await sql`
-    INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
-    VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
-    RETURNING id, email, name, role, created_at, updated_at
-  `;
+    const [user] = await neonSql`
+      INSERT INTO users (
+        email, password_hash, name, role, created_at, updated_at
+      )
+      VALUES (
+        ${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW()
+      )
+      RETURNING id, email, name, role, created_at, updated_at
+    `;
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const pair = signTokenPair(user);
+    setAuthCookies(res, pair);
 
-    await audit('signup', {
-      email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated'
-    });
+    await audit('signup', { email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated' });
 
     return sendJson(res, 201, {
       ok: true,
@@ -325,11 +430,20 @@ async function handleSignup(req, res) {
       }
     });
   } catch (error) {
-    await audit('signup', {
-      email, ip, userAgent, success: false, reason: error.code || 'error'
-    });
+    await audit('signup', { email, ip, userAgent, success: false, reason: error.code || 'error' });
+
+    if (
+      error.code === '23505' &&
+      (error.constraint === 'users_email_key' ||
+        String(error.message).includes('users_email_key'))
+    ) {
+      return sendJson(res, 409, { ok: false, error: 'Este e-mail já está cadastrado.' });
+    }
+
     console.error('[auth/signup]', error.code || error.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+
+    const status = DB_DOWN_CODES.has(error.code) ? 503 : 500;
+    return sendJson(res, status, { ok: false, error: GENERIC_ERROR });
   }
 }
 
@@ -346,11 +460,63 @@ async function handleLogout(req, res) {
     console.warn('[auth/logout] falha ao limpar cookies:', err.message);
   }
 
-  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+  // TODO: revogar refresh token persistido em auth_sessions
+  // quando a tabela for criada.
 
   await audit('logout', { ip, userAgent, success: true, reason: null });
-
   return sendJson(res, 200, { ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACTION: refresh (nova)
+// ─────────────────────────────────────────────────────────────
+async function handleRefresh(req, res) {
+  const ip = clientIp(req);
+  const userAgent = req.headers['user-agent'] || '';
+
+  const cookies = require('./_lib').parseCookies(
+    req.headers.cookie || ''
+  );
+  const IS_PROD = process.env.NODE_ENV === 'production';
+  const cookieName = IS_PROD ? '__Host-jm_auth_refresh' : 'jm_auth_refresh';
+  const refreshToken = cookies[cookieName] || '';
+
+  if (!refreshToken) {
+    return sendJson(res, 401, { ok: false, error: GENERIC_AUTH_ERROR });
+  }
+
+  const payload = verifyRefreshToken(refreshToken);
+  if (!payload) {
+    await audit('refresh', { ip, userAgent, success: false, reason: 'invalid_refresh' });
+    return sendJson(res, 401, { ok: false, error: GENERIC_AUTH_ERROR });
+  }
+
+  try {
+    const [user] = await db.select().from(users).where(eq(users.id, payload.id)).limit(1);
+
+    if (!user) {
+      await audit('refresh', { ip, userAgent, success: false, reason: 'user_not_found' });
+      return sendJson(res, 401, { ok: false, error: GENERIC_AUTH_ERROR });
+    }
+
+    const pair = signTokenPair(user);
+    setAuthCookies(res, pair);
+
+    await audit('refresh', { email: user.email, userId: user.id, ip, userAgent, success: true, reason: null });
+
+    return sendJson(res, 200, {
+      ok: true,
+      user: {
+        id: String(user.id),
+        email: sanitizeEmail(user.email),
+        name: sanitizeName(user.name)
+      }
+    });
+  } catch (error) {
+    console.error('[auth/refresh]', error.code || error.message);
+    const status = DB_DOWN_CODES.has(error.code) ? 503 : 502;
+    return sendJson(res, status, { ok: false, error: GENERIC_ERROR });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -358,65 +524,79 @@ async function handleLogout(req, res) {
 // ─────────────────────────────────────────────────────────────
 async function handleMe(req, res) {
   const method = (req.method || 'GET').toUpperCase();
-  const token = getAccessTokenFromCookie(req);
+  const isHead = method === 'HEAD';
 
-  if (!token) {
-    if (method === 'HEAD') {
-      res.status(401);
-      return res.end();
-    }
-    return sendJson(res, 401, { ok: false });
+  let user = null;
+  try {
+    user = await getAuthUser(req);
+  } catch (err) {
+    console.error('[auth/me] sessão:', err.code || err.message);
+    return isHead
+      ? res.status(503).end()
+      : sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
   }
 
-  const payload = verifyToken(token);
-  if (!payload) {
-    if (method === 'HEAD') {
-      res.status(401);
-      return res.end();
-    }
-    return sendJson(res, 401, { ok: false });
+  if (!user) {
+    return isHead
+      ? res.status(401).end()
+      : sendJson(res, 401, { ok: false });
   }
 
   try {
-    const [user] = await db.select().from(users)
-      .where(eq(users.id, payload.id))
-      .limit(1);
+    const [row] = await db.select().from(users).where(eq(users.id, user.id)).limit(1);
 
-    if (!user) {
-      if (method === 'HEAD') {
-        res.status(401);
-        return res.end();
-      }
-      return sendJson(res, 401, { ok: false });
+    if (!row) {
+      return isHead
+        ? res.status(401).end()
+        : sendJson(res, 401, { ok: false });
     }
 
     const [planResult, rentalsResult] = await Promise.allSettled([
-      getPlanForUserDetailed(user.id),
-      getActiveRentals(user.id)
+      getPlanForUserDetailed(row.id),
+      getActiveRentals(row.id)
     ]);
 
-    const plan =
-      planResult.status === 'fulfilled' && VALID_PLANS.has(planResult.value.plan)
-        ? planResult.value.plan
-        : 'free';
+    if (
+      planResult.status !== 'fulfilled' ||
+      planResult.value.degraded ||
+      !VALID_PLANS.has(planResult.value.plan)
+    ) {
+      console.error('[auth/me] plano indisponível');
+      return isHead
+        ? res.status(503).end()
+        : sendJson(res, 503, {
+            ok: false,
+            error: GENERIC_ERROR,
+            code: 'PLAN_STATUS_UNAVAILABLE'
+          });
+    }
 
-    const userRentals =
-      rentalsResult.status === 'fulfilled' && Array.isArray(rentalsResult.value)
-        ? rentalsResult.value
-        : [];
+    if (
+      rentalsResult.status !== 'fulfilled' ||
+      !Array.isArray(rentalsResult.value)
+    ) {
+      console.error('[auth/me] rentals indisponíveis');
+      return isHead
+        ? res.status(503).end()
+        : sendJson(res, 503, {
+            ok: false,
+            error: GENERIC_ERROR,
+            code: 'RENTALS_UNAVAILABLE'
+          });
+    }
 
     const responseBody = {
       ok: true,
       user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
+        id: String(row.id),
+        email: sanitizeEmail(row.email),
+        name: sanitizeName(row.name),
+        plan: planResult.value.plan
       },
-      rentals: userRentals
+      rentals: rentalsResult.value
     };
 
-    if (method === 'HEAD') {
+    if (isHead) {
       res.status(200);
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.end();
@@ -425,64 +605,60 @@ async function handleMe(req, res) {
     return sendJson(res, 200, responseBody);
   } catch (error) {
     console.error('[auth/me]', error.code || error.message);
-    if (method === 'HEAD') {
-      res.status(502);
-      return res.end();
-    }
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    const status = DB_DOWN_CODES.has(error.code) ? 503 : 502;
+    return isHead
+      ? res.status(status).end()
+      : sendJson(res, status, { ok: false, error: GENERIC_ERROR });
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers de cookie
-// ─────────────────────────────────────────────────────────────
-function getAccessTokenFromCookie(req) {
-  const header = req.headers.cookie || req.headers.Cookie || '';
-  const cookies = {};
-  String(header).split(';').forEach((item) => {
-    const i = item.indexOf('=');
-    if (i < 0) return;
-    const k = item.slice(0, i).trim();
-    const v = item.slice(i + 1).trim();
-    if (k) {
-      try { cookies[k] = decodeURIComponent(v); }
-      catch { cookies[k] = v; }
-    }
-  });
-
-  const IS_PROD = process.env.NODE_ENV === 'production';
-  const name = IS_PROD ? '__Host-jm_auth_access' : 'jm_auth_access';
-  return cookies[name] || '';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Rentals
+// Rentals ativos (track OU album)
 // ─────────────────────────────────────────────────────────────
 async function getActiveRentals(userId) {
   const nowIso = new Date().toISOString();
 
   const rows = await db.select({
     trackId: rentals.trackId,
+    albumId: rentals.albumId,
     expiresAt: rentals.expiresAt,
-    albumId: tracks.albumId,
+    trackAlbumId: tracks.albumId,
     trackNumber: tracks.trackNumber,
   })
-  .from(rentals)
-  .leftJoin(tracks, eq(rentals.trackId, tracks.id))
-  .where(and(
-    eq(rentals.userId, userId),
-    eq(rentals.status, 'ACTIVE'),
-    gt(rentals.expiresAt, nowIso)
-  ))
-  .limit(MAX_RENTALS);
+    .from(rentals)
+    .leftJoin(tracks, eq(rentals.trackId, tracks.id))
+    .where(and(
+      eq(rentals.userId, userId),
+      eq(rentals.status, 'ACTIVE'),
+      lte(rentals.startsAt, nowIso),
+      gt(rentals.expiresAt, nowIso)
+    ))
+    .limit(MAX_RENTALS);
 
   return rows
     .map((r) => {
-      if (!r.albumId || r.trackNumber == null) return null;
-      return {
-        trackKey: `${r.albumId}:${r.trackNumber}`,
-        expiresAt: r.expiresAt,
-      };
+      if (r.trackId && r.trackAlbumId && r.trackNumber != null) {
+        return {
+          trackKey: `${r.trackAlbumId}:${r.trackNumber}`,
+          trackId: r.trackId,
+          albumId: r.trackAlbumId,
+          expiresAt: r.expiresAt
+        };
+      }
+      if (r.albumId) {
+        return {
+          trackKey: `album:${r.albumId}`,
+          albumId: r.albumId,
+          expiresAt: r.expiresAt
+        };
+      }
+      if (r.trackId) {
+        return {
+          trackId: r.trackId,
+          expiresAt: r.expiresAt
+        };
+      }
+      return null;
     })
     .filter(Boolean);
 }
@@ -492,9 +668,10 @@ async function getActiveRentals(userId) {
 // ─────────────────────────────────────────────────────────────
 function parseAction(query) {
   if (!query) return null;
-  const raw = String(query.action || '').trim().toLowerCase();
+  if (typeof query.action !== 'string') return null;
+  const raw = query.action.trim().toLowerCase();
   if (!raw) return null;
-  if (!['login', 'signup', 'logout', 'me'].includes(raw)) return null;
+  if (!['login', 'signup', 'logout', 'refresh', 'me'].includes(raw)) return null;
   return raw;
 }
 
@@ -503,12 +680,39 @@ function parseBody(req) {
   if (typeof body === 'string') {
     try { body = JSON.parse(body || '{}'); } catch { body = {}; }
   }
-  return body && typeof body === 'object' ? body : {};
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return {};
+  return body;
 }
 
-function normalizeEmail(value) {
+/**
+ * Rejeita e-mail > MAX_EMAIL_LENGTH (não trunca).
+ */
+function readEmail(value) {
   if (typeof value !== 'string') return '';
-  return value.normalize('NFC').trim().toLowerCase().slice(0, MAX_EMAIL_LENGTH);
+
+  const normalized = value.normalize('NFC').trim().toLowerCase();
+
+  if (
+    normalized.length === 0 ||
+    normalized.length > MAX_EMAIL_LENGTH ||
+    Buffer.byteLength(normalized, 'utf8') > MAX_EMAIL_LENGTH
+  ) {
+    return '';
+  }
+
+  return normalized;
+}
+
+/**
+ * Rejeita senha fora do intervalo (não trunca).
+ * Retorna null se inválida.
+ */
+function readPassword(value) {
+  if (typeof value !== 'string') return null;
+  if (value.length < MIN_PASSWORD_LENGTH) return null;
+  if (value.length > MAX_PASSWORD_LENGTH) return null;
+  if (Buffer.byteLength(value, 'utf8') > MAX_PASSWORD_BYTES) return null;
+  return value;
 }
 
 function sanitizeEmail(value) {
@@ -553,23 +757,8 @@ function isValidPassword(password) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers HTTP
+// Helpers
 // ─────────────────────────────────────────────────────────────
-function clientIp(req) {
-  const h = req.headers || {};
-  const trusted = h['x-vercel-forwarded-for'] || h['x-real-ip'];
-  if (trusted) return String(trusted).split(',')[0].trim();
-
-  if (process.env.NODE_ENV !== 'production') {
-    const fwd = h['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
-  }
-
-  return String((req.socket && req.socket.remoteAddress) || 'unknown')
-    .split(',')[0]
-    .trim();
-}
-
 function methodNotAllowed(res, allow) {
   res.setHeader('Allow', allow);
   return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });

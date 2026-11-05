@@ -1,0 +1,10 @@
+{
+  "name": "josephmatthos-cdn",
+  "compatibility_date": "2026-11-04",
+  "main": "worker.js",
+  "vars": {
+    "B2_BUCKET": "josephmatthos",
+    "B2_ENDPOINT": "s3.us-east-005.backblazeb2.com",
+    "B2_REGION": "us-east-005"
+  }
+}
