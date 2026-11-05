@@ -43,7 +43,7 @@ const {
   clientIp,
 } = require('./_lib');
 
-const { db, sql } = require('./_db');
+const { db, neonSql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -404,9 +404,13 @@ async function handleSignup(req, res) {
 
     const passwordHash = await hashPassword(password);
 
-    const [user] = await sql`
-      INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
-      VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
+    const [user] = await neonSql`
+      INSERT INTO users (
+        email, password_hash, name, role, created_at, updated_at
+      )
+      VALUES (
+        ${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW()
+      )
       RETURNING id, email, name, role, created_at, updated_at
     `;
 

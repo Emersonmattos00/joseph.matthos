@@ -1,10 +1,16 @@
 /**
  * api/_db.js — Conexão com o banco de dados (Neon PostgreSQL + Drizzle ORM)
- * 
- * CORREÇÕES APLICADAS:
- * - Validação explícita da DATABASE_URL (evita erros obscuros)
- * - Validação do protocolo da URL (postgres:// ou postgresql://)
- * - Exporta o schema e os helpers do Drizzle para uso nos módulos
+ *
+ * Exporta:
+ *   - db       → cliente Drizzle (query builder)
+ *   - neonSql  → tagged template que EXECUTA queries SQL diretas
+ *   - sql      → construtor de expressões do Drizzle (NÃO executa)
+ *   - schema   → schema do banco
+ *   - operadores Drizzle (eq, and, or, asc, desc, inArray, gt, lt)
+ *
+ * IMPORTANTE:
+ *   await neonSql`SELECT ...`  → executa
+ *   await sql`SELECT ...`      → NÃO executa (retorna expressão)
  */
 
 'use strict';
@@ -21,7 +27,7 @@ const databaseUrl = String(process.env.DATABASE_URL || '').trim();
 
 if (!databaseUrl) {
   throw new Error(
-    '[db] DATABASE_URL não configurada. Defina a variável de ambiente no Render.'
+    '[db] DATABASE_URL não configurada. Defina a variável de ambiente.'
   );
 }
 
@@ -29,34 +35,26 @@ let parsedUrl;
 try {
   parsedUrl = new URL(databaseUrl);
 } catch {
-  throw new Error(
-    '[db] DATABASE_URL possui formato inválido. Verifique se a string está completa.'
-  );
+  throw new Error('[db] DATABASE_URL possui formato inválido.');
 }
 
 if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol)) {
   throw new Error(
-    '[db] DATABASE_URL deve apontar para um banco PostgreSQL (postgres:// ou postgresql://).'
+    '[db] DATABASE_URL deve ser postgres:// ou postgresql://.'
   );
 }
 
 // ─────────────────────────────────────────────────────────────
-// Conexão
+// Conexões
 // ─────────────────────────────────────────────────────────────
-const sqlNeon = neon(databaseUrl);
-const db = drizzle(sqlNeon, { schema });
+const neonSql = neon(databaseUrl);
+const db = drizzle(neonSql, { schema });
 
-module.exports = {
+module.exports = Object.freeze({
   db,
-  sql: sqlNeon,
+  neonSql,
   schema,
-  eq,
-  and,
-  or,
-  asc,
-  desc,
+  eq, and, or, asc, desc,
   sql,
-  inArray,
-  gt,
-  lt,
-};
+  inArray, gt, lt,
+});
