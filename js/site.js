@@ -1188,6 +1188,27 @@ function bindGlobalEvents() {
     openAlbumModal(card.dataset.album);
   }, true);
 
+  document.getElementById('shareSiteBtn')?.addEventListener('click', async () => {
+    const shareData = { title: 'Joseph Matthos', url: window.location.href };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareData.url);
+        if (typeof toast === 'function') toast('Link copiado!', '✓');
+        return;
+      }
+      alert('Link: ' + shareData.url);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('[share]', err);
+        if (typeof toast === 'function') toast('Não foi possível compartilhar.', '⚠');
+      }
+    }
+  });
+
   document.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (!actionEl) return;

@@ -1,13 +1,21 @@
-// js/player.js — versão final (API redireciona para o Cloudflare Worker)
+// js/player.js — versão final auditada
+
+'use strict';
 
 /* ============================================================
-   CORREÇÕES APLICADAS (Etapa 7 da auditoria):
-   - Concorrência: AbortController + requestId
-   - onerror: não confunde 403 com erro de formato
-   - Lista: sem onclick inline, usa addEventListener
-   - Navegação: trata findIndex = -1
-   - Letras: valida formato do array
-   - formatTime: trata Infinity/NaN
+   CORREÇÕES APLICADAS (auditoria player.js):
+   - Concorrência: AbortController + requestId (já estava)
+   - onerror: distingue 403 (preview indisponível) de erro real
+     via fetch leve ao /api/stream?format=json
+   - Lista: sem onclick inline (já estava)
+   - Navegação: findIndex = -1 não avança (já estava)
+   - Next/Prev/Ended com WRAP (última → primeira, e vice-versa)
+   - Letras: valida formato do array (já estava)
+   - formatTime: trata Infinity/NaN (já estava)
+   - Abas: atualiza aria-selected e hidden
+   - Progress bar: atualiza aria-valuenow + teclado (setas, Home, End)
+   - play(): permite play mesmo com src vazio (Safari sync gesture)
+   - preload='metadata' (em vez de 'none') para iOS
    ============================================================ */
 
 function formatTime(secs) {
@@ -43,18 +51,25 @@ const els = {
   albumHeaderTitle: document.getElementById('albumHeaderTitle'),
   albumHeaderArtist: document.getElementById('albumHeaderArtist'),
   albumHeaderCount: document.getElementById('albumHeaderCount'),
-  fullscreenBtn: document.getElementById('fullscreenBtn')
+  fullscreenBtn: document.getElementById('fullscreenBtn'),
+  shuffleBtn: document.getElementById('shuffleBtn'),
+  repeatBtn: document.getElementById('repeatBtn')
 };
 
-let audio = new Audio();
-audio.preload = 'none';
+const audio = new Audio();
+audio.preload = 'metadata';  // iOS: 'none' pode impedir metadata
+
 let updateInterval = null;
 let currentTrackId = null;
 let parsedLyrics = [];
 let currentLyricIndex = -1;
 let currentTrackMeta = null;
 
-// ★ CORREÇÃO P0: controle de concorrência
+// ─── ESTADO DE CONTROLES ───
+let shuffleEnabled = false;
+let repeatMode = 'off'; // 'off' | 'one' | 'all'
+
+// Concorrência
 let playerRequestId = 0;
 let playerAbortController = null;
 
@@ -62,19 +77,32 @@ let playerAbortController = null;
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
 
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    tabs.forEach(t => t.classList.remove('active'));
-    tabContents.forEach(c => c.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    document.body.classList.remove('immersive-mode');
+function updateTabState(activeTab) {
+  const tabName = activeTab?.dataset.tab;
+  if (!tabName) return;
+
+  tabs.forEach(t => {
+    const on = t === activeTab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
   });
+
+  tabContents.forEach(c => {
+    const on = c.id === `tab-${tabName}`;
+    c.classList.toggle('active', on);
+    c.hidden = !on;
+  });
+
+  document.body.classList.remove('immersive-mode');
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => updateTabState(tab));
 });
 
 function switchTab(tabName) {
   const btn = document.querySelector(`.mobile-tab[data-tab="${tabName}"]`);
-  if (btn) btn.click();
+  if (btn) updateTabState(btn);
 }
 
 // ─── MODO IMERSIVO ───
@@ -87,17 +115,17 @@ function toggleModoImersivo() {
 
 let touchStartTime = 0;
 els.container.addEventListener('touchstart', (e) => {
-  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
   touchStartTime = Date.now();
 }, { passive: true });
 
 els.container.addEventListener('touchend', (e) => {
-  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
   if (Date.now() - touchStartTime < 300) toggleModoImersivo();
 });
 
 els.container.addEventListener('click', (e) => {
-  if (e.target.closest('button') || e.target.closest('.mobile-tab') || e.target.closest('.progress-bar')) return;
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
   if (Date.now() - touchStartTime < 500) return;
   toggleModoImersivo();
 });
@@ -106,8 +134,9 @@ els.container.addEventListener('click', (e) => {
 if (els.fullscreenBtn) {
   els.fullscreenBtn.addEventListener('click', () => {
     if (!document.fullscreenElement) {
-      if (els.container.requestFullscreen) els.container.requestFullscreen();
-      else if (els.container.webkitRequestFullscreen) els.container.webkitRequestFullscreen();
+      const el = els.container;
+      if (el.requestFullscreen) el.requestFullscreen();
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
     } else {
       if (document.exitFullscreen) document.exitFullscreen();
     }
@@ -135,6 +164,39 @@ async function fetchMetadata(trackId, signal) {
   return data;
 }
 
+// ─── DIAGNÓSTICO DO STREAM ───
+// MediaError 4 é genérico. Um HEAD/GET com format=json distingue 403 de 404.
+async function diagnoseStreamError(trackId) {
+  try {
+    const r = await fetch(
+      `/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`,
+      { method: 'GET', credentials: 'same-origin', cache: 'no-store' }
+    );
+
+    if (r.ok) return { status: 'ok' };
+
+    if (r.status === 403) {
+      return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue para ouvir.' };
+    }
+
+    if (r.status === 404) {
+      return { status: 'not_found', message: 'Áudio não configurado para esta faixa.' };
+    }
+
+    if (r.status === 503) {
+      return { status: 'unavailable', message: 'Serviço de áudio temporariamente indisponível.' };
+    }
+
+    if (r.status === 429) {
+      return { status: 'rate_limited', message: 'Muitas requisições. Tente em instantes.' };
+    }
+
+    return { status: 'error', message: `Erro HTTP ${r.status}.` };
+  } catch {
+    return { status: 'network', message: 'Verifique sua conexão.' };
+  }
+}
+
 // ─── LETRA ───
 function renderLyrics(lyricsArray) {
   if (!Array.isArray(lyricsArray) || !lyricsArray.length) {
@@ -144,7 +206,6 @@ function renderLyrics(lyricsArray) {
     return;
   }
 
-  // ★ CORREÇÃO: valida cada linha
   const validLyrics = lyricsArray.filter(line =>
     line && typeof line === 'object' &&
     Number.isFinite(Number(line.time)) &&
@@ -159,7 +220,7 @@ function renderLyrics(lyricsArray) {
   }
 
   els.lyricsContent.innerHTML = validLyrics.map((line, index) => `
-    <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}">${esc(line.text)}</button>
+    <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}" type="button">${esc(line.text)}</button>
   `).join('');
 
   parsedLyrics = validLyrics.map((line, index) => ({
@@ -203,7 +264,7 @@ function syncLyrics() {
   }
 }
 
-// ─── LISTA DE MÚSICAS (SEM onclick INLINE) ───
+// ─── LISTA DE MÚSICAS ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
 
@@ -280,11 +341,11 @@ async function initPlayer(trackId, autoplay = true) {
   els.currentTime.textContent = '0:00';
   els.duration.textContent = '0:00';
   els.progressFill.style.width = '0%';
+  if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', '0');
 
   try {
     const meta = await fetchMetadata(trackId, playerAbortController.signal);
 
-    // ★ descarta respostas antigas
     if (requestId !== playerRequestId) return;
 
     currentTrackMeta = meta;
@@ -322,7 +383,7 @@ async function initPlayer(trackId, autoplay = true) {
       try {
         await audio.play();
       } catch (err) {
-        if (requestId === playerRequestId) {
+        if (requestId === playerRequestId && err?.name !== 'AbortError') {
           console.warn('[player] Autoplay bloqueado:', err?.message || err);
         }
       }
@@ -340,7 +401,7 @@ async function initPlayer(trackId, autoplay = true) {
   }
 }
 
-// ─── EVENTOS DE ÁUDIO (centralizados) ───
+// ─── ÁUDIO: EVENTOS ───
 function bindAudioEvents() {
   audio.addEventListener('play', () => {
     els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
@@ -348,9 +409,11 @@ function bindAudioEvents() {
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
       const duration = audio.duration || 0;
-      if (duration > 0 && Number.isFinite(duration)) {
-        els.progressFill.style.width = `${Math.min(100, (seek / duration) * 100)}%`;
-      }
+      const percent = duration > 0 && Number.isFinite(duration)
+        ? Math.min(100, (seek / duration) * 100)
+        : 0;
+      els.progressFill.style.width = `${percent}%`;
+      if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
       els.currentTime.textContent = formatTime(seek);
       syncLyrics();
     }, 250);
@@ -365,8 +428,8 @@ function bindAudioEvents() {
     els.duration.textContent = formatTime(audio.duration);
   });
 
-  // ★ CORREÇÃO: não confunde erro de formato com 403
-  audio.addEventListener('error', () => {
+  // ★ Erro de áudio: distingue 403 de erro real via diagnoseStreamError
+  audio.addEventListener('error', async () => {
     const error = audio.error;
     console.error('[player] Erro no áudio:', {
       code: error?.code,
@@ -376,32 +439,96 @@ function bindAudioEvents() {
 
     if (!currentTrackId) return;
 
+    const trackId = currentTrackId;
+
     if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
       els.title.textContent = 'Erro ao carregar áudio';
-      els.artist.textContent = 'Formato não suportado ou arquivo indisponível.';
+      els.artist.textContent = 'Verificando disponibilidade...';
+
+      const diag = await diagnoseStreamError(trackId);
+      if (trackId !== currentTrackId) return;
+
+      if (diag.status === 'forbidden') {
+        els.title.textContent = 'Prévia indisponível';
+        els.artist.textContent = 'Assine o Premium ou alugue para ouvir esta faixa.';
+      } else if (diag.status === 'not_found') {
+        els.title.textContent = 'Áudio não configurado';
+        els.artist.textContent = 'Esta faixa ainda não tem arquivo de áudio.';
+      } else if (diag.status === 'ok') {
+        els.title.textContent = 'Formato não suportado';
+        els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.';
+      } else {
+        els.title.textContent = 'Erro ao carregar áudio';
+        els.artist.textContent = diag.message || 'Tente novamente.';
+      }
     } else if (error?.code === MediaError.MEDIA_ERR_NETWORK) {
-      els.title.textContent = 'Erro ao carregar áudio';
+      els.title.textContent = 'Erro de rede';
       els.artist.textContent = 'Verifique sua conexão ou tente novamente.';
+    } else if (error?.code === MediaError.MEDIA_ERR_DECODE) {
+      els.title.textContent = 'Arquivo corrompido';
+      els.artist.textContent = 'Não foi possível decodificar o áudio.';
     } else {
       els.title.textContent = 'Erro ao carregar áudio';
       els.artist.textContent = 'Tente novamente.';
     }
   });
 
-  // ★ CORREÇÃO: findIndex = -1 não avança para a primeira faixa
+  // ★ Ended: respeita repeat mode e faz wrap
   audio.addEventListener('ended', () => {
-    if (!currentTrackMeta || !Array.isArray(currentTrackMeta.albumTracks)) return;
+    if (repeatMode === 'one') {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      return;
+    }
+
+    if (!currentTrackMeta?.albumTracks) return;
     const tracks = currentTrackMeta.albumTracks;
     const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
     if (index < 0) return;
-    const next = tracks[index + 1];
+
+    let nextIndex;
+    if (shuffleEnabled) {
+      nextIndex = Math.floor(Math.random() * tracks.length);
+    } else if (index < tracks.length - 1) {
+      nextIndex = index + 1;
+    } else if (repeatMode === 'all') {
+      nextIndex = 0;
+    } else {
+      return;
+    }
+
+    const next = tracks[nextIndex];
     if (next?.id) window.tocarMusicaDaLista(String(next.id));
+  });
+}
+
+// ─── PROGRESS BAR: TECLADO ───
+if (els.progressBar) {
+  els.progressBar.addEventListener('keydown', (e) => {
+    if (!audio.duration || !Number.isFinite(audio.duration)) return;
+    const step = 5;
+    let newTime = audio.currentTime;
+
+    switch (e.key) {
+      case 'ArrowLeft':  newTime -= step; break;
+      case 'ArrowRight': newTime += step; break;
+      case 'Home':       newTime = 0; break;
+      case 'End':        newTime = audio.duration; break;
+      default: return;
+    }
+
+    e.preventDefault();
+    audio.currentTime = Math.max(0, Math.min(audio.duration, newTime));
   });
 }
 
 // ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
-  if (!audio.src) return;
+  // iOS: permite tentar play mesmo com src vazio (o streamUrl vem logo em seguida)
+  if (!audio.src) {
+    if (currentTrackId) initPlayer(currentTrackId, true);
+    return;
+  }
   if (audio.paused) {
     audio.play().catch(err => console.error('[player] play() falhou:', err));
   } else {
@@ -412,36 +539,59 @@ window.playerPlay = () => {
 window.playerNext = () => {
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
+  if (!tracks.length) return;
+
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
-  if (index < 0 || index >= tracks.length - 1) return;
-  const next = tracks[index + 1];
+  if (index < 0) return;
+
+  let nextIndex;
+  if (shuffleEnabled) {
+    nextIndex = Math.floor(Math.random() * tracks.length);
+  } else if (index < tracks.length - 1) {
+    nextIndex = index + 1;
+  } else {
+    nextIndex = 0; // wrap
+  }
+
+  const next = tracks[nextIndex];
   if (next?.id) window.tocarMusicaDaLista(String(next.id));
 };
 
 window.playerPrev = () => {
   if (!currentTrackMeta?.albumTracks) return;
+
   if (audio.currentTime > 3) {
     audio.currentTime = 0;
     return;
   }
+
   const tracks = currentTrackMeta.albumTracks;
+  if (!tracks.length) return;
+
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
-  if (index <= 0) {
-    audio.currentTime = 0;
-    return;
+  if (index < 0) return;
+
+  let prevIndex;
+  if (shuffleEnabled) {
+    prevIndex = Math.floor(Math.random() * tracks.length);
+  } else if (index > 0) {
+    prevIndex = index - 1;
+  } else {
+    prevIndex = tracks.length - 1; // wrap
   }
-  const prev = tracks[index - 1];
+
+  const prev = tracks[prevIndex];
   if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
 };
 
-els.progressBar.addEventListener('click', (e) => {
+els.progressBar?.addEventListener('click', (e) => {
   if (!audio.duration || !Number.isFinite(audio.duration)) return;
   const rect = els.progressBar.getBoundingClientRect();
   const pos = (e.clientX - rect.left) / rect.width;
-  audio.currentTime = audio.duration * pos;
+  audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
 });
 
-// ★ CORREÇÃO: encodeURIComponent no ID
+// ★ tocarMusicaDaLista: encodeURIComponent + history + abas
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   const safeId = String(id);
@@ -450,12 +600,41 @@ window.tocarMusicaDaLista = async (id) => {
   await initPlayer(safeId);
 };
 
+// ─── SHUFFLE / REPEAT ───
+if (els.shuffleBtn) {
+  els.shuffleBtn.addEventListener('click', () => {
+    shuffleEnabled = !shuffleEnabled;
+    els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
+    els.shuffleBtn.classList.toggle('active', shuffleEnabled);
+  });
+}
+
+if (els.repeatBtn) {
+  els.repeatBtn.addEventListener('click', () => {
+    const order = ['off', 'all', 'one'];
+    repeatMode = order[(order.indexOf(repeatMode) + 1) % order.length];
+    els.repeatBtn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
+    els.repeatBtn.classList.toggle('active', repeatMode !== 'off');
+    els.repeatBtn.dataset.mode = repeatMode;
+    els.repeatBtn.setAttribute(
+      'aria-label',
+      repeatMode === 'off' ? 'Repetir: desligado'
+        : repeatMode === 'all' ? 'Repetir: todas'
+        : 'Repetir: uma'
+    );
+  });
+}
+
+// ─── MODAIS (ALUGUEL / ASSINATURA) ───
 window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
+
 window.abrirModalAluguel = () => {
-  if (currentTrackId) {
-    // TODO: integrar com o fluxo real de aluguel
-    alert(`Abrindo aluguel: ${currentTrackId}`);
-  }
+  if (!currentTrackId) return;
+  // O modal de aluguel vive na home (index.html).
+  // Redireciona para a home e pede o aluguel via hash.
+  const url = `/?rent=${encodeURIComponent(currentTrackId)}`;
+  window.location.href = url;
+  // TODO: index.html precisa ler ?rent=UUID e abrir o modal de aluguel.
 };
 
 // ─── BOOT ───
@@ -471,7 +650,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   await initPlayer(trackId);
 });
 
-// ─── NAVEGAÇÃO PELO HISTÓRICO ───
 window.addEventListener('popstate', () => {
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
