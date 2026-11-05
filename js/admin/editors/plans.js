@@ -2,18 +2,27 @@
    js/admin/editors/plans.js — Editor de planos (textos)
    ------------------------------------------------------------
    ⚠️  Este editor NÃO controla preços nem ativação comercial.
-       Preços vêm da tabela `plans` do banco (via /api/payments).
-       Ativação comercial (`plans.active`) é controlada no banco.
-       
+
+       Fonte de verdade dos preços: tabela `plans` do banco
+       (consultada por /api/payments ao criar a preferência).
+       Variáveis de ambiente MP_PREMIUM_* NÃO são a fonte
+       de preço neste projeto — o backend lê `plans.priceCents`.
+
+       Ativação comercial (`plans.active`) também vive no banco.
+       Desabilitar aqui só esconde o botão no frontend —
+       NÃO bloqueia contratação direta via API.
+
        Este arquivo edita APENAS textos exibidos no site:
-         - name, desc, badge, cta, features, featured
+         - name, desc, badge, cta, features, featured, disabled
 
    Correções aplicadas (auditoria):
-   - Validação de tamanho de textos
-   - Limites em features (quantidade e tamanho)
-   - Não descarta planos válidos do banco (só avisa)
-   - sync aviso "disabled é apenas visual"
-   - sanitizePlan no save
+   - render não chama ensureCanonicalPlans (não muta dados ao abrir)
+   - openPlanModal usa o mesmo `content` passado ao render
+   - validação unificada com limites explícitos
+   - sanitizePlan reforça tipos (id, booleanos, features)
+   - limites no HTML (maxlength) e no JS
+   - markDirty só após validação bem-sucedida
+   - botão Salvar bloqueado enquanto processa
    ============================================================ */
 
 import { AdminState, markDirty } from '../state.js';
@@ -29,12 +38,14 @@ const PLAN_SUFFIXES = {
   anual: '/ano'
 };
 
-const MAX_NAME = 80;
-const MAX_DESC = 240;
-const MAX_CTA = 50;
-const MAX_BADGE = 40;
-const MAX_FEATURES = 20;
-const MAX_FEATURE_TEXT = 120;
+const PLAN_LIMITS = {
+  name: 80,
+  desc: 240,
+  badge: 40,
+  cta: 50,
+  featureText: 140,
+  features: 20
+};
 
 const ALLOWED_PLAN_FIELDS = new Set([
   'id', 'name', 'desc', 'badge', 'cta', 'suffix',
@@ -58,8 +69,7 @@ const CANONICAL_PLANS = [
       { text: 'Prévias de 30s de todas as faixas', ok: true },
       { text: 'Acesso à discografia completa', ok: true },
       { text: 'Aluguel de faixas individuais', ok: true },
-      { text: 'Faixas completas na assinatura', ok: false },
-      { text: 'Downloads ilimitados', ok: false }
+      { text: 'Faixas completas na assinatura', ok: false }
     ],
     cta: 'Plano atual',
     disabled: true
@@ -74,7 +84,6 @@ const CANONICAL_PLANS = [
     features: [
       { text: 'Toda a discografia desbloqueada', ok: true },
       { text: 'Áudio em alta qualidade', ok: true },
-      { text: 'Downloads ilimitados', ok: true },
       { text: 'Aluguel de faixas incluído', ok: true },
       { text: 'Cancele quando quiser', ok: true }
     ],
@@ -101,43 +110,111 @@ const CANONICAL_PLANS = [
 ];
 
 // ─────────────────────────────────────────────────────────────
-// Validação de payload (antes de gravar)
+// Validação (usada antes de gravar)
 // ─────────────────────────────────────────────────────────────
-function validatePlanPayload(payload) {
+function validatePlanPayload(plan) {
   const errors = [];
 
-  if (!payload.name || payload.name.length > MAX_NAME) {
-    errors.push(`Nome deve ter 1–${MAX_NAME} caracteres.`);
+  if (!VALID_PLAN_IDS.has(String(plan?.id || ''))) {
+    errors.push('Identificador de plano inválido.');
   }
 
-  if (payload.cta.length > MAX_CTA) {
-    errors.push(`Texto do botão deve ter até ${MAX_CTA} caracteres.`);
+  if (!plan.name || !plan.name.trim()) {
+    errors.push('O nome do plano é obrigatório.');
+  } else if (plan.name.length > PLAN_LIMITS.name) {
+    errors.push(`Nome deve ter até ${PLAN_LIMITS.name} caracteres.`);
   }
 
-  if (payload.desc.length > MAX_DESC) {
-    errors.push(`Descrição deve ter até ${MAX_DESC} caracteres.`);
+  if (!plan.cta || !plan.cta.trim()) {
+    errors.push('O texto do botão é obrigatório.');
+  } else if (plan.cta.length > PLAN_LIMITS.cta) {
+    errors.push(`Texto do botão deve ter até ${PLAN_LIMITS.cta} caracteres.`);
   }
 
-  if (payload.badge && payload.badge.length > MAX_BADGE) {
-    errors.push(`Badge deve ter até ${MAX_BADGE} caracteres.`);
+  if (plan.desc && plan.desc.length > PLAN_LIMITS.desc) {
+    errors.push(`Descrição deve ter até ${PLAN_LIMITS.desc} caracteres.`);
   }
 
-  if (!Array.isArray(payload.features) || payload.features.length > MAX_FEATURES) {
-    errors.push(`O plano pode ter até ${MAX_FEATURES} recursos.`);
+  if (plan.badge && plan.badge.length > PLAN_LIMITS.badge) {
+    errors.push(`Badge deve ter até ${PLAN_LIMITS.badge} caracteres.`);
   }
 
-  for (const f of payload.features || []) {
-    if (!f.text || f.text.length > MAX_FEATURE_TEXT || typeof f.ok !== 'boolean') {
-      errors.push(`Recurso inválido (máx ${MAX_FEATURE_TEXT} caracteres).`);
-      break;
-    }
+  if (!Array.isArray(plan.features)) {
+    errors.push('A lista de recursos é inválida.');
+  } else if (plan.features.length > PLAN_LIMITS.features) {
+    errors.push(`O plano pode ter até ${PLAN_LIMITS.features} recursos.`);
+  } else {
+    plan.features.forEach((f, i) => {
+      if (!f || typeof f.text !== 'string' || !f.text.trim()) {
+        errors.push(`O recurso ${i + 1} está vazio.`);
+      } else if (f.text.length > PLAN_LIMITS.featureText) {
+        errors.push(`O recurso ${i + 1} ultrapassa ${PLAN_LIMITS.featureText} caracteres.`);
+      }
+      if (typeof f.ok !== 'boolean') {
+        errors.push(`O recurso ${i + 1} tem estado inválido.`);
+      }
+    });
   }
 
   return errors;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Normalização: mantém 3 canônicos, mas não descarta textos válidos
+// Sanitize (aplicado no save, depois da validação)
+// ─────────────────────────────────────────────────────────────
+function sanitizePlan(plan) {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) {
+    throw new TypeError('Plano inválido.');
+  }
+
+  const id = String(plan.id || '').toLowerCase().trim();
+  if (!VALID_PLAN_IDS.has(id)) {
+    throw new Error('Identificador de plano não permitido.');
+  }
+
+  const clean = {};
+
+  for (const key of Object.keys(plan)) {
+    if (ALLOWED_PLAN_FIELDS.has(key)) {
+      clean[key] = plan[key];
+    }
+  }
+
+  for (const key of FORBIDDEN_PLAN_FIELDS) {
+    delete clean[key];
+  }
+
+  const features = Array.isArray(plan.features)
+    ? plan.features
+        .filter((f) => f && typeof f.text === 'string')
+        .slice(0, PLAN_LIMITS.features)
+        .map((f) => ({
+          text: String(f.text).trim().slice(0, PLAN_LIMITS.featureText),
+          ok: f.ok === true
+        }))
+    : [];
+
+  return {
+    id,
+    name: String(plan.name || '').trim().slice(0, PLAN_LIMITS.name),
+    desc: String(plan.desc || '').trim().slice(0, PLAN_LIMITS.desc),
+    badge:
+      typeof plan.badge === 'string' && plan.badge.trim()
+        ? plan.badge.trim().slice(0, PLAN_LIMITS.badge)
+        : null,
+    cta: String(plan.cta || '').trim().slice(0, PLAN_LIMITS.cta),
+    suffix: PLAN_SUFFIXES[id] || '',
+    featured: plan.featured === true,
+    disabled: plan.disabled === true,
+    features
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Mescla dados existentes com o canônico (SEM mutar o content)
+// ------------------------------------------------------------
+// Retorna um NOVO array. Use apenas em fluxo explícito de
+// normalização/gravação, nunca no render.
 // ─────────────────────────────────────────────────────────────
 function ensureCanonicalPlans(rawPlans) {
   const input = Array.isArray(rawPlans) ? rawPlans : [];
@@ -152,35 +229,35 @@ function ensureCanonicalPlans(rawPlans) {
 
   return CANONICAL_PLANS.map((def) => {
     const existing = byId.get(def.id) || {};
-    const merged = {};
 
-    merged.id = def.id;
+    const merged = { id: def.id };
 
-    merged.name = typeof existing.name === 'string' && existing.name.trim()
-      ? existing.name.trim().slice(0, MAX_NAME)
-      : def.name;
+    merged.name =
+      typeof existing.name === 'string' && existing.name.trim()
+        ? existing.name.trim().slice(0, PLAN_LIMITS.name)
+        : def.name;
 
-    merged.desc = typeof existing.desc === 'string'
-      ? existing.desc.slice(0, MAX_DESC)
-      : def.desc;
+    merged.desc =
+      typeof existing.desc === 'string'
+        ? existing.desc.slice(0, PLAN_LIMITS.desc)
+        : def.desc;
 
-    merged.badge = typeof existing.badge === 'string' && existing.badge.trim()
-      ? existing.badge.trim().slice(0, MAX_BADGE)
-      : def.badge;
+    merged.badge =
+      typeof existing.badge === 'string' && existing.badge.trim()
+        ? existing.badge.trim().slice(0, PLAN_LIMITS.badge)
+        : def.badge;
 
-    merged.cta = typeof existing.cta === 'string' && existing.cta.trim()
-      ? existing.cta.trim().slice(0, MAX_CTA)
-      : def.cta;
+    merged.cta =
+      typeof existing.cta === 'string' && existing.cta.trim()
+        ? existing.cta.trim().slice(0, PLAN_LIMITS.cta)
+        : def.cta;
 
     merged.suffix = PLAN_SUFFIXES[def.id] || '';
 
-    merged.featured = typeof existing.featured === 'boolean'
-      ? existing.featured
-      : def.featured;
-
-    merged.disabled = typeof existing.disabled === 'boolean'
-      ? existing.disabled
-      : def.disabled;
+    merged.featured =
+      typeof existing.featured === 'boolean' ? existing.featured : def.featured;
+    merged.disabled =
+      typeof existing.disabled === 'boolean' ? existing.disabled : def.disabled;
 
     const rawFeatures = Array.isArray(existing.features)
       ? existing.features
@@ -188,14 +265,14 @@ function ensureCanonicalPlans(rawPlans) {
 
     merged.features = rawFeatures
       .filter((f) => f && typeof f.text === 'string')
-      .slice(0, MAX_FEATURES)
+      .slice(0, PLAN_LIMITS.features)
       .map((f) => ({
-        text: String(f.text).slice(0, MAX_FEATURE_TEXT),
+        text: String(f.text).slice(0, PLAN_LIMITS.featureText),
         ok: f.ok !== false
       }));
 
     if (!merged.features.length) {
-      merged.features = JSON.parse(JSON.stringify(def.features));
+      merged.features = def.features.map((f) => ({ ...f }));
     }
 
     return merged;
@@ -203,48 +280,32 @@ function ensureCanonicalPlans(rawPlans) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sanitize
-// ─────────────────────────────────────────────────────────────
-function sanitizePlan(plan) {
-  const clean = {};
-
-  for (const key of Object.keys(plan || {})) {
-    if (ALLOWED_PLAN_FIELDS.has(key)) {
-      clean[key] = plan[key];
-    }
-  }
-
-  for (const key of FORBIDDEN_PLAN_FIELDS) {
-    delete clean[key];
-  }
-
-  if (clean.id) clean.id = String(clean.id).toLowerCase().trim();
-
-  if (clean.features && Array.isArray(clean.features)) {
-    clean.features = clean.features
-      .filter((f) => f && typeof f.text === 'string')
-      .slice(0, MAX_FEATURES)
-      .map((f) => ({
-        text: String(f.text).slice(0, MAX_FEATURE_TEXT),
-        ok: f.ok !== false
-      }));
-  }
-
-  return clean;
-}
-
-// ─────────────────────────────────────────────────────────────
 // Render
+// ------------------------------------------------------------
+// Não normaliza nem cria planos. Só exibe o que existe.
 // ─────────────────────────────────────────────────────────────
 export function renderPlansEditor(content = AdminState.content) {
   const wrap = document.getElementById('plansEditor');
   if (!wrap) return;
 
-  if (!content.planos) content.planos = {};
-  if (!Array.isArray(content.planos.plans)) content.planos.plans = [];
+  if (!content || typeof content !== 'object') {
+    wrap.innerHTML = '<p class="admin-empty">Conteúdo administrativo indisponível.</p>';
+    return;
+  }
 
-  content.planos.plans = ensureCanonicalPlans(content.planos.plans);
-  const plans = content.planos.plans;
+  const planos = content.planos;
+
+  if (!planos || typeof planos !== 'object' || Array.isArray(planos)) {
+    wrap.innerHTML = '<p class="admin-empty">Estrutura de planos inválida.</p>';
+    return;
+  }
+
+  if (!Array.isArray(planos.plans)) {
+    wrap.innerHTML = '<p class="admin-empty">Lista de planos inválida.</p>';
+    return;
+  }
+
+  const plans = planos.plans;
 
   const header = `
     <div class="plans-editor__header">
@@ -271,7 +332,8 @@ export function renderPlansEditor(content = AdminState.content) {
           </strong>
           <button class="btn btn-ghost btn-sm"
                   data-action="edit"
-                  data-i="${i}">✏ Editar</button>
+                  data-i="${i}"
+                  type="button">✏ Editar</button>
         </div>
         <div style="color:var(--text-dim);font-size:0.8rem;">
           <code>${esc(p.id || '?')}</code>
@@ -286,27 +348,45 @@ export function renderPlansEditor(content = AdminState.content) {
     <p class="plans-pricing-warn hint" style="color:var(--text-dim);font-size:0.75rem;margin-top:1rem;padding:0.7rem;background:rgba(212,175,55,0.05);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;line-height:1.5;">
       <strong style="color:var(--accent);">🔒 Este editor controla apenas textos.</strong>
       Preço e ativação comercial vêm da tabela <code>plans</code> do banco.
-      Desabilitar um plano aqui <strong>não bloqueia</strong> o checkout —
-      use o banco (ou uma futura tela de planos comerciais) para isso.
+      Desabilitar um plano aqui <strong>não bloqueia</strong> o checkout.
     </p>
   `;
 
   wrap.innerHTML = `${header}${listHTML}${warnHTML}`;
 
   wrap.querySelectorAll('[data-action="edit"]').forEach((b) => {
-    b.addEventListener('click', () => openPlanModal(Number(b.dataset.i)));
+    b.addEventListener('click', () => {
+      const index = Number(b.dataset.i);
+
+      if (!Number.isInteger(index) || index < 0 || index >= plans.length) {
+        toast('Plano inválido.', '⚠');
+        return;
+      }
+
+      openPlanModal(index, content);
+    });
   });
 }
 
 // ─────────────────────────────────────────────────────────────
 // Modal
 // ─────────────────────────────────────────────────────────────
-function openPlanModal(i) {
-  const content = AdminState.content;
+function openPlanModal(i, content = AdminState.content) {
+  if (!content?.planos || !Array.isArray(content.planos.plans)) {
+    toast('Não foi possível carregar os planos.', '⚠');
+    return;
+  }
+
   const plan = content.planos.plans[i];
-  if (!plan) return;
+
+  if (!plan) {
+    toast('Plano não encontrado.', '⚠');
+    return;
+  }
 
   const cloned = JSON.parse(JSON.stringify(plan));
+  if (!Array.isArray(cloned.features)) cloned.features = [];
+
   const canonicalSuffix = PLAN_SUFFIXES[plan.id] || '';
 
   openAdminModal(`
@@ -319,7 +399,9 @@ function openPlanModal(i) {
       </div>
       <div class="form-group">
         <label>Nome</label>
-        <input type="text" id="pmName" maxlength="${MAX_NAME}" value="${esc(cloned.name || '')}">
+        <input type="text" id="pmName"
+               maxlength="${PLAN_LIMITS.name}"
+               value="${esc(cloned.name || '')}">
       </div>
     </div>
 
@@ -330,17 +412,23 @@ function openPlanModal(i) {
       </div>
       <div class="form-group">
         <label>Badge</label>
-        <input type="text" id="pmBadge" maxlength="${MAX_BADGE}" value="${esc(cloned.badge || '')}">
+        <input type="text" id="pmBadge"
+               maxlength="${PLAN_LIMITS.badge}"
+               value="${esc(cloned.badge || '')}">
       </div>
       <div class="form-group">
         <label>Texto do botão (CTA)</label>
-        <input type="text" id="pmCta" maxlength="${MAX_CTA}" value="${esc(cloned.cta || '')}">
+        <input type="text" id="pmCta"
+               maxlength="${PLAN_LIMITS.cta}"
+               value="${esc(cloned.cta || '')}">
       </div>
     </div>
 
     <div class="form-group">
       <label>Descrição</label>
-      <input type="text" id="pmDesc" maxlength="${MAX_DESC}" value="${esc(cloned.desc || '')}">
+      <input type="text" id="pmDesc"
+             maxlength="${PLAN_LIMITS.desc}"
+             value="${esc(cloned.desc || '')}">
     </div>
 
     <div class="form-group">
@@ -352,7 +440,7 @@ function openPlanModal(i) {
 
     <h3 style="margin-top:1rem;">Recursos</h3>
     <div id="pmFeatures"></div>
-    <button class="btn btn-outline btn-sm" id="pmAddFeature" style="margin-top:0.5rem;">
+    <button class="btn btn-outline btn-sm" id="pmAddFeature" style="margin-top:0.5rem;" type="button">
       + Adicionar recurso
     </button>
 
@@ -362,12 +450,13 @@ function openPlanModal(i) {
     </p>
 
     <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
-      <button class="btn btn-outline btn-sm" id="pmCancel">Cancelar</button>
-      <button class="btn btn-primary btn-sm" id="pmSave">Salvar</button>
+      <button class="btn btn-outline btn-sm" id="pmCancel" type="button">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="pmSave" type="button">Salvar</button>
     </div>
   `);
 
   const featuresWrap = document.getElementById('pmFeatures');
+  if (!featuresWrap) return;
 
   const renderFeatures = () => {
     featuresWrap.innerHTML = cloned.features.map((f, fi) => `
@@ -376,14 +465,15 @@ function openPlanModal(i) {
           <strong>Recurso ${fi + 1}</strong>
           <button class="btn btn-ghost btn-sm"
                   data-action="remove-feature"
-                  data-fi="${fi}">🗑</button>
+                  data-fi="${fi}"
+                  type="button">🗑</button>
         </div>
         <div class="form-row">
           <div class="form-group">
             <label>Texto</label>
             <input type="text"
                    value="${esc(f.text || '')}"
-                   maxlength="${MAX_FEATURE_TEXT}"
+                   maxlength="${PLAN_LIMITS.featureText}"
                    data-feature-field="text"
                    data-fi="${fi}">
           </div>
@@ -397,17 +487,24 @@ function openPlanModal(i) {
       </div>`).join('');
 
     featuresWrap.querySelectorAll('[data-feature-field]').forEach((el) => {
-      el.addEventListener('input', () => {
+      const eventName = el.type === 'checkbox' ? 'change' : 'input';
+
+      el.addEventListener(eventName, () => {
         const fi = Number(el.dataset.fi);
         const key = el.dataset.featureField;
-        if (!cloned.features[fi]) cloned.features[fi] = {};
-        cloned.features[fi][key] = el.type === 'checkbox' ? el.checked : el.value;
+
+        if (!Number.isInteger(fi) || !cloned.features[fi]) return;
+
+        cloned.features[fi][key] =
+          el.type === 'checkbox' ? el.checked : el.value;
       });
     });
 
     featuresWrap.querySelectorAll('[data-action="remove-feature"]').forEach((b) => {
       b.addEventListener('click', () => {
-        cloned.features.splice(Number(b.dataset.fi), 1);
+        const fi = Number(b.dataset.fi);
+        if (!Number.isInteger(fi) || fi < 0 || fi >= cloned.features.length) return;
+        cloned.features.splice(fi, 1);
         renderFeatures();
       });
     });
@@ -415,45 +512,70 @@ function openPlanModal(i) {
 
   renderFeatures();
 
-  document.getElementById('pmAddFeature').addEventListener('click', () => {
-    if (cloned.features.length >= MAX_FEATURES) {
-      toast(`Limite de ${MAX_FEATURES} recursos.`, '⚠');
+  document.getElementById('pmAddFeature')?.addEventListener('click', () => {
+    if (cloned.features.length >= PLAN_LIMITS.features) {
+      toast(`Limite de ${PLAN_LIMITS.features} recursos.`, '⚠');
       return;
     }
-    cloned.features.push({ text: 'Novo recurso', ok: true });
+
+    cloned.features.push({ text: '', ok: true });
     renderFeatures();
+
+    const inputs = featuresWrap.querySelectorAll('[data-feature-field="text"]');
+    inputs[inputs.length - 1]?.focus();
   });
 
-  document.getElementById('pmCancel').addEventListener('click', () => closeAdminModal());
+  document.getElementById('pmCancel')?.addEventListener('click', () => closeAdminModal());
 
-  document.getElementById('pmSave').addEventListener('click', () => {
-    const payload = {
-      id: plan.id,
-      name: document.getElementById('pmName').value.trim(),
-      suffix: canonicalSuffix,
-      badge: document.getElementById('pmBadge').value.trim() || null,
-      cta: document.getElementById('pmCta').value,
-      desc: document.getElementById('pmDesc').value,
-      featured: document.getElementById('pmFeatured').checked,
-      disabled: document.getElementById('pmDisabled').checked,
-      features: cloned.features
-        .filter((f) => f && typeof f.text === 'string' && f.text.trim())
-        .map((f) => ({ text: f.text.trim(), ok: f.ok !== false }))
-    };
+  document.getElementById('pmSave')?.addEventListener('click', () => {
+    const saveButton = document.getElementById('pmSave');
+    if (!saveButton || saveButton.disabled) return;
 
-    const errors = validatePlanPayload(payload);
-    if (errors.length) {
-      toast(errors[0], '⚠');
-      return;
+    saveButton.disabled = true;
+
+    try {
+      const payload = {
+        id: plan.id,
+        name: document.getElementById('pmName').value.trim(),
+        suffix: canonicalSuffix,
+        badge: document.getElementById('pmBadge').value.trim() || null,
+        cta: document.getElementById('pmCta').value.trim(),
+        desc: document.getElementById('pmDesc').value.trim(),
+        featured: document.getElementById('pmFeatured').checked,
+        disabled: document.getElementById('pmDisabled').checked,
+        features: cloned.features
+          .filter((f) => f && typeof f.text === 'string' && f.text.trim())
+          .map((f) => ({ text: f.text.trim(), ok: f.ok !== false }))
+      };
+
+      const errors = validatePlanPayload(payload);
+      if (errors.length) {
+        toast(errors[0], '⚠');
+        saveButton.disabled = false;
+        return;
+      }
+
+      const sanitized = sanitizePlan(payload);
+
+      if (
+        !Array.isArray(content.planos.plans) ||
+        !content.planos.plans[i] ||
+        content.planos.plans[i].id !== plan.id
+      ) {
+        throw new Error('O plano foi alterado ou não está mais disponível.');
+      }
+
+      content.planos.plans[i] = sanitized;
+
+      markDirty();
+      renderPlansEditor(content);
+      closeAdminModal();
+      toast('Plano atualizado. Clique em "Salvar alterações" no topo.', '💳');
+    } catch (error) {
+      console.error('[plans] erro ao salvar:', error);
+      toast(error?.message || 'Não foi possível salvar o plano.', '⚠');
+      saveButton.disabled = false;
     }
-
-    const sanitized = sanitizePlan(payload);
-    content.planos.plans[i] = sanitized;
-
-    markDirty();
-    renderPlansEditor(content);
-    closeAdminModal();
-    toast('Plano atualizado. Clique em "Salvar alterações" no topo.', '💳');
   });
 }
 
@@ -461,5 +583,6 @@ export {
   ensureCanonicalPlans,
   sanitizePlan,
   VALID_PLAN_IDS,
-  PLAN_SUFFIXES
+  PLAN_SUFFIXES,
+  PLAN_LIMITS
 };
