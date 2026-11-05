@@ -311,8 +311,8 @@ async function getAuthUser(req) {
     }
 
   try {
-    const { sql } = require('./_db');
-    const rows = await sql`SELECT id, role FROM users WHERE id = ${payload.id} LIMIT 1`;
+    const { neonSql } = require('./_db');
+    const rows = await neonSql`SELECT id, role FROM users WHERE id = ${payload.id} LIMIT 1`;
     if (!rows.length) return null;
 
     return {
