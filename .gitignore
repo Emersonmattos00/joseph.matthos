@@ -163,3 +163,4 @@ awscliv2.zip
 *.zip
 .env.local
 env.local
+cookies.txt
