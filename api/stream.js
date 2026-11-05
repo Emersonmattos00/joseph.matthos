@@ -233,33 +233,25 @@ module.exports = async function stream(req, res) {
     }
 
     /* ── 6. Usuário ── */
-    const user = await getAuthUser(req);
     const nowIso = new Date().toISOString();
 
     let accessLevel = 'preview';
     let authCheckFailed = false;
 
     /* ── 7. Assinatura ativa e vigente ── */
-    if (user?.id) {
-      try {
-        const [sub] = await db
-          .select()
-          .from(subscriptions)
-          .where(
-            and(
-              eq(subscriptions.userId, user.id),
-              eq(subscriptions.status, 'ACTIVE'),
-              lte(subscriptions.currentPeriodStart, nowIso),
-              gt(subscriptions.currentPeriodEnd, nowIso)
-            )
-          )
-          .limit(1);
-
-        if (sub) accessLevel = 'full';
-      } catch (err) {
-        console.error('[stream] assinatura:', requestId, err?.code || err?.name);
-        authCheckFailed = true;
+    let user = null;
+    try {
+      user = await getAuthUser(req);
+    } catch (err) {
+      if (err?.code === 'AUTH_DATABASE_UNAVAILABLE') {
+        console.error('[stream] getAuthUser:', requestId, err.code);
+        return sendError(
+          res,
+          503,
+          'Não foi possível verificar sua sessão. Tente novamente.'
+        );
       }
+      throw err;
     }
 
     /* ── 8. Aluguel ativo e vigente ── */
