@@ -1,4 +1,4 @@
-/* api/_cache.js — Redis com fail-closed para operações sensíveis */
+/* api/_cache.js — Redis opcional com fail-closed para operações sensíveis */
 'use strict';
 
 let redis = null;
@@ -16,7 +16,7 @@ if (url && token) {
     redis = new Redis({ url, token });
     streamRatelimit = new Ratelimit({
       redis,
-      limiter: Ratelimit.slidingWindow(60, '60 s'), // 60 req/min por IP
+      limiter: Ratelimit.slidingWindow(60, '60 s'),
       analytics: true,
       prefix: 'ratelimit:stream',
     });
@@ -28,17 +28,22 @@ if (url && token) {
   console.warn('[cache] UPSTASH_REDIS_* não configurado — cache e rate limit desativados.');
 }
 
-// ─────────────────────────────────────────────────────────────
-// Rate limit com fail-closed (nega em produção se Redis cair)
-// ─────────────────────────────────────────────────────────────
+// Rate limit com fallback: se Redis indisponível, NEGA em produção (fail-closed)
 async function checkStreamRateLimit(ip) {
-  // ★ TEMPORÁRIO: desativado para testes. Reative em produção.
-  return { success: true };
+  if (!redisAvailable || !streamRatelimit) {
+    if (process.env.NODE_ENV === 'production') {
+      return { success: false, reason: 'rate_limit_unavailable' };
+    }
+    return { success: true };
+  }
+  try {
+    return await streamRatelimit.limit(ip);
+  } catch (err) {
+    console.error('[cache] Erro no rate limit:', err.message);
+    return { success: process.env.NODE_ENV !== 'production' };
+  }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Cache de acesso (opcional, usado pelo stream.js)
-// ─────────────────────────────────────────────────────────────
 async function getCachedAccess(userId, trackId) {
   if (!redisAvailable) return null;
   try { return await redis.get(`access:${userId}:${trackId}`); }

@@ -1,5 +1,6 @@
 # ============================================================
 # SISTEMA OPERACIONAL
+# ============================================================
 .DS_Store
 .DS_Store?
 ._*
@@ -9,7 +10,9 @@ Thumbs.db
 ehthumbs.db
 desktop.ini
 
+# ============================================================
 # NODE / DEPENDÊNCIAS
+# ============================================================
 node_modules/
 yarn.lock
 pnpm-lock.yaml
@@ -17,19 +20,26 @@ pnpm-lock.yaml
 .yarn/
 .pnp.js
 .pnp.cjs
+
 # ⚠️  NÃO ignorar package-lock.json — ele DEVE ser commitado
 #     (build determinístico na Vercel)
+
+# ============================================================
 # LOGS
+# ============================================================
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+# ============================================================
 # VARIÁVEIS DE AMBIENTE
 # ------------------------------------------------------------
 # ⚠️  NUNCA commite arquivos .env reais.
 #     Use .env.example (commitado) como template.
+# ============================================================
 .env
 .env.local
 .env.*.local
@@ -37,9 +47,13 @@ lerna-debug.log*
 .env.production
 .env.test
 .env*.local
+
 # ✅ Exceção: template documentado
 !.env.example
+
+# ============================================================
 # SEGREDOS / CHAVES / CERTIFICADOS
+# ============================================================
 *.pem
 *.key
 *.crt
@@ -48,12 +62,18 @@ lerna-debug.log*
 secrets.json
 credentials.json
 service-account*.json
+
+# ============================================================
 # VERCEL / DEPLOY
+# ============================================================
 .vercel
 .now
 .netlify
 .netlify.toml
+
+# ============================================================
 # EDITORES / IDEs
+# ============================================================
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
@@ -64,9 +84,15 @@ service-account*.json
 *~
 *.sublime-project
 *.sublime-workspace
+
+# ============================================================
 # HISTÓRICO LOCAL (VSCode)
+# ============================================================
 .history/
+
+# ============================================================
 # BUILD / CACHE
+# ============================================================
 dist/
 build/
 out/
@@ -76,27 +102,41 @@ out/
 .nuxt/
 .vite/
 .turbo/
+
+# ============================================================
 # TESTES / COBERTURA
+# ============================================================
 coverage/
 .nyc_output/
 *.lcov
+
+# ============================================================
 # ÁUDIOS LOCAIS (grandes — não commitar)
+# ------------------------------------------------------------
 # O projeto usa Supabase Storage para áudios. Esta pasta é
 # apenas para arquivos temporários de desenvolvimento local.
+# ============================================================
 assets/audio/*.mp3
 assets/audio/*.wav
 assets/audio/*.ogg
 assets/audio/*.m4a
 assets/audio/*.flac
 !assets/audio/.gitkeep
+
+# ============================================================
 # IMAGENS PESADAS (> 5MB — otimizar antes de subir)
+# ============================================================
 assets/img/*.psd
 assets/img/*.ai
 assets/img/*.tiff
 assets/img/raw/
 .env
 .env.local
+.env
+.env.local
 .env.save
+.env.save
+.env
 .env.*
 !.env.example
 *.bak
@@ -109,7 +149,17 @@ assets/img/raw/
 *.pre-final
 *.pre-b2-fix
 *.backup-*
+.env
+
+# Backups locais
+*.pre-amz
+*.pre-indice
+*.pre-final
+*.pre-b2-fix
+*.backup-*
 awscliv2.zip
 *.zip
+awscliv2.zip
+*.zip
+.env.local
 env.local
-cookies.txt
