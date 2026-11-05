@@ -9,7 +9,15 @@
        3) POST /api/admin?action=upload-confirm → valida no B2 + grava no Neon
    - Comprime imagens no cliente antes de enviar
    - Progresso real via XHR para áudio
-   - Sem IndexedDB, sem Data URLs persistidas
+
+   Correções aplicadas (auditoria):
+   - Removido cabeçalho x-upsert (não assinado pelo backend)
+   - Timeout de upload aumentado para 10 min
+   - Imagem comprimida recebe extensão .jpg (coerente com JPEG)
+   - Limite de imagem reduzido para 3 MB (Base64 + JSON)
+   - Validação unificada (tamanho + extensão + MIME)
+   - uploadAudioPresigned propaga operationId se o backend
+     devolver (compatível com backend atual e com o novo)
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -20,10 +28,13 @@ import { toast } from './ui/toast.js';
 // ─────────────────────────────────────────────────────────────
 
 // Imagens: Base64 (cabe no body da Vercel de 4.5 MB)
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;              // 5 MB
+// Base64 aumenta ~33%, então 3 MB de imagem → ~4 MB de body.
+const MAX_IMAGE_SIZE = 3 * 1024 * 1024;              // 3 MB
 
 // Áudio: presigned (sem limite de body da Vercel)
 const MAX_AUDIO_SIZE = 200 * 1024 * 1024;            // 200 MB
+
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;            // 10 min
 
 const ALLOWED_IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -44,7 +55,6 @@ const ALLOWED_AUDIO_TYPES = new Set([
   'audio/x-wav'       // Windows
 ]);
 
-// Extensões por fallback (quando o browser não preenche file.type)
 const AUDIO_EXTENSIONS = new Set([
   'mp3', 'm4a', 'mp4', 'wav', 'ogg', 'oga', 'opus',
   'flac', 'aac', 'webm', 'aif', 'aiff'
@@ -76,7 +86,11 @@ export async function uploadImage(file) {
 
   const base64 = await compressImage(file, 1920, 0.82);
 
-  return uploadBase64(base64, file.name || 'image.jpg', 'image/jpeg', 'image');
+  // O conteúdo enviado é sempre JPEG, então a extensão deve ser .jpg
+  // para não gerar arquivos .png com conteúdo JPEG.
+  const filename = `${getBaseName(file.name)}.jpg`;
+
+  return uploadBase64(base64, filename, 'image/jpeg', 'image');
 }
 
 /**
@@ -118,13 +132,15 @@ async function uploadAudioPresigned(file, kind, onProgress) {
     throw new Error(`Áudio muito grande (máx ${maxMb} MB).`);
   }
 
+  const contentType = normalizeAudioMime(file);
+
   // 1) Pede URL assinada ao backend (Backblaze B2)
   const signRes = await apiFetch('upload-sign', {
     method: 'POST',
     body: {
       kind,
       filename: file.name || 'audio.mp3',
-      contentType: normalizeAudioMime(file),
+      contentType,
       size: file.size
     }
   });
@@ -138,17 +154,26 @@ async function uploadAudioPresigned(file, kind, onProgress) {
   await putFileXHR(
     signRes.uploadUrl,
     file,
-    normalizeAudioMime(file),
+    contentType,
     onProgress
   );
 
   // 3) Confirma no backend (valida que o arquivo existe no B2 e grava no Neon)
+  const confirmBody = {
+    kind,
+    path: signRes.path
+  };
+
+  // Compatibilidade: só envia operationId se o backend devolver.
+  // Quando o backend for atualizado para gerar/validar operationId,
+  // o campo passa a ser exigido automaticamente.
+  if (signRes.operationId) {
+    confirmBody.operationId = signRes.operationId;
+  }
+
   const confirm = await apiFetch('upload-confirm', {
     method: 'POST',
-    body: {
-      kind,
-      path: signRes.path
-    }
+    body: confirmBody
   });
 
   if (!confirm?.ok) {
@@ -171,12 +196,11 @@ function putFileXHR(url, file, contentType, onProgress) {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url, true);
     xhr.setRequestHeader('Content-Type', contentType);
-    
-    // Nota: O Backblaze B2 às vezes exige headers de segurança no presigned, 
-    // mas o x-upsert é genérico e não deve atrapalhar caso não seja aceito.
-    xhr.setRequestHeader('x-upsert', 'true');
 
-    xhr.timeout = 180_000; // 3 min
+    // x-upsert removido: não é assinado pelo backend
+    // e pode provocar rejeição no B2 + exigir CORS extra.
+
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
 
     if (typeof onProgress === 'function') {
       xhr.upload.onprogress = (e) => {
@@ -195,8 +219,12 @@ function putFileXHR(url, file, contentType, onProgress) {
       }
     };
 
-    xhr.onerror = () => reject(new Error('Erro de rede no upload.'));
-    xhr.ontimeout = () => reject(new Error('Upload excedeu o tempo limite (3 min).'));
+    xhr.onerror = () => reject(new Error(
+      'Erro de conexão com o Backblaze B2. Verifique o CORS.'
+    ));
+    xhr.ontimeout = () => reject(new Error(
+      'Upload excedeu o tempo limite (10 min).'
+    ));
     xhr.onabort = () => reject(new Error('Upload cancelado.'));
 
     xhr.send(file);
@@ -285,27 +313,62 @@ export function bindUpload(inputId, onUploaded, kind = 'image') {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers de validação
+// Validação unificada (tamanho + extensão + MIME)
 // ─────────────────────────────────────────────────────────────
+function validateFile(file, allowedTypes, allowedExtensions, maxSize) {
+  if (!file || typeof file.size !== 'number') {
+    throw new Error('Arquivo inválido.');
+  }
 
-function isValidImage(file) {
-  if (!file) return false;
+  if (file.size <= 0) {
+    throw new Error('O arquivo está vazio.');
+  }
 
-  const mime = String(file.type || '').toLowerCase();
-  if (ALLOWED_IMAGE_TYPES.has(mime)) return true;
+  if (file.size > maxSize) {
+    const maxMb = Math.round(maxSize / 1024 / 1024);
+    throw new Error(`Arquivo muito grande (máx ${maxMb} MB).`);
+  }
 
   const ext = getExtension(file.name);
-  return IMAGE_EXTENSIONS.has(ext);
+  const mime = String(file.type || '').toLowerCase();
+
+  if (!allowedExtensions.has(ext)) {
+    throw new Error('Extensão de arquivo não permitida.');
+  }
+
+  // Aceita quando MIME vazio (alguns navegadores) desde que a
+  // extensão seja válida — o backend ainda valida o conteúdo.
+  if (mime && !allowedTypes.has(mime)) {
+    throw new Error('Tipo MIME não permitido.');
+  }
+
+  return true;
+}
+
+function isValidImage(file) {
+  try {
+    return validateFile(
+      file,
+      ALLOWED_IMAGE_TYPES,
+      IMAGE_EXTENSIONS,
+      MAX_IMAGE_SIZE
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isValidAudio(file) {
-  if (!file) return false;
-
-  const mime = String(file.type || '').toLowerCase();
-  if (ALLOWED_AUDIO_TYPES.has(mime)) return true;
-
-  const ext = getExtension(file.name);
-  return AUDIO_EXTENSIONS.has(ext);
+  try {
+    return validateFile(
+      file,
+      ALLOWED_AUDIO_TYPES,
+      AUDIO_EXTENSIONS,
+      MAX_AUDIO_SIZE
+    );
+  } catch {
+    return false;
+  }
 }
 
 function normalizeAudioMime(file) {
@@ -338,8 +401,20 @@ function getExtension(filename) {
   return s.slice(dot + 1).toLowerCase();
 }
 
+function getBaseName(filename) {
+  const s = String(filename || 'image');
+  const dot = s.lastIndexOf('.');
+  const base = dot >= 0 ? s.slice(0, dot) : s;
+
+  return (
+    base
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 80) || 'image'
+  );
+}
+
 // ─────────────────────────────────────────────────────────────
-// Helpers de conversão (imagem)
+// Conversão de imagem
 // ─────────────────────────────────────────────────────────────
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
