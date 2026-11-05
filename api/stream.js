@@ -363,4 +363,4 @@ module.exports = async function stream(req, res) {
       return sendError(res, 503, 'Não foi possível disponibilizar o áudio.');
     }
   }
-};
+};// redeploy Thu Nov  5 18:32:20 UTC 2026
