@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sem conexão | Joseph Matthos</title>
 <meta name="description" content="Você está offline. Algumas funcionalidades da plataforma precisam de internet.">
-<meta name="robots" content="noindex, follow">
+<meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#0b0a0c">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8E%A4%3C/text%3E%3C/svg%3E">
 
@@ -13,7 +13,6 @@
   ⚠️ NÃO carregar Google Fonts aqui.
   Esta página é servida offline. Recursos externos falham
   silenciosamente e atrasam o render.
-  Usamos system fonts com fallback tipográfico.
 -->
 
 <style>
@@ -27,7 +26,6 @@
     --accent: #d4af37;
     --border: #2b272f;
 
-    /* Tipografia com fallback de sistema */
     --font-serif: 'Playfair Display', Georgia, 'Times New Roman', 'Liberation Serif', serif;
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
                  'Helvetica Neue', Arial, 'Liberation Sans', sans-serif;
@@ -66,7 +64,6 @@
     margin-bottom: 1.5rem;
     display: inline-block;
     animation: pulse 2.4s ease-in-out infinite;
-    /* Fallback de emoji caso a fonte de símbolos não carregue */
     line-height: 1;
     font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   }
@@ -210,8 +207,8 @@
 
     <p>
       Parece que você está offline. Algumas partes da plataforma ainda
-      funcionam, mas precisamos de internet para carregar áudios e
-      atualizações.
+      funcionam pelo cache, mas precisamos de internet para carregar
+      áudios e atualizações.
     </p>
 
     <div class="status" id="status" role="status" aria-live="polite">
@@ -220,17 +217,19 @@
     </div>
 
     <div class="actions">
-      <button type="button" class="btn btn-primary" id="retryBtn" aria-label="Tentar carregar novamente">
+      <button type="button" class="btn btn-primary" id="retryBtn"
+              aria-label="Verificar novamente a conexão com a internet">
         ↻ Tentar novamente
       </button>
-      <a href="/" class="btn btn-outline" id="homeLink" aria-label="Voltar para a página inicial">
+      <a href="/" class="btn btn-outline" id="homeLink"
+         aria-label="Voltar para a página inicial">
         ← Voltar ao site
       </a>
     </div>
 
     <p class="hint">
-      Dica: verifique sua conexão Wi-Fi ou dados móveis. Quando a internet
-      voltar, esta página será atualizada automaticamente.
+      Dica: verifique sua conexão Wi-Fi ou dados móveis. Alguns conteúdos
+      (como áudio) só funcionam com internet.
     </p>
   </main>
 
@@ -245,96 +244,96 @@
 
 <script>
 (function () {
-  var retryBtn = document.getElementById('retryBtn');
-  var homeLink = document.getElementById('homeLink');
-  var statusEl = document.getElementById('status');
-  var statusText = document.getElementById('statusText');
+  'use strict';
+
+  const retryBtn = document.getElementById('retryBtn');
+  const statusEl = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+
+  const CHECK_TIMEOUT = 7000;
+
+  let checking = false;
+  let reloadScheduled = false;
 
   function setOnline() {
     statusEl.classList.add('online');
-    statusText.textContent = 'Conexão restaurada';
+    statusText.textContent = 'Conexão com o servidor restaurada';
   }
 
   function setOffline() {
     statusEl.classList.remove('online');
-    statusText.textContent = 'Você está offline';
+    statusText.textContent = 'Não foi possível conectar ao servidor';
   }
 
-  function updateStatus() {
-    if (navigator.onLine) setOnline();
-    else setOffline();
-  }
+  async function ping() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), CHECK_TIMEOUT);
 
-  // Ping real: HEAD na própria origem, sem cache. Só considera online se response.ok.
-  function ping() {
-    return fetch(window.location.origin + '/?ping=' + Date.now(), {
-      method: 'HEAD',
-      cache: 'no-store',
-      redirect: 'follow'
-    }).then(function (res) {
-      return res && res.ok;
-    }).catch(function () {
-      return false;
-    });
-  }
-
-  function checkAndMaybeReload() {
-    ping().then(function (ok) {
-      if (ok) {
-        setOnline();
-        setTimeout(function () { window.location.reload(); }, 600);
-      } else {
-        setOffline();
-      }
-    });
-  }
-
-  retryBtn.addEventListener('click', function () {
-    retryBtn.disabled = true;
-    var originalText = retryBtn.textContent;
-    retryBtn.textContent = 'Verificando...';
-
-    ping().then(function (ok) {
-      if (ok) {
-        retryBtn.textContent = 'Conectado! Recarregando...';
-        window.location.reload();
-      } else {
-        retryBtn.disabled = false;
-        retryBtn.textContent = originalText;
-        setOffline();
-      }
-    });
-  });
-
-  // Impede navegação se ainda offline
-  homeLink.addEventListener('click', function (e) {
-    if (!navigator.onLine) {
-      e.preventDefault();
-      setOffline();
-      statusEl.animate(
-        [
-          { transform: 'translateX(0)' },
-          { transform: 'translateX(-4px)' },
-          { transform: 'translateX(4px)' },
-          { transform: 'translateX(0)' }
-        ],
-        { duration: 250 }
+    try {
+      const response = await fetch(
+        window.location.origin + '/?ping=' + Date.now(),
+        {
+          method: 'HEAD',
+          cache: 'no-store',
+          credentials: 'same-origin',
+          redirect: 'follow',
+          signal: controller.signal
+        }
       );
+
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
-  });
+  }
 
-  window.addEventListener('online', function () {
-    setOnline();
-    setTimeout(function () { window.location.reload(); }, 800);
-  });
+  function reloadOnce() {
+    if (reloadScheduled) return;
+    reloadScheduled = true;
+    window.location.reload();
+  }
 
+  async function checkConnection() {
+    if (checking) return false;
+    checking = true;
+
+    if (retryBtn) {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Verificando...';
+    }
+
+    const connected = await ping();
+    checking = false;
+
+    if (connected) {
+      setOnline();
+      if (retryBtn) retryBtn.textContent = 'Conectado! Recarregando...';
+      setTimeout(reloadOnce, 500);
+      return true;
+    }
+
+    setOffline();
+    if (retryBtn) {
+      retryBtn.disabled = false;
+      retryBtn.textContent = '↻ Tentar novamente';
+    }
+    return false;
+  }
+
+  retryBtn.addEventListener('click', checkConnection);
+
+  window.addEventListener('online', checkConnection);
   window.addEventListener('offline', setOffline);
 
-  updateStatus();
-
-  // Se navigator.onLine disser online, confirma com ping real
+  // Verifica o estado inicial. Se o SW servir o offline.html mesmo
+  // quando navigator.onLine === true (cache do index), o ping
+  // confirma se a rede real está de pé.
   if (navigator.onLine) {
-    checkAndMaybeReload();
+    checkConnection();
+  } else {
+    setOffline();
   }
 })();
 </script>
