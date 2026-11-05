@@ -1,13 +1,21 @@
 /* ============================================================
    api/admin.js — Painel administrativo (Versão Final Auditada)
    ------------------------------------------------------------
-   Correções aplicadas:
-   - upload-sign: passa contentType correto
-   - upload / upload-confirm: usa kind lógico
+   Correções aplicadas (auditoria cruzada com schema Drizzle):
+   - upload-sign passa contentType correto
+   - upload / upload-confirm usam kind lógico
    - Valida MIME, extensão e tamanho dos uploads
-   - Sincroniza published/status em handleUpdateTrack
+   - handleUpdateTrack: NÃO grava `published` (coluna não existe)
+   - handleUpdateAlbum: valida título e id (isUuid)
+   - handleDeleteUser: verifica orders, rentals e subscriptions
+     (todas as FKs RESTRICT) antes de deletar
+   - handlePatchUser: retorna 400 se plano não existir em `plans`
+   - handleGetUsers: retorna 503 se `effective_plan` falhar
+   - handleCreateTrack: removido `lyrics: []` (coluna inexistente)
+   - handleUpdateLyrics: retorna 501 até confirmar coluna
+   - handleReorderTracks: envolvido em transação
    - Transação em handleDeleteAlbum
-   - Aplica baseVersion em handlePutContent (evita sobrescrita)
+   - baseVersion em handlePutContent (evita sobrescrita)
    - Retorna updatedAt em handleGetContent
    ============================================================ */
 
@@ -80,7 +88,7 @@ const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE
 function getSessionSecret() {
   const secret = String(process.env.ADMIN_SESSION_SECRET || '').trim();
   if (!secret) throw new Error('ADMIN_SESSION_SECRET ausente.');
-  if (secret.length < MIN_SESSION_SECRET_LENGTH) throw new Error(`ADMIN_SESSION_SECRET muito curto.`);
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) throw new Error('ADMIN_SESSION_SECRET muito curto.');
   return secret;
 }
 
@@ -204,6 +212,8 @@ async function handleLogout(req, res, session) {
 
 // ─────────────────────────────────────────────────────────────
 // CONTEÚDO ESTRUTURAL
+// TODO: confirmar existência da tabela `site_content` no schema
+//       (colunas esperadas: key, data jsonb, version integer, updated_at).
 // ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   const [row] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
@@ -331,6 +341,7 @@ async function handleUploadSign(req, res, session) {
   const path = createUploadPath(file.kind, file.ext);
 
   try {
+    // Assinatura inclui contentType — contrato corrigido em _storage.js.
     const signed = await b2CreateSignedUploadUrl(file.kind, path, file.contentType, SIGNED_UPLOAD_TTL_SEC);
     await audit('admin.upload.sign', { actor: session.user, metadata: { kind: file.kind, path } });
     return sendJson(res, 200, {
@@ -408,22 +419,44 @@ async function handleUploadConfirm(req, res, session) {
 // USUÁRIOS
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
-  const rows = await db.select({
-    id: schema.users.id,
-    email: schema.users.email,
-    name: schema.users.name,
-    createdAt: schema.users.createdAt
-  }).from(schema.users).orderBy(desc(schema.users.createdAt));
-
-  let planRows = [];
+  let rows;
   try {
-    planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
-  } catch (e) {
-    console.warn('[admin] View effective_plan não encontrada.');
+    rows = await db.select({
+      id: schema.users.id,
+      email: schema.users.email,
+      name: schema.users.name,
+      createdAt: schema.users.createdAt
+    }).from(schema.users).orderBy(desc(schema.users.createdAt));
+  } catch (err) {
+    console.error('[admin/users] falha ao listar usuários:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível listar usuários.' });
   }
 
-  const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
-  return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
+  let planRows;
+  try {
+    const result = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
+    planRows = result.rows || result;
+  } catch (err) {
+    // Não mascarar falha da view como "todos free".
+    console.error('[admin/users] falha ao consultar effective_plan:', err.code || err.message);
+    return sendJson(res, 503, {
+      ok: false,
+      error: 'Não foi possível consultar os planos dos usuários.'
+    });
+  }
+
+  const planMap = new Map(
+    planRows.map(r => [String(r.user_id), String(r.plan).toLowerCase()])
+  );
+
+  return sendJson(res, 200, {
+    ok: true,
+    users: rows.map(u => ({
+      ...u,
+      plan: planMap.get(String(u.id)) || 'free'
+    })),
+    total: rows.length
+  });
 }
 
 async function handlePatchUser(req, res, session) {
@@ -431,25 +464,48 @@ async function handlePatchUser(req, res, session) {
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
 
-  if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  if (!isUuid(userId) || !VALID_PLANS.has(plan)) {
+    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  }
 
-  await db.update(schema.subscriptions)
-    .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
-    .where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
-
+  // Valida que o plano existe antes de mexer em assinaturas.
+  let planRow = null;
   if (plan !== 'free') {
-    const [planRow] = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
-    if (planRow) {
-      await db.insert(schema.subscriptions).values({
-        id: crypto.randomUUID(),
-        userId,
-        planId: planRow.id,
-        externalSubscriptionId: `manual_${userId}_${Date.now()}`,
-        status: 'ACTIVE',
-        currentPeriodStart: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+    const [row] = await db.select({ id: schema.plans.id }).from(schema.plans)
+      .where(eq(schema.plans.name, plan)).limit(1);
+    if (!row) {
+      return sendJson(res, 400, { ok: false, error: `Plano "${plan}" não cadastrado.` });
     }
+    planRow = row;
+  }
+
+  // TODO (dívida técnica): criar tabela `admin_grants` para concessões
+  // administrativas e parar de simular assinatura paga. Enquanto isso,
+  // mantém o comportamento atual com transação.
+  try {
+    await db.transaction(async (tx) => {
+      await tx.update(schema.subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(
+          eq(schema.subscriptions.userId, userId),
+          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
+        ));
+
+      if (plan !== 'free' && planRow) {
+        await tx.insert(schema.subscriptions).values({
+          id: crypto.randomUUID(),
+          userId,
+          planId: planRow.id,
+          externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          status: 'ACTIVE',
+          currentPeriodStart: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[admin/user-plan]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível alterar o plano.' });
   }
 
   await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } });
@@ -458,16 +514,44 @@ async function handlePatchUser(req, res, session) {
 
 async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
-  if (!userId || userId === session.user) return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
 
-  const [hasOrders] = await db.select({ count: sql`COUNT(*)` }).from(orders).where(eq(orders.userId, userId));
-  if (Number(hasOrders?.count) > 0) {
-    return sendJson(res, 409, { ok: false, error: 'Não é possível excluir um usuário com histórico financeiro. Desative a conta em vez disso.' });
+  if (!isUuid(userId)) {
+    return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
   }
 
-  await audit('user.delete', { actor: session.user, target: userId });
-  const deleted = await db.delete(schema.users).where(eq(schema.users.id, userId)).returning();
-  return deleted.length ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+  if (userId === session.user) {
+    return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
+  }
+
+  // Todas as FKs com users são RESTRICT: orders, rentals, subscriptions.
+  // Verifica antes para devolver mensagem clara em vez de 500.
+  try {
+    const [ordersCount] = await db.select({ c: sql`COUNT(*)` }).from(orders).where(eq(orders.userId, userId));
+    const [rentalsCount] = await db.select({ c: sql`COUNT(*)` }).from(schema.rentals).where(eq(schema.rentals.userId, userId));
+    const [subsCount] = await db.select({ c: sql`COUNT(*)` }).from(schema.subscriptions).where(eq(schema.subscriptions.userId, userId));
+
+    const hasDeps =
+      Number(ordersCount?.c) > 0 ||
+      Number(rentalsCount?.c) > 0 ||
+      Number(subsCount?.c) > 0;
+
+    if (hasDeps) {
+      return sendJson(res, 409, {
+        ok: false,
+        error: 'Usuário possui histórico (pedidos, aluguéis ou assinaturas). Desative a conta em vez de excluir.'
+      });
+    }
+
+    await audit('user.delete', { actor: session.user, target: userId });
+    const deleted = await db.delete(schema.users).where(eq(schema.users.id, userId)).returning();
+
+    return deleted.length
+      ? sendJson(res, 200, { ok: true })
+      : sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+  } catch (err) {
+    console.error('[admin/user-delete]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível excluir o usuário.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -479,8 +563,13 @@ async function handleListAlbums(req, res) {
 }
 
 async function handleGetAlbum(req, res) {
-  const [row] = await db.select().from(albums).where(eq(albums.id, req.query.id)).limit(1);
-  return row ? sendJson(res, 200, { ok: true, album: row }) : sendJson(res, 404, { ok: false, error: 'Não encontrado.' });
+  const albumId = String(req.query.id || '').trim();
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const [row] = await db.select().from(albums).where(eq(albums.id, albumId)).limit(1);
+  return row
+    ? sendJson(res, 200, { ok: true, album: row })
+    : sendJson(res, 404, { ok: false, error: 'Não encontrado.' });
 }
 
 async function handleCreateAlbum(req, res, session) {
@@ -521,9 +610,37 @@ async function handleCreateAlbum(req, res, session) {
 }
 
 async function handleUpdateAlbum(req, res, session) {
+  const albumId = String(req.query.id || '').trim();
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
   const body = parseBody(req);
-  const [updated] = await db.update(albums).set({ title: body.title, published: body.published }).where(eq(albums.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, album: updated });
+  const patch = {};
+
+  if (body.title !== undefined) {
+    const title = String(body.title).trim();
+    if (title.length < 1 || title.length > 200) {
+      return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
+    }
+    patch.title = title;
+  }
+  if (body.published !== undefined) patch.published = body.published === true;
+
+  if (!Object.keys(patch).length) {
+    return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
+  }
+
+  try {
+    const [updated] = await db.update(albums).set(patch)
+      .where(eq(albums.id, albumId)).returning();
+
+    if (!updated) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+
+    await audit('album.update', { actor: session.user, target: albumId, metadata: patch });
+    return sendJson(res, 200, { ok: true, album: updated });
+  } catch (err) {
+    console.error('[admin/album-update]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível atualizar o álbum.' });
+  }
 }
 
 async function handleDeleteAlbum(req, res, session) {
@@ -532,6 +649,9 @@ async function handleDeleteAlbum(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
+      // tracks.albumId tem ON DELETE SET NULL; apagamos as faixas
+      // manualmente porque a intenção de produto é remover o álbum
+      // com suas faixas. Se quiser preservar as faixas, remova esta linha.
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
@@ -573,8 +693,9 @@ async function handleCreateTrack(req, res, session) {
       title,
       slug: createSlug(title),
       trackNumber: nextNumber,
-      status: 'DRAFT',
-      lyrics: []
+      status: 'DRAFT'
+      // `lyrics: []` removido: coluna não existe no schema atual.
+      // Reativar quando houver migration adicionando tracks.lyrics.
     }).returning();
 
     await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, trackNumber: nextNumber } });
@@ -588,27 +709,55 @@ async function handleCreateTrack(req, res, session) {
 async function handleUpdateTrack(req, res, session) {
   const body = parseBody(req);
   const trackId = String(req.query.id || body.id || '').trim();
-  if (!trackId) return sendJson(res, 400, { ok: false, error: 'ID obrigatório.' });
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const patch = {};
-  if (body.title) patch.title = body.title;
+  if (body.title !== undefined) {
+    const title = String(body.title).trim();
+    if (!title || title.length > 200) {
+      return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
+    }
+    patch.title = title;
+  }
   if (body.published !== undefined) {
-    const published = body.published === true;
-    patch.status = published ? 'PUBLISHED' : 'DRAFT';
-    patch.published = published;
+    // `tracks` NÃO tem coluna `published`; `status` é a fonte da verdade.
+    patch.status = body.published === true ? 'PUBLISHED' : 'DRAFT';
   }
   if (body.full_path) { patch.fullPath = body.full_path; patch.streamKey = body.full_path; }
   if (body.preview_path) { patch.previewPath = body.preview_path; patch.previewKey = body.preview_path; }
 
-  const [updated] = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
-  return updated
-    ? sendJson(res, 200, { ok: true, track: updated })
-    : sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+  if (!Object.keys(patch).length) {
+    return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
+  }
+
+  try {
+    const [updated] = await db.update(tracks).set(patch)
+      .where(eq(tracks.id, trackId)).returning();
+
+    if (!updated) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+    await audit('track.update', { actor: session.user, target: trackId, metadata: patch });
+    return sendJson(res, 200, { ok: true, track: updated });
+  } catch (err) {
+    console.error('[admin/track-update]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível atualizar a faixa.' });
+  }
 }
 
 async function handleDeleteTrack(req, res, session) {
-  await db.delete(tracks).where(eq(tracks.id, req.query.id));
-  return sendJson(res, 200, { ok: true });
+  const trackId = String(req.query.id || '').trim();
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  try {
+    const deleted = await db.delete(tracks).where(eq(tracks.id, trackId)).returning();
+    if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+    await audit('track.delete', { actor: session.user, target: trackId });
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    console.error('[admin/track-delete]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível excluir a faixa.' });
+  }
 }
 
 async function handleReorderTracks(req, res, session) {
@@ -616,32 +765,80 @@ async function handleReorderTracks(req, res, session) {
   const order = Array.isArray(body.order) ? body.order : [];
   if (!order.length) return sendJson(res, 400, { ok: false, error: 'Lista de reordenação vazia.' });
 
-  for (const item of order) {
-    if (!isUuid(item.id) || !Number.isInteger(Number(item.track_number)) || Number(item.track_number) < 1) continue;
-    await db.update(tracks).set({ trackNumber: Number(item.track_number) }).where(eq(tracks.id, item.id));
+  const valid = order.filter(item =>
+    isUuid(item.id) &&
+    Number.isInteger(Number(item.track_number)) &&
+    Number(item.track_number) >= 1
+  );
+
+  if (!valid.length) {
+    return sendJson(res, 400, { ok: false, error: 'Nenhuma faixa válida para reordenar.' });
   }
-  return sendJson(res, 200, { ok: true });
+
+  try {
+    await db.transaction(async (tx) => {
+      for (const item of valid) {
+        await tx.update(tracks)
+          .set({ trackNumber: Number(item.track_number) })
+          .where(eq(tracks.id, item.id));
+      }
+    });
+
+    await audit('track.reorder', { actor: session.user, metadata: { count: valid.length } });
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    console.error('[admin/track-reorder]', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível reordenar as faixas.' });
+  }
 }
 
 async function handleUpdateLyrics(req, res, session) {
-  const [updated] = await db.update(tracks).set({ lyrics: parseBody(req).lyrics }).where(eq(tracks.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, track: updated });
+  // TODO: coluna `tracks.lyrics` não existe no schema atual.
+  // Reativar esta implementação quando houver migration adicionando a coluna.
+  return sendJson(res, 501, {
+    ok: false,
+    error: 'Edição de letras ainda não implementada neste schema.'
+  });
+
+  /*
+  const trackId = String(req.query.id || '').trim();
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const lyrics = parseBody(req).lyrics;
+  if (!Array.isArray(lyrics)) {
+    return sendJson(res, 400, { ok: false, error: 'Formato de letras inválido.' });
+  }
+
+  const [updated] = await db.update(tracks).set({ lyrics })
+    .where(eq(tracks.id, trackId)).returning();
+
+  return updated
+    ? sendJson(res, 200, { ok: true, track: updated })
+    : sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+  */
 }
 
 // ─────────────────────────────────────────────────────────────
 // DOWNLOADS
 // ─────────────────────────────────────────────────────────────
 async function handleDownloadUrl(req, res, session) {
-  const [track] = await db.select().from(tracks).where(eq(tracks.id, req.query.id)).limit(1);
+  const trackId = String(req.query.id || '').trim();
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
+
   const url = await b2CreateSignedDownloadUrl('audio-full', track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
   return sendJson(res, 200, { ok: true, url });
 }
 
 async function handleDownloadAlbum(req, res, session) {
-  const rows = await db.select().from(tracks).where(eq(tracks.albumId, req.query.id)).orderBy(asc(tracks.trackNumber));
+  const albumId = String(req.query.id || '').trim();
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
   const urls = await Promise.all(rows.map(async t => {
-    if (!t.fullPath) return { id: t.id, url: null };
+    if (!t.fullPath) return { id: t.id, title: t.title, url: null };
     const url = await b2CreateSignedDownloadUrl('audio-full', t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
     return { id: t.id, title: t.title, url };
   }));
@@ -653,9 +850,103 @@ async function handleDownloadAlbum(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   try {
-    const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
-    const sales = rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId }));
-    return sendJson(res, 200, { ok: true, sales });
+    const rawDays = req.query?.days;
+    let days = null;
+    if (rawDays !== undefined && rawDays !== null && rawDays !== '' && rawDays !== 'all') {
+      const n = Number(rawDays);
+      if (Number.isInteger(n) && n > 0 && n <= 365) days = n;
+    }
+
+    const now = new Date();
+    const since = days ? new Date(now.getTime() - days * 24 * 60 * 60 * 1000) : null;
+    const sinceIso = since ? since.toISOString() : null;
+
+    const subRows = await db.select({
+      id: schema.subscriptions.id,
+      status: schema.subscriptions.status,
+      createdAt: schema.subscriptions.createdAt,
+      currentPeriodEnd: schema.subscriptions.currentPeriodEnd,
+      planName: schema.plans.name
+    })
+    .from(schema.subscriptions)
+    .leftJoin(schema.plans, eq(schema.plans.id, schema.subscriptions.planId))
+    .orderBy(desc(schema.subscriptions.createdAt))
+    .limit(50);
+
+    const subscriptions = subRows
+      .filter(s => !sinceIso || String(s.createdAt) >= sinceIso)
+      .map(s => ({
+        id: s.id,
+        plan: s.planName || '—',
+        status: s.status,
+        createdAt: s.createdAt,
+        currentPeriodEnd: s.currentPeriodEnd
+      }));
+
+    const rentRows = await db.select({
+      id: schema.rentals.id,
+      status: schema.rentals.status,
+      startsAt: schema.rentals.startsAt,
+      expiresAt: schema.rentals.expiresAt,
+      createdAt: schema.rentals.createdAt,
+      trackId: schema.rentals.trackId,
+      trackTitle: schema.tracks.title,
+      orderId: schema.rentals.orderId
+    })
+    .from(schema.rentals)
+    .leftJoin(schema.tracks, eq(schema.tracks.id, schema.rentals.trackId))
+    .orderBy(desc(schema.rentals.createdAt))
+    .limit(50);
+
+    const orderIds = rentRows.map(r => r.orderId).filter(Boolean);
+    let ordersById = new Map();
+    if (orderIds.length) {
+      const orderRows = await db.select({
+        id: schema.orders.id,
+        totalCents: schema.orders.totalCents,
+        status: schema.orders.status
+      }).from(schema.orders).where(inArray(schema.orders.id, orderIds));
+      ordersById = new Map(orderRows.map(o => [o.id, o]));
+    }
+
+    const rentals = rentRows
+      .filter(r => !sinceIso || String(r.createdAt) >= sinceIso)
+      .map(r => {
+        const order = r.orderId ? ordersById.get(r.orderId) : null;
+        return {
+          id: r.id,
+          trackId: r.trackId,
+          trackTitle: r.trackTitle || '—',
+          status: r.status,
+          createdAt: r.createdAt,
+          expiresAt: r.expiresAt,
+          amountCents: order?.status === 'PAID' ? order.totalCents : 0
+        };
+      });
+
+    const activeSubs = subscriptions.filter(s =>
+      ['ACTIVE', 'AUTHORIZED', 'TRIALING'].includes(String(s.status || '').toUpperCase())
+    ).length;
+
+    const rentalRevenueCents = rentals.reduce(
+      (sum, r) => sum + (Number.isFinite(r.amountCents) ? r.amountCents : 0),
+      0
+    );
+
+    const summary = {
+      subscriptions: { total: subscriptions.length, active: activeSubs },
+      rentals: { total: rentals.length, revenueCents: rentalRevenueCents },
+      payments: { total: 0, failed: 0, pending: 0 }
+    };
+
+    return sendJson(res, 200, {
+      ok: true,
+      period: days ? String(days) : 'all',
+      subscriptions,
+      rentals,
+      payments: [],
+      summary
+    });
   } catch (err) {
     console.error('[admin/sales]', err.code || err.message);
     return sendJson(res, 500, { ok: false, error: 'Não foi possível consultar as vendas.' });

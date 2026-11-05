@@ -7,10 +7,18 @@
    - Paginação configurável (10 / 25 / 50 por página)
    - Modal para alterar plano COM confirmação explícita
    - Modal para EXCLUIR usuário COM confirmação explícita
-   - Proteção contra alteração acidental
    - Refetch automático após alteração (fonte de verdade)
    - Estados: carregando / vazio / erro
    - Propaga 401 para o caller
+
+   Correções aplicadas (auditoria):
+   - DELETE usa apiFetch('users', { query: { id } })
+   - Erro de fetch preserva state.all (não apaga dados)
+   - requestId previne respostas concorrentes
+   - Debounce da busca é limpo ao desmontar
+   - Confirmação por modal resolve(false) se fechado por Esc/overlay
+   - Filtro de plano validado contra lista canônica
+   - userId validado como string não vazia antes de abrir modal
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -23,12 +31,25 @@ const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const DEFAULT_PAGE_SIZE = 10;
 
+// Planos canônicos — precisam estar alinhados com VALID_PLANS
+// no backend e com os registros da tabela `plans`.
+const VALID_PLANS = ['free', 'premium', 'anual'];
+
+const PLAN_LABELS = {
+  free: 'Free',
+  premium: 'Premium',
+  anual: 'Anual'
+};
+
 const state = {
   all: [],
   loading: false,
   error: null,
   total: 0,
   fetchedAt: 0,
+
+  // Controle de concorrência
+  requestId: 0,
 
   // UI
   page: 1,
@@ -55,26 +76,42 @@ export async function renderUsersTable({ force = false, resetPage = false } = {}
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch
+// Fetch (com proteção contra concorrência)
 // ─────────────────────────────────────────────────────────────
 async function fetchUsers() {
+  const requestId = ++state.requestId;
+
   state.loading = true;
   state.error = null;
   paint();
 
   try {
     const result = await apiFetch('users', { method: 'GET' });
-    state.all = Array.isArray(result?.users) ? result.users : [];
-    state.total = Number(result?.total) || state.all.length;
+
+    // Resposta antiga: ignora.
+    if (requestId !== state.requestId) return;
+
+    if (!result || !Array.isArray(result.users)) {
+      throw new Error('Resposta inválida do servidor.');
+    }
+
+    state.all = result.users;
+    state.total = Number(result.total) || result.users.length;
     state.fetchedAt = Date.now();
   } catch (err) {
+    if (requestId !== state.requestId) return;
+
     if (err && (err.status === 401 || err.status === 403)) {
       throw err;
     }
+
+    // Preserva state.all — não apaga dados já carregados.
     state.error = err?.message || 'Falha ao carregar usuários.';
-    state.all = [];
   } finally {
-    state.loading = false;
+    if (requestId === state.requestId) {
+      state.loading = false;
+      paint();
+    }
   }
 }
 
@@ -85,14 +122,12 @@ function paint() {
   const wrap = document.getElementById('usersTable');
   if (!wrap) return;
 
-  // Estado: carregando
   if (state.loading) {
     wrap.innerHTML = '<p class="loading">Carregando usuários…</p>';
     updateCount(0, 0);
     return;
   }
 
-  // Estado: erro
   if (state.error) {
     wrap.innerHTML = `
       <div class="error-box">
@@ -101,16 +136,17 @@ function paint() {
       </div>`;
     const retry = document.getElementById('usersRetry');
     if (retry) retry.addEventListener('click', () => renderUsersTable({ force: true }));
-    updateCount(0, 0);
+    updateCount(0, state.all.length);
     return;
   }
 
-  // Filtragem
   const search = state.search.toLowerCase().trim();
   const filter = state.filter;
 
   let filtered = state.all;
-  if (filter !== 'all') filtered = filtered.filter((u) => u.plan === filter);
+  if (filter !== 'all' && VALID_PLANS.includes(filter)) {
+    filtered = filtered.filter((u) => u.plan === filter);
+  }
   if (search) {
     filtered = filtered.filter(
       (u) =>
@@ -119,7 +155,6 @@ function paint() {
     );
   }
 
-  // Paginação
   const totalFiltered = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalFiltered / state.pageSize));
   const currentPage = Math.min(Math.max(1, state.page), totalPages);
@@ -131,7 +166,6 @@ function paint() {
 
   updateCount(totalFiltered, state.all.length);
 
-  // Estado: vazio
   if (!pageItems.length) {
     wrap.innerHTML = `
       <div class="users-toolbar">${renderToolbarHTML()}</div>
@@ -197,12 +231,10 @@ function paint() {
     <div class="users-pagination">${renderPaginationHTML(currentPage, totalPages, totalFiltered)}</div>
   `;
 
-  // Binds dos botões de plano
   wrap.querySelectorAll('[data-action="plan"]').forEach((btn) => {
     btn.addEventListener('click', () => openPlanModal(btn.dataset.id));
   });
 
-  // Binds dos botões de excluir
   wrap.querySelectorAll('[data-action="delete"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       openDeleteModal(btn.dataset.id, btn.dataset.name);
@@ -219,6 +251,7 @@ function paint() {
 function renderToolbarHTML() {
   const q = esc(state.search);
   const f = state.filter;
+
   return `
     <div class="users-toolbar__row">
       <input type="search"
@@ -228,10 +261,11 @@ function renderToolbarHTML() {
              aria-label="Buscar usuários"
              value="${q}">
       <select id="userFilter" aria-label="Filtrar por plano">
-        <option value="all"     ${f === 'all'     ? 'selected' : ''}>Todos</option>
-        <option value="free"    ${f === 'free'    ? 'selected' : ''}>Free</option>
-        <option value="premium" ${f === 'premium' ? 'selected' : ''}>Premium</option>
-        <option value="anual"   ${f === 'anual'   ? 'selected' : ''}>Anual</option>
+        <option value="all" ${f === 'all' ? 'selected' : ''}>Todos</option>
+        ${VALID_PLANS.map(
+          (p) =>
+            `<option value="${esc(p)}" ${f === p ? 'selected' : ''}>${esc(PLAN_LABELS[p] || p)}</option>`
+        ).join('')}
       </select>
       <select id="userPageSize" aria-label="Itens por página">
         ${PAGE_SIZE_OPTIONS
@@ -246,7 +280,6 @@ function renderToolbarHTML() {
 }
 
 function bindToolbar() {
-  // Busca com debounce
   const searchEl = document.getElementById('userSearch');
   if (searchEl && searchEl.dataset.bound !== '1') {
     searchEl.dataset.bound = '1';
@@ -260,24 +293,23 @@ function bindToolbar() {
     });
   }
 
-  // Filtro
   const filterEl = document.getElementById('userFilter');
   if (filterEl && filterEl.dataset.bound !== '1') {
     filterEl.dataset.bound = '1';
     filterEl.addEventListener('change', () => {
-      state.filter = filterEl.value || 'all';
+      const v = filterEl.value || 'all';
+      state.filter = v === 'all' || VALID_PLANS.includes(v) ? v : 'all';
       state.page = 1;
       paint();
     });
   }
 
-  // Page size
   const sizeEl = document.getElementById('userPageSize');
   if (sizeEl && sizeEl.dataset.bound !== '1') {
     sizeEl.dataset.bound = '1';
     sizeEl.addEventListener('change', () => {
       const n = Number(sizeEl.value) || DEFAULT_PAGE_SIZE;
-      state.pageSize = n;
+      state.pageSize = PAGE_SIZE_OPTIONS.includes(n) ? n : DEFAULT_PAGE_SIZE;
       state.page = 1;
       paint();
     });
@@ -359,12 +391,6 @@ function openPlanModal(userId) {
     return;
   }
 
-  const planLabels = {
-    free: 'Free',
-    premium: 'Premium',
-    anual: 'Anual'
-  };
-
   openAdminModal(`
     <h3>Alterar plano</h3>
 
@@ -376,15 +402,22 @@ function openPlanModal(userId) {
     <div class="form-group">
       <label for="planSelect">Novo plano</label>
       <select id="planSelect">
-        <option value="free"    ${user.plan === 'free'    ? 'selected' : ''}>Free — apenas prévias</option>
-        <option value="premium" ${user.plan === 'premium' ? 'selected' : ''}>Premium — mensal</option>
-        <option value="anual"   ${user.plan === 'anual'   ? 'selected' : ''}>Anual — assinatura anual</option>
+        ${VALID_PLANS.map((p) => {
+          const label = PLAN_LABELS[p] || p;
+          const description =
+            p === 'free' ? 'apenas prévias'
+            : p === 'premium' ? 'mensal'
+            : 'assinatura anual';
+          return `<option value="${esc(p)}" ${user.plan === p ? 'selected' : ''}>
+            ${esc(label)} — ${esc(description)}
+          </option>`;
+        }).join('')}
       </select>
     </div>
 
     <div id="planChangePreview" class="plan-change-preview" hidden>
       <span class="plan-change-preview__label">Plano atual:</span>
-      <span class="badge-mini">${esc(planLabels[user.plan] || user.plan || '—')}</span>
+      <span class="badge-mini">${esc(PLAN_LABELS[user.plan] || user.plan || '—')}</span>
       <span class="plan-change-preview__arrow">→</span>
       <span class="plan-change-preview__label">Novo:</span>
       <span class="badge-mini" id="planChangePreviewNew">—</span>
@@ -415,7 +448,7 @@ function openPlanModal(userId) {
 
     if (changed) {
       preview.hidden = false;
-      previewNew.textContent = planLabels[newPlan] || newPlan;
+      previewNew.textContent = PLAN_LABELS[newPlan] || newPlan;
     } else {
       preview.hidden = true;
       previewNew.textContent = '—';
@@ -450,8 +483,6 @@ function openPlanModal(userId) {
 // ─────────────────────────────────────────────────────────────
 function confirmPlanChange(user, newPlan) {
   return new Promise((resolve) => {
-    const planLabels = { free: 'Free', premium: 'Premium', anual: 'Anual' };
-
     closeAdminModal();
 
     openAdminModal(`
@@ -468,11 +499,11 @@ function confirmPlanChange(user, newPlan) {
 
       <div class="plan-change-preview">
         <span class="plan-change-preview__label">De:</span>
-        <span class="badge-mini">${esc(planLabels[user.plan] || user.plan || '—')}</span>
+        <span class="badge-mini">${esc(PLAN_LABELS[user.plan] || user.plan || '—')}</span>
         <span class="plan-change-preview__arrow">→</span>
         <span class="plan-change-preview__label">Para:</span>
         <span class="badge-mini" style="background:var(--accent);color:var(--bg);">
-          ${esc(planLabels[newPlan] || newPlan)}
+          ${esc(PLAN_LABELS[newPlan] || newPlan)}
         </span>
       </div>
 
@@ -482,15 +513,36 @@ function confirmPlanChange(user, newPlan) {
       </div>
     `);
 
+    let resolved = false;
+
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(value);
+    };
+
     document.getElementById('confirmCancel').addEventListener('click', () => {
       closeAdminModal();
-      resolve(false);
+      finish(false);
     });
 
     document.getElementById('confirmProceed').addEventListener('click', () => {
       closeAdminModal();
-      resolve(true);
+      finish(true);
     });
+
+    // Se o modal for fechado por Esc/overlay/[data-close],
+    // resolve(false) para não deixar a Promise pendente.
+    const modal = document.getElementById('adminModal');
+    if (modal) {
+      const observer = new MutationObserver(() => {
+        if (!modal.classList.contains('open')) {
+          observer.disconnect();
+          finish(false);
+        }
+      });
+      observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
+    }
   });
 }
 
@@ -581,8 +633,9 @@ function openDeleteModal(userId, userName) {
     proceedBtn.textContent = 'Excluindo…';
 
     try {
-      await apiFetch(`users&id=${encodeURIComponent(userId)}`, {
-        method: 'DELETE'
+      await apiFetch('users', {
+        method: 'DELETE',
+        query: { id: userId }
       });
 
       closeAdminModal();
