@@ -2,12 +2,13 @@
    api/admin.js — Painel administrativo (Versão Final Auditada)
    ------------------------------------------------------------
    Correções aplicadas:
-   - upload-sign: passa contentType correto para createSignedUploadUrl
-   - upload / upload-confirm: usa kind lógico (não nome físico)
+   - upload-sign: passa contentType correto
+   - upload / upload-confirm: usa kind lógico
    - Valida MIME, extensão e tamanho dos uploads
    - Sincroniza published/status em handleUpdateTrack
    - Transação em handleDeleteAlbum
-   - Validações de payload em álbuns e faixas
+   - Aplica baseVersion em handlePutContent (evita sobrescrita)
+   - Retorna updatedAt em handleGetContent
    ============================================================ */
 
 'use strict';
@@ -44,10 +45,8 @@ const CONTENT_KEY = 'default';
 const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
 
-// ★ Kinds lógicos (o storage resolve para o bucket físico)
 const VALID_KINDS = new Set(['image', 'audio-preview', 'audio-full']);
 
-// ★ Regras de upload
 const UPLOAD_RULES = {
   image: {
     extensions: ['jpg', 'jpeg', 'png', 'webp'],
@@ -147,6 +146,9 @@ module.exports = async function handler(req, res) {
     case 'download-url': if (method === 'GET') return handleDownloadUrl(req, res, session); break;
     case 'download-album': if (method === 'GET') return handleDownloadAlbum(req, res, session); break;
     case 'update-lyrics': if (method === 'PATCH') return handleUpdateLyrics(req, res, session); break;
+    case 'delete-user':
+      if (method === 'DELETE') return handleDeleteUser(req, res, session);
+      break;
     default: return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
   }
 
@@ -205,7 +207,12 @@ async function handleLogout(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   const [row] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
-  return sendJson(res, 200, { ok: true, data: row?.data || {}, version: row?.version || 0 });
+  return sendJson(res, 200, {
+    ok: true,
+    data: row?.data || {},
+    version: row?.version || 0,
+    updatedAt: row?.updatedAt || null
+  });
 }
 
 async function handlePutContent(req, res, session) {
@@ -221,7 +228,11 @@ async function handlePutContent(req, res, session) {
   const currentVersion = current?.version ?? 0;
 
   if (currentVersion !== baseVersion) {
-    return sendJson(res, 409, { ok: false, error: 'O conteúdo foi alterado por outra sessão. Atualize a página antes de salvar.', currentVersion });
+    return sendJson(res, 409, {
+      ok: false,
+      error: 'O conteúdo foi alterado por outra sessão. Atualize a página antes de salvar.',
+      currentVersion
+    });
   }
 
   const newVersion = currentVersion + 1;
@@ -231,7 +242,10 @@ async function handlePutContent(req, res, session) {
     if (current) {
       const updated = await db.update(schema.siteContent)
         .set({ data, version: newVersion, updatedAt: now })
-        .where(and(eq(schema.siteContent.key, CONTENT_KEY), eq(schema.siteContent.version, baseVersion)))
+        .where(and(
+          eq(schema.siteContent.key, CONTENT_KEY),
+          eq(schema.siteContent.version, baseVersion)
+        ))
         .returning();
 
       if (!updated.length) {
@@ -260,9 +274,7 @@ function validateUploadInput(body) {
   const rule = UPLOAD_RULES[kind];
 
   if (!rule) throw new Error('Tipo de upload não permitido.');
-  if (!filename || filename.length > 180 || /[\/\\\r\n]/.test(filename)) {
-    throw new Error('Nome de arquivo inválido.');
-  }
+  if (!filename || filename.length > 180 || /[\/\\\r\n]/.test(filename)) throw new Error('Nome de arquivo inválido.');
 
   const ext = filename.split('.').pop().toLowerCase();
   if (!rule.extensions.includes(ext)) throw new Error('Extensão não permitida.');
@@ -344,17 +356,13 @@ async function handleUploadConfirm(req, res, session) {
     ? null
     : Number(body.trackIndex);
 
-  if (!VALID_KINDS.has(kind) || !path) {
-    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
-  }
+  if (!VALID_KINDS.has(kind) || !path) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
   if (path.startsWith('/') || path.includes('\\') || path.split('/').some(p => !p || p === '.' || p === '..')) {
     return sendJson(res, 400, { ok: false, error: 'Caminho de arquivo inválido.' });
   }
 
-  if (albumId && !isUuid(albumId)) {
-    return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
-  }
+  if (albumId && !isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
 
   if (trackIndex !== null && (!Number.isInteger(trackIndex) || trackIndex < 1)) {
     return sendJson(res, 400, { ok: false, error: 'Número da faixa inválido.' });
@@ -369,9 +377,7 @@ async function handleUploadConfirm(req, res, session) {
     if (!exists) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no armazenamento.' });
 
     if (albumId && trackIndex !== null) {
-      if (kind === 'image') {
-        return sendJson(res, 400, { ok: false, error: 'Imagem não pode ser associada como áudio.' });
-      }
+      if (kind === 'image') return sendJson(res, 400, { ok: false, error: 'Imagem não pode ser associada como áudio.' });
 
       const isFull = kind === 'audio-full';
       const patch = isFull
@@ -385,7 +391,6 @@ async function handleUploadConfirm(req, res, session) {
       if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 
       await audit('upload.track.confirm', { actor: session.user, target: updated[0].id, metadata: { kind, path } });
-
       const publicUrl = kind === 'audio-full' ? null : b2GetPublicUrl(kind, path);
       return sendJson(res, 200, { ok: true, path, kind, url: publicUrl, track: updated[0] });
     }
@@ -483,12 +488,8 @@ async function handleCreateAlbum(req, res, session) {
   const title = String(body.title || '').trim();
   const artistId = String(body.artistId || '').trim();
 
-  if (title.length < 1 || title.length > 200) {
-    return sendJson(res, 400, { ok: false, error: 'Título do álbum inválido.' });
-  }
-  if (!isUuid(artistId)) {
-    return sendJson(res, 400, { ok: false, error: 'Artista inválido.' });
-  }
+  if (title.length < 1 || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Título do álbum inválido.' });
+  if (!isUuid(artistId)) return sendJson(res, 400, { ok: false, error: 'Artista inválido.' });
 
   const [artist] = await db.select({ id: artists.id }).from(artists).where(eq(artists.id, artistId)).limit(1);
   if (!artist) return sendJson(res, 404, { ok: false, error: 'Artista não encontrado.' });

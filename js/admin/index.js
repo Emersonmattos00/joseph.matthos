@@ -1,26 +1,10 @@
 /* ============================================================
    js/admin/index.js — Entrypoint do painel administrativo
    ------------------------------------------------------------
-   - Registra atalho Ctrl+Shift+A antes de qualquer API
-   - Detecta URL /?admin e abre o painel automaticamente
-   - FLUXO: sessão → conteúdo → dashboard
-   - Binds resilientes (try/catch por editor)
-   - Nav tabs com bind único (MutationObserver só no <nav>)
-   - Uploads de imagem (bg, vinil, sobre) via Base64
-   - Uploads de áudio vivem em editors/albums.js
-     (presigned URL + PATCH automático em tracks.*_path)
-   - Downloads de faixa/álbum vivem em editors/albums.js
-     (URLs assinadas via /api/admin?action=download-*)
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Removidos binds órfãos de previewUpload / fullUpload
-   2. Adicionado handler para a tab 'discografia'
-   3. Comentários atualizados para refletir o fluxo real
-   4. bindUpload de imagem mantido (imagens continuam Base64)
-   5. Resiliente a falhas (safeRender, safeCall)
-   6. Aba "Downloads" removida — funcionalidade embutida
-      em editors/albums.js (ícone por faixa + botão por álbum)
+   Correções aplicadas:
+   - Importação de backup com validação (tamanho, JSON, formato)
+   - Confirmação antes de sobrescrever
+   - Tratamento de 409/401/403
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -63,17 +47,10 @@ const TAB_TITLES = {
   backup: 'Backup'
 };
 
-// ─────────────────────────────────────────────────────────────
-// Bootstrap — NÃO carrega conteúdo. Apenas prepara a UI e,
-// se estivermos na rota admin, delega para openAdminSite().
-// ─────────────────────────────────────────────────────────────
 async function bootstrap() {
   console.log('[admin] bootstrap iniciado');
 
-  // 1) Atalho SEMPRE primeiro (não depende de sessão)
   initAdminShortcuts();
-
-  // 2) Binds de navegação e ações (idempotentes, seguros sem sessão)
   bindNavTabs();
   bindContentInputs();
   bindGlobalActions();
@@ -81,22 +58,14 @@ async function bootstrap() {
   bindUploadZones();
   bindRefreshButtons();
 
-  // 3) Só orquestra o admin se estivermos na rota ?admin
-  //    openAdminSite() verifica a sessão ANTES de carregar conteúdo.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('admin')) {
-    setTimeout(() => {
-      openAdminSite();
-    }, 0);
+    setTimeout(() => { openAdminSite(); }, 0);
   }
 
   console.log('[admin] bootstrap completo');
 }
 
-// ─────────────────────────────────────────────────────────────
-// FLUXO PÓS-LOGIN — chamado por auth.js após autenticar.
-// Exposto em window.__admin.bootContent para o auth.js invocar.
-// ─────────────────────────────────────────────────────────────
 export async function loadAdminContentAndRender() {
   console.log('[admin] carregando conteúdo pós-login...');
 
@@ -117,16 +86,13 @@ export async function loadAdminContentAndRender() {
     AdminState.contentVersion = 0;
   }
 
-  // Aplica no site público
   safeCall('applyContentToSite', AdminState.content);
   safeCall('refreshFlatPlaylist');
   safeCall('refreshPlanConfig');
   safeCall('updateCartFab');
 
-  // Preenche campos (resiliente)
   loadAllAdminFields();
 
-  // Dashboard assíncrono — não bloqueia
   renderDashboard().catch((err) => {
     if (err && (err.status === 401 || err.status === 403)) return;
     console.warn('[admin] dashboard:', err);
@@ -135,15 +101,6 @@ export async function loadAdminContentAndRender() {
   console.log('[admin] conteúdo aplicado e dashboard renderizado');
 }
 
-// ─────────────────────────────────────────────────────────────
-// Nav tabs
-// ------------------------------------------------------------
-// Estratégia:
-//  - attach() roda imediatamente (caso os botões já existam)
-//  - MutationObserver observa APENAS o <nav class="admin-nav">
-//    para re-bindar quando os botões aparecerem depois do login
-//  - Guard dataset.bound evita bind duplicado
-// ─────────────────────────────────────────────────────────────
 function bindNavTabs() {
   const attach = () => {
     const buttons = document.querySelectorAll('.admin-nav button');
@@ -168,20 +125,6 @@ function bindNavTabs() {
     nav.dataset.observed = '1';
     const observer = new MutationObserver(attach);
     observer.observe(nav, { childList: true, subtree: true });
-    console.log('[admin] MutationObserver ativo no .admin-nav');
-  } else if (!nav) {
-    const observer = new MutationObserver(() => {
-      const navNow = document.querySelector('.admin-nav');
-      if (navNow && !navNow.dataset.observed) {
-        navNow.dataset.observed = '1';
-        attach();
-        observer.disconnect();
-        const obs2 = new MutationObserver(attach);
-        obs2.observe(navNow, { childList: true, subtree: true });
-        console.log('[admin] nav detectado e observado');
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
   }
 }
 
@@ -214,7 +157,6 @@ async function onClickNavButton(event) {
     } else if (tab === 'contato') {
       renderSocialEditor(AdminState.content);
     } else if (tab === 'discografia') {
-      // Editor de álbuns/faixas — funcional (CRUD + upload + downloads)
       renderAlbumsEditor(AdminState.content);
     }
   } catch (err) {
@@ -228,9 +170,6 @@ async function onClickNavButton(event) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Aplica conteúdo nos campos data-content — RESILIENTE
-// ─────────────────────────────────────────────────────────────
 function loadAllAdminFields() {
   const content = AdminState.content;
   if (!content) return;
@@ -260,39 +199,26 @@ function loadAllAdminFields() {
 }
 
 function safeRender(name, fn) {
-  try {
-    fn();
-  } catch (err) {
-    console.error(`[admin] erro em render${name}:`, err);
-  }
+  try { fn(); }
+  catch (err) { console.error(`[admin] erro em render${name}:`, err); }
 }
 
 function ensureContentStructure(content) {
   if (!content.filosofia) content.filosofia = {};
   if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
-
-  // `discografia.albums` não é mais usado — mantido só para compatibilidade
-  // caso algum componente antigo ainda leia. O site lê de SITE.albums.
   if (!content.discografia) content.discografia = {};
   if (!Array.isArray(content.discografia.albums)) content.discografia.albums = [];
-
   if (!Array.isArray(content.playlists)) content.playlists = [];
-
   if (!content.planos) content.planos = {};
   if (!Array.isArray(content.planos.plans)) content.planos.plans = [];
-
   if (!content.contato) content.contato = {};
   if (!Array.isArray(content.contato.socials)) content.contato.socials = [];
-
   if (!content.branding) content.branding = {};
   if (!content.hero) content.hero = {};
   if (!content.sobre) content.sobre = {};
   if (!content.aparencia) content.aparencia = {};
 }
 
-// ─────────────────────────────────────────────────────────────
-// Bind dos inputs genéricos data-content
-// ─────────────────────────────────────────────────────────────
 function bindContentInputs() {
   document.querySelectorAll('[data-content]').forEach((el) => {
     if (el.dataset.bound === '1') return;
@@ -316,12 +242,6 @@ function bindContentInputs() {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Botões dos editores
-// ------------------------------------------------------------
-// Nota: bindAlbumsAddButton foi removido — o editor de álbuns
-// agora cuida dos próprios binds (CRUD + upload + downloads).
-// ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
   try { bindSocialsAddButton(); } catch (e) { console.warn(e); }
@@ -343,16 +263,6 @@ function bindEditorButtons() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Upload zones — IMAGENS
-// ------------------------------------------------------------
-// Uploads de imagem retornam { url, path, bucket } e continuam
-// via Base64 (imagens são pequenas e cabem no body da Vercel).
-//
-// ⚠️  Uploads de ÁUDIO não são tratados aqui.
-//     Eles vivem em editors/albums.js, com presigned URL
-//     e PATCH automático em tracks.preview_path / full_path.
-// ─────────────────────────────────────────────────────────────
 function bindUploadZones() {
   document.querySelectorAll('[data-upload-target]').forEach((zone) => {
     if (zone.dataset.uploadBound === '1') return;
@@ -378,7 +288,6 @@ function bindUploadZones() {
     });
   });
 
-  // ── Imagem de fundo
   try {
     bindUpload('bgUpload', ({ url }) => {
       if (!url) return;
@@ -391,7 +300,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem do vinil
   try {
     bindUpload('vinylUpload', ({ url }) => {
       if (!url) return;
@@ -405,7 +313,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem da seção Sobre
   try {
     bindUpload('sobreUpload', ({ url }) => {
       if (!url) return;
@@ -417,14 +324,8 @@ function bindUploadZones() {
       toast('Imagem da seção Sobre atualizada.', '🖼');
     }, 'image');
   } catch (e) { console.warn(e); }
-
-  // ⚠️  Uploads de áudio (previewUpload / fullUpload) vivem em
-  //     editors/albums.js (presigned URL + PATCH automático).
 }
 
-// ─────────────────────────────────────────────────────────────
-// Botões de refresh
-// ─────────────────────────────────────────────────────────────
 function bindRefreshButtons() {
   const salesRefresh = document.getElementById('salesRefresh');
   if (salesRefresh && salesRefresh.dataset.bound !== '1') {
@@ -465,9 +366,6 @@ function bindRefreshButtons() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Ações globais
-// ─────────────────────────────────────────────────────────────
 function bindGlobalActions() {
   const saveBtn = document.getElementById('adminSaveBtn');
   if (saveBtn && saveBtn.dataset.bound !== '1') {
@@ -552,19 +450,58 @@ function bindGlobalActions() {
     importFile.addEventListener('change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;
+
+      const MAX_IMPORT_SIZE = 5 * 1024 * 1024;
+      if (f.size > MAX_IMPORT_SIZE) {
+        toast('Arquivo muito grande. Limite: 5 MB.', '⚠');
+        e.target.value = '';
+        return;
+      }
+
+      let parsed;
       try {
         const text = await f.text();
-        const parsed = JSON.parse(text);
-        const data = parsed.content || parsed;
-        AdminState.content = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONTENT)), data);
-        await saveContent(AdminState.content, { baseVersion: AdminState.contentVersion });
+        parsed = JSON.parse(text);
+      } catch {
+        toast('Arquivo JSON inválido.', '⚠');
+        e.target.value = '';
+        return;
+      }
+
+      const data = parsed?.content || parsed;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        toast('Estrutura do backup inválida.', '⚠');
+        e.target.value = '';
+        return;
+      }
+
+      if (!confirm('Isso substituirá o conteúdo atual do site. Continuar?')) {
+        e.target.value = '';
+        return;
+      }
+
+      try {
+        AdminState.content = deepMerge(
+          JSON.parse(JSON.stringify(DEFAULT_CONTENT)),
+          data
+        );
+        await saveContent(AdminState.content, {
+          baseVersion: AdminState.contentVersion
+        });
         loadAllAdminFields();
         markClean();
         safeCall('applyContentToSite', AdminState.content);
         toast('Conteúdo importado.', '⬆');
       } catch (err) {
         console.error('[admin] import:', err);
-        toast('Arquivo inválido.', '⚠');
+        if (err?.status === 409) {
+          toast('Conflito de versão. Recarregue a página.', '⚠');
+        } else if (err?.status === 401 || err?.status === 403) {
+          toast('Sessão expirada.', '⚠');
+          showAdminLogin();
+        } else {
+          toast(err?.message || 'Falha ao importar.', '⚠');
+        }
       } finally {
         e.target.value = '';
       }
@@ -572,9 +509,6 @@ function bindGlobalActions() {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Previews
-// ─────────────────────────────────────────────────────────────
 function updateBgPreview(content = AdminState.content) {
   const el = document.getElementById('bgPreview');
   if (!el) return;
@@ -614,9 +548,6 @@ function updateSobrePreview(content = AdminState.content) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Utils
-// ─────────────────────────────────────────────────────────────
 function deepMerge(target, source) {
   if (Array.isArray(source)) return JSON.parse(JSON.stringify(source));
   if (!source || typeof source !== 'object') return source === undefined ? target : source;
@@ -639,16 +570,12 @@ function safeCall(name, ...args) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Start
-// ─────────────────────────────────────────────────────────────
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', bootstrap);
 } else {
   bootstrap();
 }
 
-// Expor rebind manual (útil para debug)
 window.__adminRebind = () => {
   document.querySelectorAll('.admin-nav button').forEach((b) => delete b.dataset.bound);
   bindNavTabs();
