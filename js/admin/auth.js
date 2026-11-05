@@ -1,13 +1,13 @@
 /* ============================================================
    js/admin/auth.js — Autenticação do painel administrativo
    ------------------------------------------------------------
-   - Login / logout / sessão do admin
-   - Atalho global Ctrl+Shift+A
-   - Abre o painel quando ?admin está na URL
-   - FLUXO CORRIGIDO: sessão → bootContent → dashboard
-   - OTIMIZAÇÃO: após login, NÃO refaz /session (reusa a sessão
-     recém-confirmada) — evita requisição duplicada
-   - Propaga erros 401/403/429/503 para o caller
+   Correções aplicadas (auditoria):
+   - Login confirma sessão via /session antes de abrir dashboard
+   - Logout só declara sucesso após confirmação do servidor
+   - bindLoginElements só marca loginBound após encontrar o form
+   - Mensagem de recuperação genérica (sem citar Vercel)
+   - enterAdminDashboard trata erros 401/403 com logout forçado
+   - Atalho Ctrl+Shift+A não dispara com cursor em campo
    ============================================================ */
 
 import { AdminState, resetState } from './state.js';
@@ -51,43 +51,42 @@ function showSessionLoading() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Entrar no dashboard (SEM refazer /session)
-// ------------------------------------------------------------
-// Usado:
-//   - por openAdminSite() após confirmar sessão via /session
-//   - por onLoginSubmit() após /login bem-sucedido
-// ============================================================
+// Entrar no dashboard
+// ─────────────────────────────────────────────────────────────
 async function enterAdminDashboard(user) {
-  // 1) UI
   setDisplay('publicSite', 'none');
   setDisplay('adminSite', 'block');
   document.body.style.paddingBottom = '0';
   window.scrollTo(0, 0);
 
-  // 2) Estado
   AdminState.user = user || { user: 'admin' };
   showAdminDashboard();
 
-  // 3) Conteúdo
-  if (window.__admin && typeof window.__admin.bootContent === 'function') {
-    try {
-      await window.__admin.bootContent();
-    } catch (err) {
-      console.error('[admin] bootContent falhou:', err);
+  if (typeof window.__admin?.bootContent !== 'function') {
+    console.error('[admin] __admin.bootContent indisponível.');
+    toast('Não foi possível inicializar o painel.', '⚠');
+    return;
+  }
+
+  try {
+    await window.__admin.bootContent();
+  } catch (err) {
+    console.error('[admin] bootContent falhou:', err);
+
+    // ★ Sessão expirada durante o carregamento → força novo login
+    if (err?.status === 401 || err?.status === 403) {
+      resetState();
+      showAdminLogin();
+      setError('adminLoginError', 'Sua sessão expirou. Entre novamente.');
+      return;
     }
-  } else {
-    console.warn('[admin] __admin.bootContent indisponível — conteúdo não carregado.');
+
+    toast('Falha ao carregar os dados administrativos.', '⚠');
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Abrir painel — orquestrador único
-// ------------------------------------------------------------
-// Fluxo:
-//   showAdminRoot → /session
-//      ├─ 401/403 → showAdminLogin (sem tentar carregar conteúdo)
-//      ├─ erro de rede/5xx → showAdminLogin (fail-safe)
-//      └─ OK → enterAdminDashboard → __admin.bootContent()
+// Abrir painel
 // ─────────────────────────────────────────────────────────────
 export async function openAdminSite() {
   setDisplay('publicSite', 'none');
@@ -125,12 +124,11 @@ export async function openAdminSite() {
     return;
   }
 
-  // Sessão OK → dashboard + conteúdo
   await enterAdminDashboard(session.user);
 }
 
 // ─────────────────────────────────────────────────────────────
-// Voltar para site (LIMPA A URL)
+// Voltar para site
 // ─────────────────────────────────────────────────────────────
 export function openPublicSite() {
   setDisplay('adminSite', 'none');
@@ -151,15 +149,21 @@ export function initAdminShortcuts() {
   shortcutsBound = true;
 
   document.addEventListener('keydown', (e) => {
+    const target = e.target;
+    const inField = target && (
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+      target.isContentEditable
+    );
+
+    // ★ Atalho só funciona fora de campos de formulário
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyA') {
+      if (inField) return;
       e.preventDefault();
       window.history.pushState({}, '', '/?admin');
       openAdminSite();
       return;
     }
 
-    const target = e.target;
-    const inField = target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
     const pub = document.getElementById('publicSite');
     const publicVisible = pub && pub.style.display !== 'none';
 
@@ -190,10 +194,14 @@ export function initAdminShortcuts() {
 // ─────────────────────────────────────────────────────────────
 function bindLoginElements() {
   if (loginBound) return;
-  loginBound = true;
 
   const loginForm = document.getElementById('adminLoginForm');
-  if (loginForm) loginForm.addEventListener('submit', onLoginSubmit);
+  if (!loginForm) {
+    console.warn('[admin] Formulário de login ainda não encontrado.');
+    return;
+  }
+
+  loginForm.addEventListener('submit', onLoginSubmit);
 
   const forgotBtn = document.getElementById('adminForgotPassword');
   if (forgotBtn) {
@@ -202,7 +210,7 @@ function bindLoginElements() {
         'adminLoginError',
         'A senha do painel é definida pelo administrador do servidor. ' +
         'Gere um novo hash com o script hash-admin-password.js e atualize ' +
-        'a variável ADMIN_PASSWORD_HASH na Vercel.'
+        'a variável ADMIN_PASSWORD_HASH nas variáveis de ambiente.'
       );
     });
   }
@@ -215,14 +223,12 @@ function bindLoginElements() {
 
   const viewSiteBtn = document.getElementById('adminViewSite');
   if (viewSiteBtn) viewSiteBtn.addEventListener('click', openPublicSite);
+
+  loginBound = true;
 }
 
 // ─────────────────────────────────────────────────────────────
 // Login
-// ------------------------------------------------------------
-// OTIMIZAÇÃO: após POST /login bem-sucedido, NÃO refazemos
-// /session — a resposta do /login já confirma a autenticação.
-// Chamamos enterAdminDashboard() diretamente.
 // ─────────────────────────────────────────────────────────────
 async function onLoginSubmit(e) {
   e.preventDefault();
@@ -264,12 +270,25 @@ async function onLoginSubmit(e) {
       return;
     }
 
-    // ✅ Login OK. NÃO refazemos /session.
-    //    A resposta de /login já é a confirmação de sessão.
+    // ★ CORREÇÃO: confirma a sessão antes de abrir o dashboard
+    let session;
+    try {
+      session = await apiFetch('session', { method: 'GET' });
+    } catch (err) {
+      console.error('[admin-login] sessão não confirmada:', err);
+      setError('adminLoginError', 'Login aceito, mas a sessão não foi confirmada. Tente novamente.');
+      return;
+    }
+
+    if (!session?.ok || !session.user) {
+      setError('adminLoginError', 'Login aceito, mas a sessão não foi confirmada.');
+      return;
+    }
+
     clearError('adminLoginError');
     form.reset();
 
-    await enterAdminDashboard({ user: result.user || user });
+    await enterAdminDashboard(session.user);
     toast('Bem-vindo ao painel.', '⚙');
 
   } catch (err) {
@@ -304,20 +323,27 @@ async function onLogout() {
   }
 
   try {
-    await apiFetch('logout', { method: 'POST' });
+    const result = await apiFetch('logout', { method: 'POST' });
+    if (!result?.ok) {
+      throw new Error('O servidor não confirmou o encerramento da sessão.');
+    }
+
+    resetState();
+    showAdminLogin();
+    openPublicSite();
+    toast('Sessão de admin encerrada.', 'ℹ');
+
   } catch (err) {
-    console.warn('[admin-logout]', err);
+    console.error('[admin-logout]', err);
+    setError('adminLoginError', 'Não foi possível confirmar o encerramento da sessão. Tente novamente.');
+    toast('Falha ao encerrar a sessão no servidor.', '⚠');
+
   } finally {
     if (logoutBtn) {
       logoutBtn.disabled = false;
       logoutBtn.textContent = originalText;
     }
   }
-
-  resetState();
-  showAdminLogin();
-  openPublicSite();
-  toast('Sessão de admin encerrada.', 'ℹ');
 }
 
 // ─────────────────────────────────────────────────────────────
