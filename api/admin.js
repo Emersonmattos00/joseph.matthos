@@ -1,22 +1,32 @@
 /* ============================================================
    api/admin.js — Painel administrativo (Versão Final Auditada)
    ------------------------------------------------------------
-   Correções aplicadas (auditoria cruzada com schema Drizzle):
-   - upload-sign passa contentType correto
-   - upload / upload-confirm usam kind lógico
+   Correções aplicadas:
+   - upload-sign: passa contentType correto
+   - upload / upload-confirm: usa kind lógico
    - Valida MIME, extensão e tamanho dos uploads
    - handleUpdateTrack: NÃO grava `published` (coluna não existe)
-   - handleUpdateAlbum: valida título e id (isUuid)
-   - handleDeleteUser: verifica orders, rentals e subscriptions
-     (todas as FKs RESTRICT) antes de deletar
+   - handleUpdateTrack: converte mm:ss → durationSeconds
+   - handleCreateTrack: idem; trackNumber calculado como MAX+1
+   - handleUpdateAlbum: aceita patch parcial (title, published,
+     coverUrl, coverInitials, orderIndex, description, year, type, sortOrder)
+   - handleCreateAlbum: persiste todos os campos do schema
+   - handleDeleteUser: verifica orders, rentals e subscriptions (FKs RESTRICT)
    - handlePatchUser: retorna 400 se plano não existir em `plans`
    - handleGetUsers: retorna 503 se `effective_plan` falhar
-   - handleCreateTrack: removido `lyrics: []` (coluna inexistente)
    - handleUpdateLyrics: retorna 501 até confirmar coluna
-   - handleReorderTracks: envolvido em transação
+   - handleReorderTracks: valida mesmo álbum, dentro de transação
+   - handleDownloadUrl / handleDownloadAlbum: retornam `filename`
    - Transação em handleDeleteAlbum
    - baseVersion em handlePutContent (evita sobrescrita)
    - Retorna updatedAt em handleGetContent
+
+   TODO (dependem de decisão de produto/schema):
+   - tracks.price_cents / tracks.for_sale → usar rental_products
+   - tracks.preview_start / preview_duration → coluna nova ou rental_products
+   - tracks.lyrics → coluna nova
+   - admin_grants para concessão administrativa (evitar assinatura fictícia)
+   - desativação de usuário em vez de exclusão física
    ============================================================ */
 
 'use strict';
@@ -81,6 +91,8 @@ const VALID_ACTIONS = new Set([
   'download-url', 'download-album',
   'delete-user', 'update-lyrics'
 ]);
+
+const VALID_ALBUM_TYPES = new Set(['album', 'ep', 'single']);
 
 const DEV_NO_RATE_LIMIT = process.env.NODE_ENV !== 'production' && process.env.DISABLE_RATE_LIMIT === 'true';
 const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE_CSRF === 'true';
@@ -341,7 +353,6 @@ async function handleUploadSign(req, res, session) {
   const path = createUploadPath(file.kind, file.ext);
 
   try {
-    // Assinatura inclui contentType — contrato corrigido em _storage.js.
     const signed = await b2CreateSignedUploadUrl(file.kind, path, file.contentType, SIGNED_UPLOAD_TTL_SEC);
     await audit('admin.upload.sign', { actor: session.user, metadata: { kind: file.kind, path } });
     return sendJson(res, 200, {
@@ -437,7 +448,6 @@ async function handleGetUsers(req, res) {
     const result = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
     planRows = result.rows || result;
   } catch (err) {
-    // Não mascarar falha da view como "todos free".
     console.error('[admin/users] falha ao consultar effective_plan:', err.code || err.message);
     return sendJson(res, 503, {
       ok: false,
@@ -468,7 +478,6 @@ async function handlePatchUser(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
   }
 
-  // Valida que o plano existe antes de mexer em assinaturas.
   let planRow = null;
   if (plan !== 'free') {
     const [row] = await db.select({ id: schema.plans.id }).from(schema.plans)
@@ -480,8 +489,7 @@ async function handlePatchUser(req, res, session) {
   }
 
   // TODO (dívida técnica): criar tabela `admin_grants` para concessões
-  // administrativas e parar de simular assinatura paga. Enquanto isso,
-  // mantém o comportamento atual com transação.
+  // administrativas e parar de simular assinatura paga.
   try {
     await db.transaction(async (tx) => {
       await tx.update(schema.subscriptions)
@@ -515,16 +523,9 @@ async function handlePatchUser(req, res, session) {
 async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
 
-  if (!isUuid(userId)) {
-    return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
-  }
+  if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+  if (userId === session.user) return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
 
-  if (userId === session.user) {
-    return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
-  }
-
-  // Todas as FKs com users são RESTRICT: orders, rentals, subscriptions.
-  // Verifica antes para devolver mensagem clara em vez de 500.
   try {
     const [ordersCount] = await db.select({ c: sql`COUNT(*)` }).from(orders).where(eq(orders.userId, userId));
     const [rentalsCount] = await db.select({ c: sql`COUNT(*)` }).from(schema.rentals).where(eq(schema.rentals.userId, userId));
@@ -572,32 +573,91 @@ async function handleGetAlbum(req, res) {
     : sendJson(res, 404, { ok: false, error: 'Não encontrado.' });
 }
 
+function buildAlbumFieldsFromBody(body, { requireTitle }) {
+  const patch = {};
+
+  if (body.title !== undefined) {
+    const title = String(body.title).trim();
+    if (requireTitle && (title.length < 1 || title.length > 200)) {
+      throw new Error('Título do álbum inválido.');
+    }
+    if (title.length > 0) {
+      if (title.length > 200) throw new Error('Título do álbum inválido.');
+      patch.title = title;
+      patch.slug = createSlug(title);
+    }
+  }
+
+  if (body.published !== undefined) patch.published = body.published === true;
+
+  if (body.artist !== undefined) {
+    patch.artist = String(body.artist || '').trim() || null;
+  }
+
+  if (body.cover_image !== undefined || body.coverUrl !== undefined) {
+    patch.coverUrl = String(body.cover_image ?? body.coverUrl ?? '').trim() || null;
+  }
+
+  if (body.cover_initials !== undefined || body.coverInitials !== undefined) {
+    patch.coverInitials = String(body.cover_initials ?? body.coverInitials ?? '').trim().slice(0, 8) || null;
+  }
+
+  if (body.description !== undefined) {
+    patch.description = String(body.description || '').trim() || null;
+  }
+
+  if (body.type !== undefined) {
+    const type = String(body.type || '').trim().toLowerCase();
+    if (!VALID_ALBUM_TYPES.has(type)) throw new Error('Tipo de álbum inválido.');
+    patch.type = type;
+  }
+
+  if (body.year !== undefined) {
+    const year = body.year === null || body.year === '' ? null : Number(body.year);
+    if (year !== null && (!Number.isInteger(year) || year < 1900 || year > 2200)) {
+      throw new Error('Ano inválido.');
+    }
+    patch.year = year;
+  }
+
+  if (body.order_index !== undefined || body.orderIndex !== undefined) {
+    const order = Number(body.order_index ?? body.orderIndex);
+    if (!Number.isInteger(order) || order < 0) throw new Error('Ordem inválida.');
+    patch.orderIndex = order;
+  }
+
+  if (body.sortOrder !== undefined) {
+    const sortOrder = Number(body.sortOrder);
+    if (!Number.isInteger(sortOrder)) throw new Error('sortOrder inválido.');
+    patch.sortOrder = sortOrder;
+  }
+
+  return patch;
+}
+
 async function handleCreateAlbum(req, res, session) {
   const body = parseBody(req);
-  const title = String(body.title || '').trim();
-  const artistId = String(body.artistId || '').trim();
+  const artistId = String(body.artistId || body.artist_id || '').trim();
 
-  if (title.length < 1 || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Título do álbum inválido.' });
   if (!isUuid(artistId)) return sendJson(res, 400, { ok: false, error: 'Artista inválido.' });
 
   const [artist] = await db.select({ id: artists.id }).from(artists).where(eq(artists.id, artistId)).limit(1);
   if (!artist) return sendJson(res, 404, { ok: false, error: 'Artista não encontrado.' });
 
-  const slug = createSlug(title);
-  if (!slug) return sendJson(res, 400, { ok: false, error: 'Não foi possível gerar o identificador do álbum.' });
+  let fields;
+  try {
+    fields = buildAlbumFieldsFromBody(body, { requireTitle: true });
+  } catch (err) {
+    return sendJson(res, 400, { ok: false, error: err.message });
+  }
+
+  if (!fields.title) return sendJson(res, 400, { ok: false, error: 'Título do álbum obrigatório.' });
 
   try {
     const [created] = await db.insert(albums).values({
       id: crypto.randomUUID(),
-      title,
-      slug,
       artistId,
-      published: body.published === true,
-      coverUrl: body.coverUrl || null,
-      description: body.description || null,
-      year: Number.isInteger(Number(body.year)) ? Number(body.year) : null,
-      type: body.type || 'album',
-      sortOrder: Number.isInteger(Number(body.sortOrder)) ? Number(body.sortOrder) : 0
+      ...fields
     }).returning();
 
     await audit('album.create', { actor: session.user, target: created.id });
@@ -614,16 +674,13 @@ async function handleUpdateAlbum(req, res, session) {
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const body = parseBody(req);
-  const patch = {};
 
-  if (body.title !== undefined) {
-    const title = String(body.title).trim();
-    if (title.length < 1 || title.length > 200) {
-      return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
-    }
-    patch.title = title;
+  let patch;
+  try {
+    patch = buildAlbumFieldsFromBody(body, { requireTitle: false });
+  } catch (err) {
+    return sendJson(res, 400, { ok: false, error: err.message });
   }
-  if (body.published !== undefined) patch.published = body.published === true;
 
   if (!Object.keys(patch).length) {
     return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
@@ -638,6 +695,7 @@ async function handleUpdateAlbum(req, res, session) {
     await audit('album.update', { actor: session.user, target: albumId, metadata: patch });
     return sendJson(res, 200, { ok: true, album: updated });
   } catch (err) {
+    if (err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Já existe um álbum com esse identificador.' });
     console.error('[admin/album-update]', err.code || err.message);
     return sendJson(res, 500, { ok: false, error: 'Não foi possível atualizar o álbum.' });
   }
@@ -647,11 +705,14 @@ async function handleDeleteAlbum(req, res, session) {
   const albumId = String(req.query.id || '').trim();
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
+  // TODO (dívida técnica): verificar dependências comerciais
+  // (pedidos, aluguéis) e remoção de objetos no B2 antes de apagar.
+  // Hoje o handler apaga em transação, mas não checa essas FKs.
   try {
     await db.transaction(async (tx) => {
       // tracks.albumId tem ON DELETE SET NULL; apagamos as faixas
       // manualmente porque a intenção de produto é remover o álbum
-      // com suas faixas. Se quiser preservar as faixas, remova esta linha.
+      // com suas faixas.
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
@@ -671,9 +732,18 @@ async function handleListTracks(req, res) {
   return sendJson(res, 200, { ok: true, tracks: rows });
 }
 
+function parseDurationToSeconds(value) {
+  if (typeof value !== 'string') return null;
+
+  const match = value.trim().match(/^(\d{1,3}):([0-5]\d)$/);
+  if (!match) return null;
+
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
 async function handleCreateTrack(req, res, session) {
   const body = parseBody(req);
-  const albumId = String(body.album_id || '').trim();
+  const albumId = String(body.album_id || body.albumId || '').trim();
   const title = String(body.title || '').trim();
 
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
@@ -682,23 +752,43 @@ async function handleCreateTrack(req, res, session) {
   const [album] = await db.select({ id: albums.id, artistId: albums.artistId }).from(albums).where(eq(albums.id, albumId)).limit(1);
   if (!album) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
 
-  const [lastTrack] = await db.select({ maxNumber: sql`MAX(${tracks.trackNumber})` }).from(tracks).where(eq(tracks.albumId, albumId));
-  const nextNumber = Number(lastTrack?.maxNumber || 0) + 1;
+  let durationSeconds = null;
+  if (body.duration !== undefined && body.duration !== '') {
+    durationSeconds = parseDurationToSeconds(String(body.duration));
+    if (durationSeconds === null) {
+      return sendJson(res, 400, { ok: false, error: 'Duração inválida. Utilize o formato mm:ss.' });
+    }
+  }
+
+  const status = body.published === true ? 'PUBLISHED' : 'DRAFT';
 
   try {
-    const [created] = await db.insert(tracks).values({
-      id: crypto.randomUUID(),
-      albumId,
-      artistId: album.artistId,
-      title,
-      slug: createSlug(title),
-      trackNumber: nextNumber,
-      status: 'DRAFT'
-      // `lyrics: []` removido: coluna não existe no schema atual.
-      // Reativar quando houver migration adicionando tracks.lyrics.
-    }).returning();
+    const created = await db.transaction(async (tx) => {
+      const [lastTrack] = await tx
+        .select({ maxNumber: sql`MAX(${tracks.trackNumber})` })
+        .from(tracks)
+        .where(eq(tracks.albumId, albumId));
 
-    await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, trackNumber: nextNumber } });
+      const nextNumber = Number(lastTrack?.maxNumber || 0) + 1;
+
+      const [row] = await tx.insert(tracks).values({
+        id: crypto.randomUUID(),
+        albumId,
+        artistId: album.artistId,
+        title,
+        slug: createSlug(title),
+        trackNumber: nextNumber,
+        status,
+        durationSeconds
+        // NOTA: price_cents, for_sale, preview_start, preview_duration e
+        // lyrics NÃO existem em `tracks` no schema atual. O frontend
+        // envia esses campos, mas o backend os ignora.
+      }).returning();
+
+      return row;
+    });
+
+    await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, trackNumber: created.trackNumber } });
     return sendJson(res, 201, { ok: true, track: created });
   } catch (err) {
     console.error('[admin/track-create]', err.code || err.message);
@@ -712,6 +802,7 @@ async function handleUpdateTrack(req, res, session) {
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const patch = {};
+
   if (body.title !== undefined) {
     const title = String(body.title).trim();
     if (!title || title.length > 200) {
@@ -719,12 +810,42 @@ async function handleUpdateTrack(req, res, session) {
     }
     patch.title = title;
   }
+
   if (body.published !== undefined) {
     // `tracks` NÃO tem coluna `published`; `status` é a fonte da verdade.
     patch.status = body.published === true ? 'PUBLISHED' : 'DRAFT';
   }
-  if (body.full_path) { patch.fullPath = body.full_path; patch.streamKey = body.full_path; }
-  if (body.preview_path) { patch.previewPath = body.preview_path; patch.previewKey = body.preview_path; }
+
+  if (body.duration !== undefined) {
+    if (body.duration === '' || body.duration === null) {
+      patch.durationSeconds = null;
+    } else {
+      const seconds = parseDurationToSeconds(String(body.duration));
+      if (seconds === null) {
+        return sendJson(res, 400, { ok: false, error: 'Duração inválida. Utilize o formato mm:ss.' });
+      }
+      patch.durationSeconds = seconds;
+    }
+  }
+
+  if (body.full_path !== undefined || body.fullPath !== undefined) {
+    const v = String(body.full_path ?? body.fullPath ?? '').trim() || null;
+    patch.fullPath = v;
+    patch.streamKey = v;
+  }
+
+  if (body.preview_path !== undefined || body.previewPath !== undefined) {
+    const v = String(body.preview_path ?? body.previewPath ?? '').trim() || null;
+    patch.previewPath = v;
+    patch.previewKey = v;
+  }
+
+  // NOTA: price_cents, for_sale, preview_start, preview_duration e lyrics
+  // são enviados pelo frontend, mas NÃO existem em `tracks`. Ignorados
+  // aqui. Quando essas colunas forem criadas (ou migradas para
+  // rental_products), reativar o mapeamento abaixo.
+  // if (body.price_cents !== undefined) patch.priceCents = Number(body.price_cents);
+  // if (body.for_sale !== undefined) patch.forSale = body.for_sale === true;
 
   if (!Object.keys(patch).length) {
     return sendJson(res, 400, { ok: false, error: 'Nada para atualizar.' });
@@ -765,21 +886,45 @@ async function handleReorderTracks(req, res, session) {
   const order = Array.isArray(body.order) ? body.order : [];
   if (!order.length) return sendJson(res, 400, { ok: false, error: 'Lista de reordenação vazia.' });
 
-  const valid = order.filter(item =>
-    isUuid(item.id) &&
-    Number.isInteger(Number(item.track_number)) &&
-    Number(item.track_number) >= 1
-  );
+  const valid = order
+    .map(item => ({
+      id: String(item.id || '').trim(),
+      track_number: Number(item.track_number)
+    }))
+    .filter(item =>
+      isUuid(item.id) &&
+      Number.isInteger(item.track_number) &&
+      item.track_number >= 1
+    );
 
   if (!valid.length) {
     return sendJson(res, 400, { ok: false, error: 'Nenhuma faixa válida para reordenar.' });
+  }
+
+  // Verifica que todas as faixas pertencem ao mesmo álbum.
+  const ids = valid.map(v => v.id);
+  let albumIds;
+  try {
+    const rows = await db.select({ id: tracks.id, albumId: tracks.albumId })
+      .from(tracks).where(inArray(tracks.id, ids));
+    albumIds = new Set(rows.map(r => String(r.albumId || '')));
+  } catch (err) {
+    console.error('[admin/track-reorder] lookup:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível validar as faixas.' });
+  }
+
+  if (albumIds.size !== 1 || albumIds.has('')) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'As faixas informadas não pertencem ao mesmo álbum.'
+    });
   }
 
   try {
     await db.transaction(async (tx) => {
       for (const item of valid) {
         await tx.update(tracks)
-          .set({ trackNumber: Number(item.track_number) })
+          .set({ trackNumber: item.track_number })
           .where(eq(tracks.id, item.id));
       }
     });
@@ -794,7 +939,7 @@ async function handleReorderTracks(req, res, session) {
 
 async function handleUpdateLyrics(req, res, session) {
   // TODO: coluna `tracks.lyrics` não existe no schema atual.
-  // Reativar esta implementação quando houver migration adicionando a coluna.
+  // Reativar quando houver migration adicionando a coluna.
   return sendJson(res, 501, {
     ok: false,
     error: 'Edição de letras ainda não implementada neste schema.'
@@ -828,8 +973,9 @@ async function handleDownloadUrl(req, res, session) {
   const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
 
-  const url = await b2CreateSignedDownloadUrl('audio-full', track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
-  return sendJson(res, 200, { ok: true, url });
+  const filename = `${sanitizeFilename(track.title)}.mp3`;
+  const url = await b2CreateSignedDownloadUrl('audio-full', track.fullPath, DOWNLOAD_TTL_SEC, filename);
+  return sendJson(res, 200, { ok: true, url, filename });
 }
 
 async function handleDownloadAlbum(req, res, session) {
@@ -838,9 +984,10 @@ async function handleDownloadAlbum(req, res, session) {
 
   const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
   const urls = await Promise.all(rows.map(async t => {
-    if (!t.fullPath) return { id: t.id, title: t.title, url: null };
-    const url = await b2CreateSignedDownloadUrl('audio-full', t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
-    return { id: t.id, title: t.title, url };
+    if (!t.fullPath) return { id: t.id, title: t.title, filename: null, url: null };
+    const filename = `${sanitizeFilename(t.title)}.mp3`;
+    const url = await b2CreateSignedDownloadUrl('audio-full', t.fullPath, DOWNLOAD_TTL_SEC, filename);
+    return { id: t.id, title: t.title, filename, url };
   }));
   return sendJson(res, 200, { ok: true, tracks: urls });
 }
@@ -985,7 +1132,7 @@ function createSlug(text) {
 }
 
 function sanitizeFilename(s) {
-  return String(s || 'audio').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._ -]+/g, '_').trim();
+  return String(s || 'audio').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._ -]+/g, '_').trim() || 'audio';
 }
 
 function isUuid(s) {
