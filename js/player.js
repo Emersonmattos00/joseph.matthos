@@ -1,4 +1,4 @@
-// js/player.js — versão final auditada (com Modo Rádio e ícones)
+// js/player.js — versão final auditada (com Modo Rádio, ícones e hover)
 
 'use strict';
 
@@ -11,6 +11,8 @@
    - Media Session: comandos play/pause corretos e setPositionState
    - Ícones de ação na listagem de músicas (curtir, compartilhar, alugar, mais opções)
    - Hover: ícone de Play aparece no lugar do número ao passar o mouse
+   - Toast elegante para feedback visual
+   - Compartilhamento nativo (navigator.share)
    ============================================================ */
 
 function formatTime(secs) {
@@ -25,6 +27,24 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]));
+}
+
+// Função para mostrar notificações elegantes (Toast)
+function showToast(message) {
+  const existing = document.getElementById('playerToast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'playerToast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('visible'));
+
+  setTimeout(() => {
+    toast.classList.remove('visible');
+    setTimeout(() => toast.remove(), 300);
+  }, 2500);
 }
 
 const els = {
@@ -320,17 +340,24 @@ function renderPlayerTrackList(meta, currentId) {
     const actions = document.createElement('div');
     actions.className = 'music-item-actions';
 
+    // Função interna para atualizar o ícone de curtir
+    const atualizarIconeCurtir = (btn) => {
+      const key = `jm_like_${meta.id}_${index}`;
+      const isLiked = localStorage.getItem(key) === '1';
+      btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    };
+
     // Curtir
     const likeBtn = document.createElement('button');
     likeBtn.className = 'action-icon';
-    const isLiked = localStorage.getItem(`jm_like_${meta.id}_${index}`) === '1';
-    likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    atualizarIconeCurtir(likeBtn);
     likeBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const key = `jm_like_${meta.id}_${index}`;
       const liked = localStorage.getItem(key) === '1';
       localStorage.setItem(key, liked ? '0' : '1');
-      likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${!liked ? '#1DB954' : 'none'}" stroke="${!liked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+      atualizarIconeCurtir(likeBtn);
+      showToast(liked ? 'Removido dos curtidos' : 'Curtido!');
     });
     actions.appendChild(likeBtn);
 
@@ -341,24 +368,20 @@ function renderPlayerTrackList(meta, currentId) {
     shareBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-      const shareData = {
-        title: `${track.title} — Joseph Matthos`,
-        text: `Ouça "${track.title}" de Joseph Matthos`,
-        url
-      };
+      const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}" de Joseph Matthos`, url };
       if (navigator.share) {
         try { await navigator.share(shareData); return; } catch {}
       }
       try {
         await navigator.clipboard.writeText(url);
-        alert('Link copiado!');
+        showToast('Link copiado!');
       } catch {
-        alert('Não foi possível compartilhar.');
+        showToast('Não foi possível compartilhar.');
       }
     });
     actions.appendChild(shareBtn);
 
-    // Alugar (sempre visível, a menos que o usuário seja Premium)
+    // Alugar
     const rentBtn = document.createElement('button');
     rentBtn.className = 'action-icon';
     rentBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>';
@@ -432,7 +455,8 @@ function renderPlayerTrackList(meta, currentId) {
             const key = `jm_like_${meta.id}_${index}`;
             const isLiked = localStorage.getItem(key) === '1';
             localStorage.setItem(key, isLiked ? '0' : '1');
-            likeBtn.click();
+            atualizarIconeCurtir(likeBtn);
+            showToast(isLiked ? 'Removido dos curtidos' : 'Curtido!');
           } else if (act === 'share') {
             const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
             const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}" de Joseph Matthos`, url };
@@ -441,16 +465,16 @@ function renderPlayerTrackList(meta, currentId) {
             }
             try {
               await navigator.clipboard.writeText(url);
-              alert('Link copiado!');
+              showToast('Link copiado!');
             } catch {
-              alert('Não foi possível compartilhar.');
+              showToast('Não foi possível compartilhar.');
             }
           } else if (act === 'rent') {
             window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
           } else if (act === 'copy-link') {
             const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
             await navigator.clipboard.writeText(url);
-            alert('Link copiado!');
+            showToast('Link copiado!');
           }
           
           menu.remove();
