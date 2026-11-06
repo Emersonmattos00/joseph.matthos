@@ -5,19 +5,16 @@
 'use strict';
 
 const { sendJson } = require('./_lib');
-const { db, eq, and, or, asc, desc, inArray } = require('./_db');
+const { db, eq, and, asc, desc, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
-// ─────────────────────────────────────────────────────────────
-// HANDLER
-// ─────────────────────────────────────────────────────────────
 module.exports = async (req, res) => {
-  // Controle de Cache: permite cache na borda por 1 minuto
-  res.setHeader('Cache-Control', 'public, max-age=60');
-  
-  // Configuração básica de CORS
+  // ★ CORREÇÃO: Impede cache de borda (Vercel) e do navegador
+  res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.setHeader('Access-Control-Allow-Origin', '*');
-  
+
   const { track, album } = req.query;
 
   try {
@@ -40,7 +37,6 @@ module.exports = async (req, res) => {
         return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada ou não publicada.' });
       }
 
-      // Busca o Álbum da faixa
       const [albumRow] = await db.select()
         .from(schema.albums)
         .where(
@@ -54,13 +50,15 @@ module.exports = async (req, res) => {
         return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado ou não publicado.' });
       }
 
-      // Busca todas as faixas publicadas deste álbum
+      // ★ CORREÇÃO: Inclui previewPath e durationSeconds na listagem do álbum
       const albumTracks = await db.select({
         id: schema.tracks.id,
         title: schema.tracks.title,
         trackNumber: schema.tracks.trackNumber,
         durationSeconds: schema.tracks.durationSeconds,
-        locked: schema.tracks.locked
+        locked: schema.tracks.locked,
+        previewPath: schema.tracks.previewKey,
+        fullPath: schema.tracks.streamKey
       })
       .from(schema.tracks)
       .where(
@@ -78,7 +76,7 @@ module.exports = async (req, res) => {
         artist: albumRow.artistName || 'Joseph Matthos',
         albumTitle: albumRow.title,
         coverUrl: albumRow.coverUrl,
-        audioPath: trackRow.fullPath || trackRow.previewPath,
+        audioPath: trackRow.streamKey || trackRow.previewKey,
         lyrics: trackRow.lyrics || [],
         albumTracks
       });
@@ -115,7 +113,6 @@ module.exports = async (req, res) => {
       .where(eq(schema.albums.published, true))
       .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 
-    // Busca as faixas de todos os álbuns publicados
     const albumIds = albums.map(a => a.id);
     let tracks = [];
     if (albumIds.length > 0) {
@@ -126,6 +123,8 @@ module.exports = async (req, res) => {
         trackNumber: schema.tracks.trackNumber,
         durationSeconds: schema.tracks.durationSeconds,
         locked: schema.tracks.locked,
+        previewPath: schema.tracks.previewKey,
+        fullPath: schema.tracks.streamKey
       })
       .from(schema.tracks)
       .where(and(
@@ -135,7 +134,6 @@ module.exports = async (req, res) => {
       .orderBy(asc(schema.tracks.trackNumber));
     }
 
-    // Conteúdo do site (textos, hero, etc.)
     let content = {};
     try {
       const [row] = await db.select().from(schema.siteContent)
@@ -150,8 +148,8 @@ module.exports = async (req, res) => {
       content,
       albums,
       tracks,
-      plans: [],        
-      rentalPlans: [],  
+      plans: [],
+      rentalPlans: [],
     });
 
   } catch (err) {
