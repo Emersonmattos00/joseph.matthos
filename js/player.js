@@ -1,15 +1,14 @@
-// js/player.js — Versão Final Consolidada
+// js/player.js — versão final auditada (com Modo Rádio)
 
 'use strict';
 
 /* ============================================================
-   CORREÇÕES APLICADAS:
-   - Alinhamento com api/stream.js (leitura de JSON no diagnóstico)
-   - Concorrência dupla: playerRequestId e playbackGeneration
+   CORREÇÕES E ADIÇÕES APLICADAS:
+   - Modo Rádio (?radio=true) com fila do sessionStorage
+   - Concorrência: AbortController + requestId
+   - onerror: distingue 403 de erro real via format=json
+   - Ended: Respeita o modo rádio, repeat e shuffle
    - Media Session: comandos play/pause corretos e setPositionState
-   - Acessibilidade: aria-valuetext, repeat via ciclo de teclado
-   - Shuffle inteligente (não repete a mesma faixa)
-   - preload='none' (economia de dados, conforme upstream)
    ============================================================ */
 
 function formatTime(secs) {
@@ -47,11 +46,12 @@ const els = {
   albumHeaderCount: document.getElementById('albumHeaderCount'),
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   shuffleBtn: document.getElementById('shuffleBtn'),
-  repeatBtn: document.getElementById('repeatBtn')
+  repeatBtn: document.getElementById('repeatBtn'),
+  radioBadge: document.getElementById('radioBadge')
 };
 
 const audio = new Audio();
-audio.preload = 'none'; // ★ Economia de dados móveis, conforme upstream
+audio.preload = 'metadata';
 
 let updateInterval = null;
 let currentTrackId = null;
@@ -59,14 +59,18 @@ let parsedLyrics = [];
 let currentLyricIndex = -1;
 let currentTrackMeta = null;
 
+// ─── ESTADO DE CONTROLES ───
 let shuffleEnabled = false;
 let repeatMode = 'off'; // 'off' | 'one' | 'all'
 
-// Controle de concorrência de metadados e áudio
+// Concorrência
 let playerRequestId = 0;
-let playbackGeneration = 0;
 let playerAbortController = null;
-let currentStreamUrl = '';
+
+// ─── ESTADO DA RÁDIO ───
+let isRadioMode = false;
+let radioQueue = [];
+let radioIndex = -1;
 
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
@@ -75,26 +79,20 @@ const tabContents = document.querySelectorAll('.tab-content');
 function updateTabState(activeTab) {
   const tabName = activeTab?.dataset.tab;
   if (!tabName) return;
-
   tabs.forEach(t => {
     const on = t === activeTab;
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-
   tabContents.forEach(c => {
     const on = c.id === `tab-${tabName}`;
     c.classList.toggle('active', on);
     c.hidden = !on;
   });
-
   document.body.classList.remove('immersive-mode');
 }
 
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => updateTabState(tab));
-});
-
+tabs.forEach(tab => tab.addEventListener('click', () => updateTabState(tab)));
 function switchTab(tabName) {
   const btn = document.querySelector(`.mobile-tab[data-tab="${tabName}"]`);
   if (btn) updateTabState(btn);
@@ -109,24 +107,21 @@ function toggleModoImersivo() {
 }
 
 let touchStartTime = 0;
-if (els.container) {
-  els.container.addEventListener('touchstart', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    touchStartTime = Date.now();
-  }, { passive: true });
+els.container.addEventListener('touchstart', (e) => {
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+  touchStartTime = Date.now();
+}, { passive: true });
 
-  els.container.addEventListener('touchend', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    const elapsed = Date.now() - touchStartTime;
-    if (elapsed < 300) toggleModoImersivo();
-  });
+els.container.addEventListener('touchend', (e) => {
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+  if (Date.now() - touchStartTime < 300) toggleModoImersivo();
+});
 
-  els.container.addEventListener('click', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    if (touchStartTime && Date.now() - touchStartTime < 500) return;
-    toggleModoImersivo();
-  });
-}
+els.container.addEventListener('click', (e) => {
+  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+  if (Date.now() - touchStartTime < 500) return;
+  toggleModoImersivo();
+});
 
 // ─── TELA CHEIA ───
 if (els.fullscreenBtn) {
@@ -143,37 +138,32 @@ if (els.fullscreenBtn) {
 
 // ─── FETCH DE METADADOS ───
 async function fetchMetadata(trackId, signal) {
-  const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { 
-    method: 'GET', credentials: 'same-origin', cache: 'no-store', signal 
+  const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, {
+    method: 'GET', credentials: 'same-origin', cache: 'no-store', signal
   });
   if (!r.ok) {
     if (r.status === 404) throw new Error('Faixa não encontrada ou não publicada.');
     throw new Error(`Erro ao consultar faixa: HTTP ${r.status}`);
   }
   const data = await r.json();
-  if (!data || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
+  if (!data || typeof data !== 'object' || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
     throw new Error('A API retornou dados incompletos.');
   }
   return data;
 }
 
-// ─── DIAGNÓSTICO DO STREAM (Alinhado ao api/stream.js) ───
+// ─── DIAGNÓSTICO DO STREAM ───
 async function diagnoseStreamError(trackId) {
   try {
-    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`, { 
-      method: 'GET', credentials: 'same-origin', cache: 'no-store' 
+    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`, {
+      method: 'GET', credentials: 'same-origin', cache: 'no-store'
     });
-    
-    const data = await r.json().catch(() => ({}));
-
     if (r.ok) return { status: 'ok' };
-    
-    if (r.status === 403) return { status: 'forbidden', message: data.error || 'Prévia indisponível. Assine ou alugue.' };
-    if (r.status === 404) return { status: 'not_found', message: data.error || 'Áudio não configurado.' };
-    if (r.status === 503) return { status: 'unavailable', message: data.error || 'Serviço temporariamente indisponível.' };
-    if (r.status === 429) return { status: 'rate_limited', message: data.error || 'Muitas requisições. Tente em instantes.' };
-    
-    return { status: 'error', message: data.error || `Erro HTTP ${r.status}.` };
+    if (r.status === 403) return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue.' };
+    if (r.status === 404) return { status: 'not_found', message: 'Áudio não configurado.' };
+    if (r.status === 503) return { status: 'unavailable', message: 'Serviço temporariamente indisponível.' };
+    if (r.status === 429) return { status: 'rate_limited', message: 'Muitas requisições.' };
+    return { status: 'error', message: `Erro HTTP ${r.status}.` };
   } catch {
     return { status: 'network', message: 'Verifique sua conexão.' };
   }
@@ -221,28 +211,16 @@ function setupMediaSessionHandlers() {
 
   const actionHandlers = [
     ['play', () => {
-      if (audio.src && audio.paused) {
-        audio.play().catch(err => console.warn('[player] Falha ao reproduzir:', err));
-      } else if (!audio.src && currentTrackId) {
-        initPlayer(currentTrackId, true);
-      }
+      if (audio.src && audio.paused) audio.play().catch(err => console.warn('[player] Falha ao reproduzir:', err));
+      else if (!audio.src && currentTrackId) initPlayer(currentTrackId, true);
     }],
-    ['pause', () => {
-      if (!audio.paused) audio.pause();
-    }],
+    ['pause', () => { if (!audio.paused) audio.pause(); }],
     ['nexttrack', () => window.playerNext()],
     ['previoustrack', () => window.playerPrev()],
-    ['seekbackward', (details) => {
-      audio.currentTime = Math.max(audio.currentTime - (details.seekOffset || 10), 0);
-    }],
-    ['seekforward', (details) => {
-      audio.currentTime = Math.min(audio.currentTime + (details.seekOffset || 10), audio.duration);
-    }],
+    ['seekbackward', (details) => { audio.currentTime = Math.max(audio.currentTime - (details.seekOffset || 10), 0); }],
+    ['seekforward', (details) => { audio.currentTime = Math.min(audio.currentTime + (details.seekOffset || 10), audio.duration); }],
     ['seekto', (details) => {
-      if (details.fastSeek && 'fastSeek' in audio) {
-        audio.fastSeek(details.seekTime);
-        return;
-      }
+      if (details.fastSeek && 'fastSeek' in audio) { audio.fastSeek(details.seekTime); return; }
       audio.currentTime = details.seekTime;
     }]
   ];
@@ -261,33 +239,21 @@ function renderLyrics(lyricsArray) {
     currentLyricIndex = -1;
     return;
   }
-
-  const validLyrics = lyricsArray
-    .filter(line =>
-      line && typeof line === 'object' &&
-      line.time !== null && line.time !== '' &&
-      Number.isFinite(Number(line.time)) && Number(line.time) >= 0 &&
-      typeof line.text === 'string'
-    )
-    .map(line => ({ time: Number(line.time), text: line.text }))
-    .sort((a, b) => a.time - b.time);
-
+  const validLyrics = lyricsArray.filter(line => line && typeof line === 'object' && Number.isFinite(Number(line.time)) && typeof line.text === 'string');
   if (!validLyrics.length) {
     els.lyricsContent.innerHTML = '<p class="lyrics-empty">Letra indisponível.</p>';
     parsedLyrics = [];
     currentLyricIndex = -1;
     return;
   }
-
   els.lyricsContent.innerHTML = validLyrics.map((line, index) => `
-    <button class="lyric-line" data-index="${index}" data-time="${line.time}" type="button">${esc(line.text)}</button>
+    <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}" type="button">${esc(line.text)}</button>
   `).join('');
 
   parsedLyrics = validLyrics.map((line, index) => ({
-    time: line.time,
+    time: Number(line.time),
     element: els.lyricsContent.querySelector(`[data-index="${index}"]`)
   }));
-
   currentLyricIndex = -1;
 
   els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
@@ -327,7 +293,6 @@ function syncLyrics() {
 // ─── LISTA DE MÚSICAS ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
-
   meta.albumTracks.forEach((track, index) => {
     const item = document.createElement('div');
     item.className = 'music-item';
@@ -349,7 +314,6 @@ function renderPlayerTrackList(meta, currentId) {
     artist.textContent = meta.artist || 'Joseph Matthos';
 
     info.append(title, artist);
-
     const actions = document.createElement('div');
     actions.className = 'music-item-actions';
 
@@ -359,7 +323,6 @@ function renderPlayerTrackList(meta, currentId) {
 
     actions.append(duration);
     item.append(number, info, actions);
-
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
     els.musicList.appendChild(item);
   });
@@ -367,17 +330,13 @@ function renderPlayerTrackList(meta, currentId) {
 
 // ─── INIT ───
 async function initPlayer(trackId, autoplay = true) {
-  if (typeof trackId !== 'string' || !trackId.trim() || trackId.length > 100) {
-    els.title.textContent = 'Identificador de faixa inválido';
+  if (!trackId || typeof trackId !== 'string') {
+    els.title.textContent = 'Nenhuma faixa selecionada';
     return;
   }
 
   const requestId = ++playerRequestId;
-  const generation = ++playbackGeneration;
-
-  if (playerAbortController) {
-    try { playerAbortController.abort(); } catch {}
-  }
+  if (playerAbortController) { try { playerAbortController.abort(); } catch {} }
   playerAbortController = new AbortController();
 
   currentTrackId = trackId;
@@ -397,22 +356,13 @@ async function initPlayer(trackId, autoplay = true) {
   els.currentTime.textContent = '0:00';
   els.duration.textContent = '0:00';
   els.progressFill.style.width = '0%';
-  if (els.progressBar) {
-    els.progressBar.setAttribute('aria-valuenow', '0');
-    els.progressBar.setAttribute('aria-valuetext', '0:00 de 0:00');
-  }
+  if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', '0');
 
   try {
     const meta = await fetchMetadata(trackId, playerAbortController.signal);
-
     if (requestId !== playerRequestId) return;
-
-    if (!meta || !meta.id || String(meta.id) !== String(trackId)) {
-      els.title.textContent = 'Dados da faixa inválidos';
-      return;
-    }
-
     currentTrackMeta = meta;
+
     els.title.textContent = meta.title;
     els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
 
@@ -429,7 +379,6 @@ async function initPlayer(trackId, autoplay = true) {
     }
 
     renderLyrics(meta.lyrics);
-
     els.albumHeaderTitle.textContent = meta.albumTitle || 'Álbum';
     els.albumHeaderArtist.textContent = meta.artist || 'Joseph Matthos';
     els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
@@ -438,12 +387,10 @@ async function initPlayer(trackId, autoplay = true) {
     updateMediaSessionMetadata(meta);
 
     const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
-    currentStreamUrl = new URL(streamUrl, window.location.origin).href;
-    
-    audio.src = currentStreamUrl;
+    audio.src = streamUrl;
     audio.load();
 
-    if (requestId !== playerRequestId || generation !== playbackGeneration) return;
+    if (requestId !== playerRequestId) return;
 
     if (autoplay) {
       try {
@@ -457,11 +404,9 @@ async function initPlayer(trackId, autoplay = true) {
   } catch (error) {
     if (error.name === 'AbortError') return;
     if (requestId !== playerRequestId) return;
-
     console.error('[player] Erro ao carregar faixa:', error);
     currentTrackMeta = null;
     currentTrackId = null;
-
     els.title.textContent = 'Não foi possível carregar a faixa';
     els.artist.textContent = error.message || 'Tente novamente.';
   }
@@ -472,23 +417,18 @@ function bindAudioEvents() {
   audio.addEventListener('play', () => {
     els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
     clearInterval(updateInterval);
-    
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
       const duration = audio.duration || 0;
       const percent = duration > 0 && Number.isFinite(duration) ? Math.min(100, (seek / duration) * 100) : 0;
-      
       els.progressFill.style.width = `${percent}%`;
-      
       if (els.progressBar) {
         els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
         els.progressBar.setAttribute('aria-valuetext', `${formatTime(seek)} de ${formatTime(duration)}`);
       }
-      
       els.currentTime.textContent = formatTime(seek);
       syncLyrics();
     }, 250);
-
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
 
@@ -509,44 +449,58 @@ function bindAudioEvents() {
 
   audio.addEventListener('error', async () => {
     const error = audio.error;
-    const generation = playbackGeneration;
-    const expectedUrl = currentStreamUrl;
+    console.error('[player] Erro no áudio:', { code: error?.code, message: error?.message, source: audio.currentSrc });
+    if (!currentTrackId) return;
     const trackId = currentTrackId;
 
-    console.error('[player] Erro no áudio:', {
-      code: error?.code,
-      message: error?.message,
-      source: audio.currentSrc
-    });
+    if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+      els.title.textContent = 'Erro ao carregar áudio';
+      els.artist.textContent = 'Verificando disponibilidade...';
+      const diag = await diagnoseStreamError(trackId);
+      if (trackId !== currentTrackId) return;
 
-    if (!trackId || !expectedUrl) return;
-    const currentUrl = audio.currentSrc || audio.src;
-    if (generation !== playbackGeneration || currentUrl !== expectedUrl) return;
-
-    els.title.textContent = 'Erro ao carregar áudio';
-    els.artist.textContent = 'Verificando disponibilidade...';
-
-    const diag = await diagnoseStreamError(trackId);
-    
-    if (generation !== playbackGeneration || currentUrl !== (audio.currentSrc || audio.src)) return;
-
-    if (diag.status === 'forbidden') {
-      els.title.textContent = 'Prévia indisponível';
-      els.artist.textContent = diag.message;
-    } else if (diag.status === 'not_found') {
-      els.title.textContent = 'Áudio não configurado';
-      els.artist.textContent = diag.message;
-    } else if (diag.status === 'ok') {
-      els.title.textContent = 'Formato não suportado';
-      els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.';
+      if (diag.status === 'forbidden') {
+        els.title.textContent = 'Prévia indisponível';
+        els.artist.textContent = 'Assine o Premium ou alugue para ouvir esta faixa.';
+      } else if (diag.status === 'not_found') {
+        els.title.textContent = 'Áudio não configurado';
+        els.artist.textContent = 'Esta faixa ainda não tem arquivo de áudio.';
+      } else if (diag.status === 'ok') {
+        els.title.textContent = 'Formato não suportado';
+        els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.';
+      } else {
+        els.title.textContent = 'Erro ao carregar áudio';
+        els.artist.textContent = diag.message || 'Tente novamente.';
+      }
+    } else if (error?.code === MediaError.MEDIA_ERR_NETWORK) {
+      els.title.textContent = 'Erro de rede';
+      els.artist.textContent = 'Verifique sua conexão ou tente novamente.';
+    } else if (error?.code === MediaError.MEDIA_ERR_DECODE) {
+      els.title.textContent = 'Arquivo corrompido';
+      els.artist.textContent = 'Não foi possível decodificar o áudio.';
     } else {
-      els.title.textContent = 'Erro de reprodução';
-      els.artist.textContent = diag.message || 'Tente novamente.';
+      els.title.textContent = 'Erro ao carregar áudio';
+      els.artist.textContent = 'Tente novamente.';
     }
   });
 
   audio.addEventListener('ended', () => {
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+
+    if (isRadioMode) {
+      if (radioIndex + 1 < radioQueue.length) {
+        radioIndex++;
+        sessionStorage.setItem('radio_index', String(radioIndex));
+        const next = radioQueue[radioIndex];
+        window.tocarMusicaDaLista(String(next.trackId));
+      } else {
+        radioIndex = 0;
+        sessionStorage.setItem('radio_index', String(radioIndex));
+        const first = radioQueue[0];
+        window.tocarMusicaDaLista(String(first.trackId));
+      }
+      return;
+    }
 
     if (repeatMode === 'one') {
       audio.currentTime = 0;
@@ -583,13 +537,12 @@ function getRandomTrackIndex(tracks, currentIndex) {
   return nextIndex;
 }
 
-// ─── PROGRESS BAR ───
+// ─── PROGRESS BAR: TECLADO ───
 if (els.progressBar) {
   els.progressBar.addEventListener('keydown', (e) => {
     if (!audio.duration || !Number.isFinite(audio.duration)) return;
     const step = 5;
     let newTime = audio.currentTime;
-
     switch (e.key) {
       case 'ArrowLeft':  newTime -= step; break;
       case 'ArrowRight': newTime += step; break;
@@ -599,13 +552,6 @@ if (els.progressBar) {
     }
     e.preventDefault();
     audio.currentTime = Math.max(0, Math.min(audio.duration, newTime));
-  });
-
-  els.progressBar.addEventListener('click', (e) => {
-    if (!audio.duration || !Number.isFinite(audio.duration)) return;
-    const rect = els.progressBar.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
   });
 }
 
@@ -620,10 +566,17 @@ window.playerPlay = () => {
 };
 
 window.playerNext = () => {
+  if (isRadioMode) {
+    if (radioIndex + 1 < radioQueue.length) radioIndex++;
+    else radioIndex = 0;
+    sessionStorage.setItem('radio_index', String(radioIndex));
+    window.tocarMusicaDaLista(String(radioQueue[radioIndex].trackId));
+    return;
+  }
+
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
   if (!tracks.length) return;
-
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
@@ -633,12 +586,18 @@ window.playerNext = () => {
 };
 
 window.playerPrev = () => {
+  if (isRadioMode) {
+    if (radioIndex > 0) radioIndex--;
+    else radioIndex = radioQueue.length - 1;
+    sessionStorage.setItem('radio_index', String(radioIndex));
+    window.tocarMusicaDaLista(String(radioQueue[radioIndex].trackId));
+    return;
+  }
+
   if (!currentTrackMeta?.albumTracks) return;
   if (audio.currentTime > 3) { audio.currentTime = 0; return; }
-
   const tracks = currentTrackMeta.albumTracks;
   if (!tracks.length) return;
-
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
@@ -647,36 +606,43 @@ window.playerPrev = () => {
   if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
 };
 
+els.progressBar?.addEventListener('click', (e) => {
+  if (!audio.duration || !Number.isFinite(audio.duration)) return;
+  const rect = els.progressBar.getBoundingClientRect();
+  const pos = (e.clientX - rect.left) / rect.width;
+  audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
+});
+
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   const safeId = String(id);
-  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}`);
+  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}${isRadioMode ? '&radio=true' : ''}`);
   switchTab('player');
   await initPlayer(safeId);
 };
 
-// ─── SHUFFLE & REPEAT ───
+// ─── SHUFFLE / REPEAT ───
 if (els.shuffleBtn) {
   els.shuffleBtn.addEventListener('click', () => {
+    if (isRadioMode) return;
     shuffleEnabled = !shuffleEnabled;
     els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
     els.shuffleBtn.classList.toggle('active', shuffleEnabled);
   });
 }
 
-function applyRepeatMode(mode) {
-  repeatMode = mode;
-  if (!els.repeatBtn) return;
-  els.repeatBtn.setAttribute('aria-pressed', String(mode !== 'off'));
-  els.repeatBtn.dataset.mode = mode;
-  els.repeatBtn.classList.toggle('active', mode !== 'off');
-  els.repeatBtn.setAttribute('aria-label', mode === 'off' ? 'Repetição desligada' : mode === 'one' ? 'Repetir faixa atual' : 'Repetir álbum');
-}
-
 if (els.repeatBtn) {
   els.repeatBtn.addEventListener('click', () => {
-    const nextMode = { off: 'one', one: 'all', all: 'off' };
-    applyRepeatMode(nextMode[repeatMode]);
+    if (isRadioMode) return;
+    const order = ['off', 'all', 'one'];
+    repeatMode = order[(order.indexOf(repeatMode) + 1) % order.length];
+    els.repeatBtn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
+    els.repeatBtn.classList.toggle('active', repeatMode !== 'off');
+    els.repeatBtn.dataset.mode = repeatMode;
+    els.repeatBtn.setAttribute('aria-label',
+      repeatMode === 'off' ? 'Repetir: desligado' :
+      repeatMode === 'all' ? 'Repetir: todas' : 'Repetir: uma'
+    );
   });
 }
 
@@ -691,15 +657,36 @@ window.abrirModalAluguel = () => {
 window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
   setupMediaSessionHandlers();
-  
-  if (els.repeatBtn) applyRepeatMode('off');
-  if (els.shuffleBtn) {
-    els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
-    els.shuffleBtn.classList.toggle('active', shuffleEnabled);
-  }
 
   const params = new URLSearchParams(window.location.search);
+  isRadioMode = params.get('radio') === 'true';
   const trackId = params.get('id');
+
+  if (isRadioMode) {
+    if (els.radioBadge) els.radioBadge.style.display = 'flex';
+    if (els.shuffleBtn) els.shuffleBtn.style.display = 'none';
+    if (els.repeatBtn) els.repeatBtn.style.display = 'none';
+
+    try {
+      radioQueue = JSON.parse(sessionStorage.getItem('radio_queue') || '[]');
+      radioIndex = parseInt(sessionStorage.getItem('radio_index') || '0', 10);
+    } catch {
+      radioQueue = [];
+      radioIndex = 0;
+    }
+
+    if (!radioQueue.length) {
+      els.title.textContent = 'Fila da rádio vazia';
+      return;
+    }
+
+    const initialTrack = trackId || radioQueue[radioIndex]?.trackId;
+    if (initialTrack) {
+      await initPlayer(initialTrack);
+    }
+    return;
+  }
+
   if (!trackId) {
     els.title.textContent = 'Nenhuma faixa selecionada';
     return;
@@ -710,5 +697,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 window.addEventListener('popstate', () => {
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
-  if (trackId && trackId !== currentTrackId) initPlayer(trackId);
+  if (trackId && trackId !== currentTrackId) {
+    initPlayer(trackId);
+  }
 });
