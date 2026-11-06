@@ -291,7 +291,7 @@ function syncLyrics() {
   }
 }
 
-// ─── LISTA DE MÚSICAS (COM ÍCONES) ───
+// ─── LISTA DE MÚSICAS (COM ÍCONES E MENU DE OPÇÕES) ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
   meta.albumTracks.forEach((track, index) => {
@@ -345,7 +345,7 @@ function renderPlayerTrackList(meta, currentId) {
     });
     actions.appendChild(shareBtn);
 
-    // Alugar
+    // Alugar (se bloqueado)
     if (track.locked) {
       const rentBtn = document.createElement('button');
       rentBtn.className = 'action-icon';
@@ -369,7 +369,76 @@ function renderPlayerTrackList(meta, currentId) {
     moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      alert('Mais opções em breve');
+      
+      // Remove menu anterior
+      document.getElementById('playerTrackMenu')?.remove();
+      
+      const menu = document.createElement('div');
+      menu.id = 'playerTrackMenu';
+      menu.className = 'track-more-menu';
+      menu.style.position = 'fixed';
+      menu.style.zIndex = '9999';
+      
+      const liked = localStorage.getItem(`jm_like_${meta.id}_${index}`) === '1';
+      
+      menu.innerHTML = `
+        <button type="button" data-menu-action="like">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="${liked ? '#1DB954' : 'none'}" stroke="${liked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span>${liked ? 'Remover dos curtidos' : 'Curtir'}</span>
+        </button>
+        <button type="button" data-menu-action="share">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+          <span>Compartilhar</span>
+        </button>
+        ${track.locked ? `
+        <button type="button" data-menu-action="rent">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2zm-4.42 4.8L13 14.62V17h-2v-6h2v2.38l2.58-2.18 1.42 1.4L14.42 15l2.58 2.4-1.42 1.4z"/></svg>
+          <span>Alugar</span>
+        </button>
+        ` : ''}
+        <button type="button" data-menu-action="copy-link">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
+          <span>Copiar link</span>
+        </button>
+      `;
+      
+      document.body.appendChild(menu);
+      
+      const rect = moreBtn.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const top = Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 10);
+      const left = Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 10);
+      menu.style.top = `${Math.max(10, top)}px`;
+      menu.style.left = `${Math.max(10, left)}px`;
+      
+      const close = (ev) => { if (!menu.contains(ev.target) && ev.target !== moreBtn) { menu.remove(); document.removeEventListener('click', close); } };
+      setTimeout(() => document.addEventListener('click', close), 0);
+      
+      menu.querySelectorAll('[data-menu-action]').forEach((btn) => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const act = btn.dataset.menuAction;
+          
+          if (act === 'like') {
+            const key = `jm_like_${meta.id}_${index}`;
+            const isLiked = localStorage.getItem(key) === '1';
+            localStorage.setItem(key, isLiked ? '0' : '1');
+            likeBtn.click();
+          } else if (act === 'share') {
+            const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+            await navigator.clipboard.writeText(url);
+            alert('Link copiado!');
+          } else if (act === 'rent') {
+            window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
+          } else if (act === 'copy-link') {
+            const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+            await navigator.clipboard.writeText(url);
+            alert('Link copiado!');
+          }
+          
+          menu.remove();
+        });
+      });
     });
     actions.appendChild(moreBtn);
 
