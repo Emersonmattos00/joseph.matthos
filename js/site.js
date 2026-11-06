@@ -8,7 +8,8 @@
 import {
   DEFAULT_CONTENT,
   SOCIAL_LABELS,
-  RENTAL_PLANS_FALLBACK
+  RENTAL_PLANS_FALLBACK,
+  SUBSCRIPTION_PLAN_METADATA // Importado, caso precise validar IDs no futuro
 } from './config.js';
 
 import {
