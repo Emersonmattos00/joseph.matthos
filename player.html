@@ -33,6 +33,37 @@
 
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="/css/player.css">
+  
+  <!-- Estilo do selo da rádio -->
+  <style>
+    .radio-badge {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: #1DB954;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      margin-bottom: 0.5rem;
+      text-transform: uppercase;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background-color: #1DB954;
+      border-radius: 50%;
+      animation: pulseRadio 1.5s infinite;
+    }
+
+    @keyframes pulseRadio {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.3); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+  </style>
 </head>
 
 <body class="player-page">
@@ -149,6 +180,11 @@
         <div class="player-col--controls">
 
           <div class="player-track-info-center">
+            
+            <!-- Selo da Rádio AO VIVO -->
+            <div class="radio-badge" id="radioBadge">
+              <span class="live-dot"></span> RÁDIO AO VIVO
+            </div>
 
             <h1 class="track-title-large" id="playerTitle">
               Carregando faixa...

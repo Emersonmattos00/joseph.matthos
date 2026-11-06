@@ -1,21 +1,14 @@
-// js/player.js — versão final auditada
+// js/player.js — versão final auditada (com Modo Rádio)
 
 'use strict';
 
 /* ============================================================
-   CORREÇÕES APLICADAS (auditoria player.js):
-   - Concorrência: AbortController + requestId (já estava)
-   - onerror: distingue 403 (preview indisponível) de erro real
-     via fetch leve ao /api/stream?format=json
-   - Lista: sem onclick inline (já estava)
-   - Navegação: findIndex = -1 não avança (já estava)
-   - Next/Prev/Ended com WRAP (última → primeira, e vice-versa)
-   - Letras: valida formato do array (já estava)
-   - formatTime: trata Infinity/NaN (já estava)
-   - Abas: atualiza aria-selected e hidden
-   - Progress bar: atualiza aria-valuenow + teclado (setas, Home, End)
-   - play(): permite play mesmo com src vazio (Safari sync gesture)
-   - preload='metadata' (em vez de 'none') para iOS
+   CORREÇÕES E ADIÇÕES APLICADAS:
+   - Modo Rádio (?radio=true) com fila do sessionStorage
+   - Concorrência: AbortController + requestId
+   - onerror: distingue 403 de erro real via format=json
+   - Ended: Respeita o modo rádio, repeat e shuffle
+   - Media Session: comandos play/pause corretos e setPositionState
    ============================================================ */
 
 function formatTime(secs) {
@@ -53,11 +46,12 @@ const els = {
   albumHeaderCount: document.getElementById('albumHeaderCount'),
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   shuffleBtn: document.getElementById('shuffleBtn'),
-  repeatBtn: document.getElementById('repeatBtn')
+  repeatBtn: document.getElementById('repeatBtn'),
+  radioBadge: document.getElementById('radioBadge')
 };
 
 const audio = new Audio();
-audio.preload = 'metadata';  // iOS: 'none' pode impedir metadata
+audio.preload = 'metadata';
 
 let updateInterval = null;
 let currentTrackId = null;
@@ -73,6 +67,11 @@ let repeatMode = 'off'; // 'off' | 'one' | 'all'
 let playerRequestId = 0;
 let playerAbortController = null;
 
+// ─── ESTADO DA RÁDIO ───
+let isRadioMode = false;
+let radioQueue = [];
+let radioIndex = -1;
+
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
@@ -80,26 +79,20 @@ const tabContents = document.querySelectorAll('.tab-content');
 function updateTabState(activeTab) {
   const tabName = activeTab?.dataset.tab;
   if (!tabName) return;
-
   tabs.forEach(t => {
     const on = t === activeTab;
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-
   tabContents.forEach(c => {
     const on = c.id === `tab-${tabName}`;
     c.classList.toggle('active', on);
     c.hidden = !on;
   });
-
   document.body.classList.remove('immersive-mode');
 }
 
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => updateTabState(tab));
-});
-
+tabs.forEach(tab => tab.addEventListener('click', () => updateTabState(tab)));
 function switchTab(tabName) {
   const btn = document.querySelector(`.mobile-tab[data-tab="${tabName}"]`);
   if (btn) updateTabState(btn);
@@ -145,55 +138,96 @@ if (els.fullscreenBtn) {
 
 // ─── FETCH DE METADADOS ───
 async function fetchMetadata(trackId, signal) {
-  const r = await fetch(
-    `/api/public?track=${encodeURIComponent(trackId)}`,
-    { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal }
-  );
-
+  const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, {
+    method: 'GET', credentials: 'same-origin', cache: 'no-store', signal
+  });
   if (!r.ok) {
     if (r.status === 404) throw new Error('Faixa não encontrada ou não publicada.');
     throw new Error(`Erro ao consultar faixa: HTTP ${r.status}`);
   }
-
   const data = await r.json();
-
   if (!data || typeof data !== 'object' || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
-    throw new Error('A API retornou dados incompletos para o player.');
+    throw new Error('A API retornou dados incompletos.');
   }
-
   return data;
 }
 
 // ─── DIAGNÓSTICO DO STREAM ───
-// MediaError 4 é genérico. Um HEAD/GET com format=json distingue 403 de 404.
 async function diagnoseStreamError(trackId) {
   try {
-    const r = await fetch(
-      `/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`,
-      { method: 'GET', credentials: 'same-origin', cache: 'no-store' }
-    );
-
+    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`, {
+      method: 'GET', credentials: 'same-origin', cache: 'no-store'
+    });
     if (r.ok) return { status: 'ok' };
-
-    if (r.status === 403) {
-      return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue para ouvir.' };
-    }
-
-    if (r.status === 404) {
-      return { status: 'not_found', message: 'Áudio não configurado para esta faixa.' };
-    }
-
-    if (r.status === 503) {
-      return { status: 'unavailable', message: 'Serviço de áudio temporariamente indisponível.' };
-    }
-
-    if (r.status === 429) {
-      return { status: 'rate_limited', message: 'Muitas requisições. Tente em instantes.' };
-    }
-
+    if (r.status === 403) return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue.' };
+    if (r.status === 404) return { status: 'not_found', message: 'Áudio não configurado.' };
+    if (r.status === 503) return { status: 'unavailable', message: 'Serviço temporariamente indisponível.' };
+    if (r.status === 429) return { status: 'rate_limited', message: 'Muitas requisições.' };
     return { status: 'error', message: `Erro HTTP ${r.status}.` };
   } catch {
     return { status: 'network', message: 'Verifique sua conexão.' };
+  }
+}
+
+// ─── MEDIA SESSION ───
+function updateMediaSessionPosition() {
+  if (!('mediaSession' in navigator)) return;
+  if (typeof navigator.mediaSession.setPositionState !== 'function') return;
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  if (!Number.isFinite(audio.currentTime)) return;
+
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: audio.duration,
+      playbackRate: audio.playbackRate,
+      position: Math.min(audio.currentTime, audio.duration)
+    });
+  } catch (error) {
+    console.warn('[player] Posição Media Session:', error);
+  }
+}
+
+function updateMediaSessionMetadata(meta) {
+  if (!('mediaSession' in navigator)) return;
+  const cover = meta.coverUrl || '/assets/img/tema.webp';
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: meta.title || 'Faixa sem título',
+    artist: meta.artist || 'Joseph Matthos',
+    album: meta.albumTitle || 'Álbum',
+    artwork: [
+      { src: cover, sizes: '96x96', type: 'image/webp' },
+      { src: cover, sizes: '128x128', type: 'image/webp' },
+      { src: cover, sizes: '192x192', type: 'image/webp' },
+      { src: cover, sizes: '256x256', type: 'image/webp' },
+      { src: cover, sizes: '384x384', type: 'image/webp' },
+      { src: cover, sizes: '512x512', type: 'image/webp' }
+    ]
+  });
+}
+
+function setupMediaSessionHandlers() {
+  if (!('mediaSession' in navigator)) return;
+
+  const actionHandlers = [
+    ['play', () => {
+      if (audio.src && audio.paused) audio.play().catch(err => console.warn('[player] Falha ao reproduzir:', err));
+      else if (!audio.src && currentTrackId) initPlayer(currentTrackId, true);
+    }],
+    ['pause', () => { if (!audio.paused) audio.pause(); }],
+    ['nexttrack', () => window.playerNext()],
+    ['previoustrack', () => window.playerPrev()],
+    ['seekbackward', (details) => { audio.currentTime = Math.max(audio.currentTime - (details.seekOffset || 10), 0); }],
+    ['seekforward', (details) => { audio.currentTime = Math.min(audio.currentTime + (details.seekOffset || 10), audio.duration); }],
+    ['seekto', (details) => {
+      if (details.fastSeek && 'fastSeek' in audio) { audio.fastSeek(details.seekTime); return; }
+      audio.currentTime = details.seekTime;
+    }]
+  ];
+
+  for (const [action, handler] of actionHandlers) {
+    try { navigator.mediaSession.setActionHandler(action, handler); } 
+    catch (e) { console.warn(`Ação "${action}" não suportada.`); }
   }
 }
 
@@ -205,20 +239,13 @@ function renderLyrics(lyricsArray) {
     currentLyricIndex = -1;
     return;
   }
-
-  const validLyrics = lyricsArray.filter(line =>
-    line && typeof line === 'object' &&
-    Number.isFinite(Number(line.time)) &&
-    typeof line.text === 'string'
-  );
-
+  const validLyrics = lyricsArray.filter(line => line && typeof line === 'object' && Number.isFinite(Number(line.time)) && typeof line.text === 'string');
   if (!validLyrics.length) {
     els.lyricsContent.innerHTML = '<p class="lyrics-empty">Letra indisponível.</p>';
     parsedLyrics = [];
     currentLyricIndex = -1;
     return;
   }
-
   els.lyricsContent.innerHTML = validLyrics.map((line, index) => `
     <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}" type="button">${esc(line.text)}</button>
   `).join('');
@@ -227,7 +254,6 @@ function renderLyrics(lyricsArray) {
     time: Number(line.time),
     element: els.lyricsContent.querySelector(`[data-index="${index}"]`)
   }));
-
   currentLyricIndex = -1;
 
   els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
@@ -267,7 +293,6 @@ function syncLyrics() {
 // ─── LISTA DE MÚSICAS ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
-
   meta.albumTracks.forEach((track, index) => {
     const item = document.createElement('div');
     item.className = 'music-item';
@@ -289,23 +314,16 @@ function renderPlayerTrackList(meta, currentId) {
     artist.textContent = meta.artist || 'Joseph Matthos';
 
     info.append(title, artist);
-
     const actions = document.createElement('div');
     actions.className = 'music-item-actions';
 
     const duration = document.createElement('span');
     duration.className = 'music-item-duration';
-    duration.textContent = track.locked
-      ? '🔒'
-      : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
+    duration.textContent = track.locked ? '🔒' : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
 
     actions.append(duration);
     item.append(number, info, actions);
-
-    item.addEventListener('click', () => {
-      window.tocarMusicaDaLista(String(track.id));
-    });
-
+    item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
     els.musicList.appendChild(item);
   });
 }
@@ -318,10 +336,7 @@ async function initPlayer(trackId, autoplay = true) {
   }
 
   const requestId = ++playerRequestId;
-
-  if (playerAbortController) {
-    try { playerAbortController.abort(); } catch {}
-  }
+  if (playerAbortController) { try { playerAbortController.abort(); } catch {} }
   playerAbortController = new AbortController();
 
   currentTrackId = trackId;
@@ -345,9 +360,7 @@ async function initPlayer(trackId, autoplay = true) {
 
   try {
     const meta = await fetchMetadata(trackId, playerAbortController.signal);
-
     if (requestId !== playerRequestId) return;
-
     currentTrackMeta = meta;
 
     els.title.textContent = meta.title;
@@ -366,12 +379,12 @@ async function initPlayer(trackId, autoplay = true) {
     }
 
     renderLyrics(meta.lyrics);
-
     els.albumHeaderTitle.textContent = meta.albumTitle || 'Álbum';
     els.albumHeaderArtist.textContent = meta.artist || 'Joseph Matthos';
     els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
 
     renderPlayerTrackList(meta, trackId);
+    updateMediaSessionMetadata(meta);
 
     const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
     audio.src = streamUrl;
@@ -391,11 +404,9 @@ async function initPlayer(trackId, autoplay = true) {
   } catch (error) {
     if (error.name === 'AbortError') return;
     if (requestId !== playerRequestId) return;
-
     console.error('[player] Erro ao carregar faixa:', error);
     currentTrackMeta = null;
     currentTrackId = null;
-
     els.title.textContent = 'Não foi possível carregar a faixa';
     els.artist.textContent = error.message || 'Tente novamente.';
   }
@@ -409,42 +420,42 @@ function bindAudioEvents() {
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
       const duration = audio.duration || 0;
-      const percent = duration > 0 && Number.isFinite(duration)
-        ? Math.min(100, (seek / duration) * 100)
-        : 0;
+      const percent = duration > 0 && Number.isFinite(duration) ? Math.min(100, (seek / duration) * 100) : 0;
       els.progressFill.style.width = `${percent}%`;
-      if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
+      if (els.progressBar) {
+        els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
+        els.progressBar.setAttribute('aria-valuetext', `${formatTime(seek)} de ${formatTime(duration)}`);
+      }
       els.currentTime.textContent = formatTime(seek);
       syncLyrics();
     }, 250);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
 
   audio.addEventListener('pause', () => {
     els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
     clearInterval(updateInterval);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   });
 
   audio.addEventListener('loadedmetadata', () => {
     els.duration.textContent = formatTime(audio.duration);
+    updateMediaSessionPosition();
   });
 
-  // ★ Erro de áudio: distingue 403 de erro real via diagnoseStreamError
+  audio.addEventListener('timeupdate', updateMediaSessionPosition);
+  audio.addEventListener('seeked', updateMediaSessionPosition);
+  audio.addEventListener('ratechange', updateMediaSessionPosition);
+
   audio.addEventListener('error', async () => {
     const error = audio.error;
-    console.error('[player] Erro no áudio:', {
-      code: error?.code,
-      message: error?.message,
-      source: audio.currentSrc
-    });
-
+    console.error('[player] Erro no áudio:', { code: error?.code, message: error?.message, source: audio.currentSrc });
     if (!currentTrackId) return;
-
     const trackId = currentTrackId;
 
     if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
       els.title.textContent = 'Erro ao carregar áudio';
       els.artist.textContent = 'Verificando disponibilidade...';
-
       const diag = await diagnoseStreamError(trackId);
       if (trackId !== currentTrackId) return;
 
@@ -473,8 +484,24 @@ function bindAudioEvents() {
     }
   });
 
-  // ★ Ended: respeita repeat mode e faz wrap
   audio.addEventListener('ended', () => {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+
+    if (isRadioMode) {
+      if (radioIndex + 1 < radioQueue.length) {
+        radioIndex++;
+        sessionStorage.setItem('radio_index', String(radioIndex));
+        const next = radioQueue[radioIndex];
+        window.tocarMusicaDaLista(String(next.trackId));
+      } else {
+        radioIndex = 0;
+        sessionStorage.setItem('radio_index', String(radioIndex));
+        const first = radioQueue[0];
+        window.tocarMusicaDaLista(String(first.trackId));
+      }
+      return;
+    }
+
     if (repeatMode === 'one') {
       audio.currentTime = 0;
       audio.play().catch(() => {});
@@ -488,7 +515,7 @@ function bindAudioEvents() {
 
     let nextIndex;
     if (shuffleEnabled) {
-      nextIndex = Math.floor(Math.random() * tracks.length);
+      nextIndex = getRandomTrackIndex(tracks, index);
     } else if (index < tracks.length - 1) {
       nextIndex = index + 1;
     } else if (repeatMode === 'all') {
@@ -502,13 +529,20 @@ function bindAudioEvents() {
   });
 }
 
+function getRandomTrackIndex(tracks, currentIndex) {
+  if (!Array.isArray(tracks) || tracks.length <= 1) return currentIndex;
+  let nextIndex;
+  do { nextIndex = Math.floor(Math.random() * tracks.length); } 
+  while (nextIndex === currentIndex);
+  return nextIndex;
+}
+
 // ─── PROGRESS BAR: TECLADO ───
 if (els.progressBar) {
   els.progressBar.addEventListener('keydown', (e) => {
     if (!audio.duration || !Number.isFinite(audio.duration)) return;
     const step = 5;
     let newTime = audio.currentTime;
-
     switch (e.key) {
       case 'ArrowLeft':  newTime -= step; break;
       case 'ArrowRight': newTime += step; break;
@@ -516,7 +550,6 @@ if (els.progressBar) {
       case 'End':        newTime = audio.duration; break;
       default: return;
     }
-
     e.preventDefault();
     audio.currentTime = Math.max(0, Math.min(audio.duration, newTime));
   });
@@ -524,62 +557,51 @@ if (els.progressBar) {
 
 // ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
-  // iOS: permite tentar play mesmo com src vazio (o streamUrl vem logo em seguida)
   if (!audio.src) {
     if (currentTrackId) initPlayer(currentTrackId, true);
     return;
   }
-  if (audio.paused) {
-    audio.play().catch(err => console.error('[player] play() falhou:', err));
-  } else {
-    audio.pause();
-  }
+  if (audio.paused) audio.play().catch(err => console.error('[player] play() falhou:', err));
+  else audio.pause();
 };
 
 window.playerNext = () => {
+  if (isRadioMode) {
+    if (radioIndex + 1 < radioQueue.length) radioIndex++;
+    else radioIndex = 0;
+    sessionStorage.setItem('radio_index', String(radioIndex));
+    window.tocarMusicaDaLista(String(radioQueue[radioIndex].trackId));
+    return;
+  }
+
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
   if (!tracks.length) return;
-
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
-  let nextIndex;
-  if (shuffleEnabled) {
-    nextIndex = Math.floor(Math.random() * tracks.length);
-  } else if (index < tracks.length - 1) {
-    nextIndex = index + 1;
-  } else {
-    nextIndex = 0; // wrap
-  }
-
+  const nextIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index < tracks.length - 1 ? index + 1 : 0);
   const next = tracks[nextIndex];
   if (next?.id) window.tocarMusicaDaLista(String(next.id));
 };
 
 window.playerPrev = () => {
-  if (!currentTrackMeta?.albumTracks) return;
-
-  if (audio.currentTime > 3) {
-    audio.currentTime = 0;
+  if (isRadioMode) {
+    if (radioIndex > 0) radioIndex--;
+    else radioIndex = radioQueue.length - 1;
+    sessionStorage.setItem('radio_index', String(radioIndex));
+    window.tocarMusicaDaLista(String(radioQueue[radioIndex].trackId));
     return;
   }
 
+  if (!currentTrackMeta?.albumTracks) return;
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }
   const tracks = currentTrackMeta.albumTracks;
   if (!tracks.length) return;
-
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
-  let prevIndex;
-  if (shuffleEnabled) {
-    prevIndex = Math.floor(Math.random() * tracks.length);
-  } else if (index > 0) {
-    prevIndex = index - 1;
-  } else {
-    prevIndex = tracks.length - 1; // wrap
-  }
-
+  const prevIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index > 0 ? index - 1 : tracks.length - 1);
   const prev = tracks[prevIndex];
   if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
 };
@@ -591,11 +613,10 @@ els.progressBar?.addEventListener('click', (e) => {
   audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
 });
 
-// ★ tocarMusicaDaLista: encodeURIComponent + history + abas
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   const safeId = String(id);
-  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}`);
+  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}${isRadioMode ? '&radio=true' : ''}`);
   switchTab('player');
   await initPlayer(safeId);
 };
@@ -603,6 +624,7 @@ window.tocarMusicaDaLista = async (id) => {
 // ─── SHUFFLE / REPEAT ───
 if (els.shuffleBtn) {
   els.shuffleBtn.addEventListener('click', () => {
+    if (isRadioMode) return;
     shuffleEnabled = !shuffleEnabled;
     els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
     els.shuffleBtn.classList.toggle('active', shuffleEnabled);
@@ -611,38 +633,60 @@ if (els.shuffleBtn) {
 
 if (els.repeatBtn) {
   els.repeatBtn.addEventListener('click', () => {
+    if (isRadioMode) return;
     const order = ['off', 'all', 'one'];
     repeatMode = order[(order.indexOf(repeatMode) + 1) % order.length];
     els.repeatBtn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
     els.repeatBtn.classList.toggle('active', repeatMode !== 'off');
     els.repeatBtn.dataset.mode = repeatMode;
-    els.repeatBtn.setAttribute(
-      'aria-label',
-      repeatMode === 'off' ? 'Repetir: desligado'
-        : repeatMode === 'all' ? 'Repetir: todas'
-        : 'Repetir: uma'
+    els.repeatBtn.setAttribute('aria-label',
+      repeatMode === 'off' ? 'Repetir: desligado' :
+      repeatMode === 'all' ? 'Repetir: todas' : 'Repetir: uma'
     );
   });
 }
 
-// ─── MODAIS (ALUGUEL / ASSINATURA) ───
+// ─── MODAIS ───
 window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
-
 window.abrirModalAluguel = () => {
   if (!currentTrackId) return;
-  // O modal de aluguel vive na home (index.html).
-  // Redireciona para a home e pede o aluguel via hash.
-  const url = `/?rent=${encodeURIComponent(currentTrackId)}`;
-  window.location.href = url;
-  // TODO: index.html precisa ler ?rent=UUID e abrir o modal de aluguel.
+  window.location.href = `/?rent=${encodeURIComponent(currentTrackId)}`;
 };
 
 // ─── BOOT ───
 window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
+  setupMediaSessionHandlers();
 
   const params = new URLSearchParams(window.location.search);
+  isRadioMode = params.get('radio') === 'true';
   const trackId = params.get('id');
+
+  if (isRadioMode) {
+    if (els.radioBadge) els.radioBadge.style.display = 'flex';
+    if (els.shuffleBtn) els.shuffleBtn.style.display = 'none';
+    if (els.repeatBtn) els.repeatBtn.style.display = 'none';
+
+    try {
+      radioQueue = JSON.parse(sessionStorage.getItem('radio_queue') || '[]');
+      radioIndex = parseInt(sessionStorage.getItem('radio_index') || '0', 10);
+    } catch {
+      radioQueue = [];
+      radioIndex = 0;
+    }
+
+    if (!radioQueue.length) {
+      els.title.textContent = 'Fila da rádio vazia';
+      return;
+    }
+
+    const initialTrack = trackId || radioQueue[radioIndex]?.trackId;
+    if (initialTrack) {
+      await initPlayer(initialTrack);
+    }
+    return;
+  }
+
   if (!trackId) {
     els.title.textContent = 'Nenhuma faixa selecionada';
     return;
