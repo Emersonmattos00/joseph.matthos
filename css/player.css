@@ -354,6 +354,32 @@ body.immersive-mode .player-footer-actions {
   pointer-events: auto;
 }
 
+/* Toast / Notificações */
+#playerToast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(20, 20, 20, 0.95);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 30px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  z-index: 10000;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+#playerToast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Hover na lista: ícone de Play aparece no lugar do número */
 .music-item .play-hover {
   display: none;
 }
@@ -364,5 +390,5 @@ body.immersive-mode .player-footer-actions {
 
 .music-item:hover .play-hover {
   display: inline;
-  color: #fff;
+  color: #36c761;
 }
