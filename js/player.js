@@ -1,14 +1,14 @@
-// js/player.js — versão final auditada e integrada com Media Session
+// js/player.js — Versão Final Consolidada
 
 'use strict';
 
 /* ============================================================
-   CORREÇÕES E FUNCIONALIDADES APLICADAS:
-   - Concorrência: AbortController + requestId em initPlayer
-   - Validação do trackId e do meta.id retornado pela API
-   - onerror: distingue 403 (preview indisponível) via /api/stream?format=json
-   - Repeat: clique simples = repetir atual (one), duplo clique = repetir tudo (all)
-   - Media Session API: controles e metadados na tela de bloqueio/notificação
+   CORREÇÕES APLICADAS:
+   - Alinhamento com api/stream.js (leitura de JSON no diagnóstico)
+   - Concorrência dupla: playerRequestId e playbackGeneration
+   - Media Session: comandos play/pause corretos e setPositionState
+   - Acessibilidade: aria-valuetext, repeat via ciclo de teclado
+   - Shuffle inteligente (não repete a mesma faixa)
    ============================================================ */
 
 function formatTime(secs) {
@@ -50,7 +50,7 @@ const els = {
 };
 
 const audio = new Audio();
-audio.preload = 'metadata';  // iOS: 'none' pode impedir metadata
+audio.preload = 'metadata';
 
 let updateInterval = null;
 let currentTrackId = null;
@@ -58,13 +58,14 @@ let parsedLyrics = [];
 let currentLyricIndex = -1;
 let currentTrackMeta = null;
 
-// ─── ESTADO DE CONTROLES ───
 let shuffleEnabled = false;
 let repeatMode = 'off'; // 'off' | 'one' | 'all'
 
-// Concorrência
+// Controle de concorrência de metadados e áudio
 let playerRequestId = 0;
+let playbackGeneration = 0;
 let playerAbortController = null;
+let currentStreamUrl = '';
 
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
@@ -107,21 +108,24 @@ function toggleModoImersivo() {
 }
 
 let touchStartTime = 0;
-els.container.addEventListener('touchstart', (e) => {
-  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-  touchStartTime = Date.now();
-}, { passive: true });
+if (els.container) {
+  els.container.addEventListener('touchstart', (e) => {
+    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+    touchStartTime = Date.now();
+  }, { passive: true });
 
-els.container.addEventListener('touchend', (e) => {
-  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-  if (Date.now() - touchStartTime < 300) toggleModoImersivo();
-});
+  els.container.addEventListener('touchend', (e) => {
+    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+    const elapsed = Date.now() - touchStartTime;
+    if (elapsed < 300) toggleModoImersivo();
+  });
 
-els.container.addEventListener('click', (e) => {
-  if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-  if (Date.now() - touchStartTime < 500) return;
-  toggleModoImersivo();
-});
+  els.container.addEventListener('click', (e) => {
+    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
+    if (touchStartTime && Date.now() - touchStartTime < 500) return;
+    toggleModoImersivo();
+  });
+}
 
 // ─── TELA CHEIA ───
 if (els.fullscreenBtn) {
@@ -138,43 +142,115 @@ if (els.fullscreenBtn) {
 
 // ─── FETCH DE METADADOS ───
 async function fetchMetadata(trackId, signal) {
-  const r = await fetch(
-    `/api/public?track=${encodeURIComponent(trackId)}`,
-    { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal }
-  );
-
+  const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { 
+    method: 'GET', credentials: 'same-origin', cache: 'no-store', signal 
+  });
   if (!r.ok) {
     if (r.status === 404) throw new Error('Faixa não encontrada ou não publicada.');
     throw new Error(`Erro ao consultar faixa: HTTP ${r.status}`);
   }
-
   const data = await r.json();
-
-  if (!data || typeof data !== 'object' || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
-    throw new Error('A API retornou dados incompletos para o player.');
+  if (!data || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
+    throw new Error('A API retornou dados incompletos.');
   }
-
   return data;
 }
 
-// ─── DIAGNÓSTICO DO STREAM ───
-// MediaError 4 é genérico. Um HEAD/GET com format=json distingue 403 de 404.
+// ─── DIAGNÓSTICO DO STREAM (Alinhado ao api/stream.js) ───
 async function diagnoseStreamError(trackId) {
   try {
-    const r = await fetch(
-      `/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`,
-      { method: 'GET', credentials: 'same-origin', cache: 'no-store' }
-    );
+    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`, { 
+      method: 'GET', credentials: 'same-origin', cache: 'no-store' 
+    });
+    
+    const data = await r.json().catch(() => ({}));
 
     if (r.ok) return { status: 'ok' };
-    if (r.status === 403) return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue para ouvir.' };
-    if (r.status === 404) return { status: 'not_found', message: 'Áudio não configurado para esta faixa.' };
-    if (r.status === 503) return { status: 'unavailable', message: 'Serviço de áudio temporariamente indisponível.' };
-    if (r.status === 429) return { status: 'rate_limited', message: 'Muitas requisições. Tente em instantes.' };
-
-    return { status: 'error', message: `Erro HTTP ${r.status}.` };
+    
+    // O backend envia 403 quando não há previewKey para não-assinantes
+    if (r.status === 403) return { status: 'forbidden', message: data.error || 'Prévia indisponível. Assine ou alugue.' };
+    // O backend envia 404 quando não há streamKey para assinantes
+    if (r.status === 404) return { status: 'not_found', message: data.error || 'Áudio não configurado.' };
+    if (r.status === 503) return { status: 'unavailable', message: data.error || 'Serviço temporariamente indisponível.' };
+    if (r.status === 429) return { status: 'rate_limited', message: data.error || 'Muitas requisições. Tente em instantes.' };
+    
+    return { status: 'error', message: data.error || `Erro HTTP ${r.status}.` };
   } catch {
     return { status: 'network', message: 'Verifique sua conexão.' };
+  }
+}
+
+// ─── MEDIA SESSION ───
+function updateMediaSessionPosition() {
+  if (!('mediaSession' in navigator)) return;
+  if (typeof navigator.mediaSession.setPositionState !== 'function') return;
+  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+  if (!Number.isFinite(audio.currentTime)) return;
+
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: audio.duration,
+      playbackRate: audio.playbackRate,
+      position: Math.min(audio.currentTime, audio.duration)
+    });
+  } catch (error) {
+    console.warn('[player] Posição Media Session:', error);
+  }
+}
+
+function updateMediaSessionMetadata(meta) {
+  if (!('mediaSession' in navigator)) return;
+  const cover = meta.coverUrl || '/assets/img/tema.webp';
+
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: meta.title || 'Faixa sem título',
+    artist: meta.artist || 'Joseph Matthos',
+    album: meta.albumTitle || 'Álbum',
+    artwork: [
+      { src: cover, sizes: '96x96', type: 'image/webp' },
+      { src: cover, sizes: '128x128', type: 'image/webp' },
+      { src: cover, sizes: '192x192', type: 'image/webp' },
+      { src: cover, sizes: '256x256', type: 'image/webp' },
+      { src: cover, sizes: '384x384', type: 'image/webp' },
+      { src: cover, sizes: '512x512', type: 'image/webp' }
+    ]
+  });
+}
+
+function setupMediaSessionHandlers() {
+  if (!('mediaSession' in navigator)) return;
+
+  const actionHandlers = [
+    ['play', () => {
+      if (audio.src && audio.paused) {
+        audio.play().catch(err => console.warn('[player] Falha ao reproduzir:', err));
+      } else if (!audio.src && currentTrackId) {
+        initPlayer(currentTrackId, true);
+      }
+    }],
+    ['pause', () => {
+      if (!audio.paused) audio.pause();
+    }],
+    ['nexttrack', () => window.playerNext()],
+    ['previoustrack', () => window.playerPrev()],
+    ['seekbackward', (details) => {
+      audio.currentTime = Math.max(audio.currentTime - (details.seekOffset || 10), 0);
+    }],
+    ['seekforward', (details) => {
+      audio.currentTime = Math.min(audio.currentTime + (details.seekOffset || 10), audio.duration);
+    }],
+    ['seekto', (details) => {
+      if (details.fastSeek && 'fastSeek' in audio) {
+        audio.fastSeek(details.seekTime);
+        return;
+      }
+      audio.currentTime = details.seekTime;
+    }]
+  ];
+
+  for (const [action, handler] of actionHandlers) {
+    try { navigator.mediaSession.setActionHandler(action, handler); } 
+    catch (e) { console.warn(`Ação "${action}" não suportada.`); }
   }
 }
 
@@ -187,11 +263,15 @@ function renderLyrics(lyricsArray) {
     return;
   }
 
-  const validLyrics = lyricsArray.filter(line =>
-    line && typeof line === 'object' &&
-    Number.isFinite(Number(line.time)) &&
-    typeof line.text === 'string'
-  );
+  const validLyrics = lyricsArray
+    .filter(line =>
+      line && typeof line === 'object' &&
+      line.time !== null && line.time !== '' &&
+      Number.isFinite(Number(line.time)) && Number(line.time) >= 0 &&
+      typeof line.text === 'string'
+    )
+    .map(line => ({ time: Number(line.time), text: line.text }))
+    .sort((a, b) => a.time - b.time);
 
   if (!validLyrics.length) {
     els.lyricsContent.innerHTML = '<p class="lyrics-empty">Letra indisponível.</p>';
@@ -201,11 +281,11 @@ function renderLyrics(lyricsArray) {
   }
 
   els.lyricsContent.innerHTML = validLyrics.map((line, index) => `
-    <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}" type="button">${esc(line.text)}</button>
+    <button class="lyric-line" data-index="${index}" data-time="${line.time}" type="button">${esc(line.text)}</button>
   `).join('');
 
   parsedLyrics = validLyrics.map((line, index) => ({
-    time: Number(line.time),
+    time: line.time,
     element: els.lyricsContent.querySelector(`[data-index="${index}"]`)
   }));
 
@@ -276,35 +356,25 @@ function renderPlayerTrackList(meta, currentId) {
 
     const duration = document.createElement('span');
     duration.className = 'music-item-duration';
-    duration.textContent = track.locked
-      ? '🔒'
-      : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
+    duration.textContent = track.locked ? '🔒' : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
 
     actions.append(duration);
     item.append(number, info, actions);
 
-    item.addEventListener('click', () => {
-      window.tocarMusicaDaLista(String(track.id));
-    });
-
+    item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
     els.musicList.appendChild(item);
   });
 }
 
 // ─── INIT ───
 async function initPlayer(trackId, autoplay = true) {
-  // Validação do identificador recebido (P0)
-  if (
-    typeof trackId !== 'string' ||
-    !trackId.trim() ||
-    trackId.length > 100
-  ) {
+  if (typeof trackId !== 'string' || !trackId.trim() || trackId.length > 100) {
     els.title.textContent = 'Identificador de faixa inválido';
     return;
   }
 
-  // Identificador único desta inicialização (P0 — concorrência)
   const requestId = ++playerRequestId;
+  const generation = ++playbackGeneration;
 
   if (playerAbortController) {
     try { playerAbortController.abort(); } catch {}
@@ -328,22 +398,22 @@ async function initPlayer(trackId, autoplay = true) {
   els.currentTime.textContent = '0:00';
   els.duration.textContent = '0:00';
   els.progressFill.style.width = '0%';
-  if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', '0');
+  if (els.progressBar) {
+    els.progressBar.setAttribute('aria-valuenow', '0');
+    els.progressBar.setAttribute('aria-valuetext', '0:00 de 0:00');
+  }
 
   try {
     const meta = await fetchMetadata(trackId, playerAbortController.signal);
 
-    // Impede respostas antigas de alterar a seleção atual (P0)
     if (requestId !== playerRequestId) return;
 
-    // Valida que a API devolveu exatamente a faixa solicitada (P0)
     if (!meta || !meta.id || String(meta.id) !== String(trackId)) {
       els.title.textContent = 'Dados da faixa inválidos';
       return;
     }
 
     currentTrackMeta = meta;
-
     els.title.textContent = meta.title;
     els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
 
@@ -366,16 +436,15 @@ async function initPlayer(trackId, autoplay = true) {
     els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
 
     renderPlayerTrackList(meta, trackId);
-
-    // ★ Integração Media Session
     updateMediaSessionMetadata(meta);
 
     const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
-    audio.src = streamUrl;
+    currentStreamUrl = new URL(streamUrl, window.location.origin).href;
+    
+    audio.src = currentStreamUrl;
     audio.load();
 
-    // Rechecagem antes do autoplay (P0)
-    if (requestId !== playerRequestId) return;
+    if (requestId !== playerRequestId || generation !== playbackGeneration) return;
 
     if (autoplay) {
       try {
@@ -399,151 +468,87 @@ async function initPlayer(trackId, autoplay = true) {
   }
 }
 
-// ─── MEDIA SESSION (INTEGRAÇÃO COM NOTIFICAÇÕES) ───
-function updateMediaSessionMetadata(meta) {
-  if (!('mediaSession' in navigator)) return;
-  const cover = meta.coverUrl || '/assets/default-cover.png'; // Ajuste o fallback se necessário
-
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: meta.title || 'Faixa sem título',
-    artist: meta.artist || 'Joseph Matthos',
-    album: meta.albumTitle || 'Mentalidade de Ouro',
-    artwork: [
-      { src: cover, sizes: '96x96',   type: 'image/png' },
-      { src: cover, sizes: '128x128', type: 'image/png' },
-      { src: cover, sizes: '192x192', type: 'image/png' },
-      { src: cover, sizes: '256x256', type: 'image/png' },
-      { src: cover, sizes: '384x384', type: 'image/png' },
-      { src: cover, sizes: '512x512', type: 'image/png' }
-    ]
-  });
-}
-
-function setupMediaSessionHandlers() {
-  if (!('mediaSession' in navigator)) return;
-
-  const actionHandlers = [
-    ['play', () => window.playerPlay()],
-    ['pause', () => window.playerPlay()],
-    ['nexttrack', () => window.playerNext()],
-    ['previoustrack', () => window.playerPrev()],
-    ['seekbackward', (details) => {
-      const skipTime = details.seekOffset || 10;
-      audio.currentTime = Math.max(audio.currentTime - skipTime, 0);
-    }],
-    ['seekforward', (details) => {
-      const skipTime = details.seekOffset || 10;
-      audio.currentTime = Math.min(audio.currentTime + skipTime, audio.duration);
-    }],
-    ['seekto', (details) => {
-      if (details.fastSeek && 'fastSeek' in audio) {
-        audio.fastSeek(details.seekTime);
-        return;
-      }
-      audio.currentTime = details.seekTime;
-    }]
-  ];
-
-  for (const [action, handler] of actionHandlers) {
-    try {
-      navigator.mediaSession.setActionHandler(action, handler);
-    } catch (error) {
-      console.warn(`A ação "${action}" não é suportada neste navegador.`);
-    }
-  }
-}
-
 // ─── ÁUDIO: EVENTOS ───
 function bindAudioEvents() {
   audio.addEventListener('play', () => {
     els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
     clearInterval(updateInterval);
+    
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
       const duration = audio.duration || 0;
-      const percent = duration > 0 && Number.isFinite(duration)
-        ? Math.min(100, (seek / duration) * 100)
-        : 0;
+      const percent = duration > 0 && Number.isFinite(duration) ? Math.min(100, (seek / duration) * 100) : 0;
+      
       els.progressFill.style.width = `${percent}%`;
-      if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
+      
+      if (els.progressBar) {
+        els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
+        els.progressBar.setAttribute('aria-valuetext', `${formatTime(seek)} de ${formatTime(duration)}`);
+      }
+      
       els.currentTime.textContent = formatTime(seek);
       syncLyrics();
     }, 250);
 
-    // ★ Media Session: estado tocando + barra de progresso no sistema
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'playing';
-      if ('setPositionState' in navigator.mediaSession && Number.isFinite(audio.duration)) {
-        navigator.mediaSession.setPositionState({
-          duration: audio.duration,
-          playbackRate: audio.playbackRate,
-          position: audio.currentTime
-        });
-      }
-    }
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   });
 
   audio.addEventListener('pause', () => {
     els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
     clearInterval(updateInterval);
-
-    // ★ Media Session: estado pausado
-    if ('mediaSession' in navigator) {
-      navigator.mediaSession.playbackState = 'paused';
-    }
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   });
 
   audio.addEventListener('loadedmetadata', () => {
     els.duration.textContent = formatTime(audio.duration);
+    updateMediaSessionPosition();
   });
 
-  // ★ Erro de áudio: distingue 403 de erro real via diagnoseStreamError
+  audio.addEventListener('timeupdate', updateMediaSessionPosition);
+  audio.addEventListener('seeked', updateMediaSessionPosition);
+  audio.addEventListener('ratechange', updateMediaSessionPosition);
+
   audio.addEventListener('error', async () => {
     const error = audio.error;
+    const generation = playbackGeneration;
+    const expectedUrl = currentStreamUrl;
+    const trackId = currentTrackId;
+
     console.error('[player] Erro no áudio:', {
       code: error?.code,
       message: error?.message,
       source: audio.currentSrc
     });
 
-    if (!currentTrackId) return;
+    if (!trackId || !expectedUrl) return;
+    const currentUrl = audio.currentSrc || audio.src;
+    if (generation !== playbackGeneration || currentUrl !== expectedUrl) return;
 
-    const trackId = currentTrackId;
+    els.title.textContent = 'Erro ao carregar áudio';
+    els.artist.textContent = 'Verificando disponibilidade...';
 
-    if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-      els.title.textContent = 'Erro ao carregar áudio';
-      els.artist.textContent = 'Verificando disponibilidade...';
+    const diag = await diagnoseStreamError(trackId);
+    
+    if (generation !== playbackGeneration || currentUrl !== (audio.currentSrc || audio.src)) return;
 
-      const diag = await diagnoseStreamError(trackId);
-      if (trackId !== currentTrackId) return;
-
-      if (diag.status === 'forbidden') {
-        els.title.textContent = 'Prévia indisponível';
-        els.artist.textContent = 'Assine o Premium ou alugue para ouvir esta faixa.';
-      } else if (diag.status === 'not_found') {
-        els.title.textContent = 'Áudio não configurado';
-        els.artist.textContent = 'Esta faixa ainda não tem arquivo de áudio.';
-      } else if (diag.status === 'ok') {
-        els.title.textContent = 'Formato não suportado';
-        els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.';
-      } else {
-        els.title.textContent = 'Erro ao carregar áudio';
-        els.artist.textContent = diag.message || 'Tente novamente.';
-      }
-    } else if (error?.code === MediaError.MEDIA_ERR_NETWORK) {
-      els.title.textContent = 'Erro de rede';
-      els.artist.textContent = 'Verifique sua conexão ou tente novamente.';
-    } else if (error?.code === MediaError.MEDIA_ERR_DECODE) {
-      els.title.textContent = 'Arquivo corrompido';
-      els.artist.textContent = 'Não foi possível decodificar o áudio.';
+    if (diag.status === 'forbidden') {
+      els.title.textContent = 'Prévia indisponível';
+      els.artist.textContent = diag.message;
+    } else if (diag.status === 'not_found') {
+      els.title.textContent = 'Áudio não configurado';
+      els.artist.textContent = diag.message;
+    } else if (diag.status === 'ok') {
+      els.title.textContent = 'Formato não suportado';
+      els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.';
     } else {
-      els.title.textContent = 'Erro ao carregar áudio';
-      els.artist.textContent = 'Tente novamente.';
+      els.title.textContent = 'Erro de reprodução';
+      els.artist.textContent = diag.message || 'Tente novamente.';
     }
   });
 
-  // ★ Ended: respeita repeat mode e faz wrap
   audio.addEventListener('ended', () => {
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+
     if (repeatMode === 'one') {
       audio.currentTime = 0;
       audio.play().catch(() => {});
@@ -557,7 +562,7 @@ function bindAudioEvents() {
 
     let nextIndex;
     if (shuffleEnabled) {
-      nextIndex = Math.floor(Math.random() * tracks.length);
+      nextIndex = getRandomTrackIndex(tracks, index);
     } else if (index < tracks.length - 1) {
       nextIndex = index + 1;
     } else if (repeatMode === 'all') {
@@ -571,7 +576,15 @@ function bindAudioEvents() {
   });
 }
 
-// ─── PROGRESS BAR: TECLADO ───
+function getRandomTrackIndex(tracks, currentIndex) {
+  if (!Array.isArray(tracks) || tracks.length <= 1) return currentIndex;
+  let nextIndex;
+  do { nextIndex = Math.floor(Math.random() * tracks.length); } 
+  while (nextIndex === currentIndex);
+  return nextIndex;
+}
+
+// ─── PROGRESS BAR ───
 if (els.progressBar) {
   els.progressBar.addEventListener('keydown', (e) => {
     if (!audio.duration || !Number.isFinite(audio.duration)) return;
@@ -585,24 +598,26 @@ if (els.progressBar) {
       case 'End':        newTime = audio.duration; break;
       default: return;
     }
-
     e.preventDefault();
     audio.currentTime = Math.max(0, Math.min(audio.duration, newTime));
+  });
+
+  els.progressBar.addEventListener('click', (e) => {
+    if (!audio.duration || !Number.isFinite(audio.duration)) return;
+    const rect = els.progressBar.getBoundingClientRect();
+    const pos = (e.clientX - rect.left) / rect.width;
+    audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
   });
 }
 
 // ─── CONTROLES GLOBAIS ───
 window.playerPlay = () => {
-  // iOS: permite tentar play mesmo com src vazio (o streamUrl vem logo em seguida)
   if (!audio.src) {
     if (currentTrackId) initPlayer(currentTrackId, true);
     return;
   }
-  if (audio.paused) {
-    audio.play().catch(err => console.error('[player] play() falhou:', err));
-  } else {
-    audio.pause();
-  }
+  if (audio.paused) audio.play().catch(err => console.error('[player] play() falhou:', err));
+  else audio.pause();
 };
 
 window.playerNext = () => {
@@ -613,26 +628,14 @@ window.playerNext = () => {
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
-  let nextIndex;
-  if (shuffleEnabled) {
-    nextIndex = Math.floor(Math.random() * tracks.length);
-  } else if (index < tracks.length - 1) {
-    nextIndex = index + 1;
-  } else {
-    nextIndex = 0; // wrap
-  }
-
+  const nextIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index < tracks.length - 1 ? index + 1 : 0);
   const next = tracks[nextIndex];
   if (next?.id) window.tocarMusicaDaLista(String(next.id));
 };
 
 window.playerPrev = () => {
   if (!currentTrackMeta?.albumTracks) return;
-
-  if (audio.currentTime > 3) {
-    audio.currentTime = 0;
-    return;
-  }
+  if (audio.currentTime > 3) { audio.currentTime = 0; return; }
 
   const tracks = currentTrackMeta.albumTracks;
   if (!tracks.length) return;
@@ -640,27 +643,11 @@ window.playerPrev = () => {
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
 
-  let prevIndex;
-  if (shuffleEnabled) {
-    prevIndex = Math.floor(Math.random() * tracks.length);
-  } else if (index > 0) {
-    prevIndex = index - 1;
-  } else {
-    prevIndex = tracks.length - 1; // wrap
-  }
-
+  const prevIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index > 0 ? index - 1 : tracks.length - 1);
   const prev = tracks[prevIndex];
   if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
 };
 
-els.progressBar?.addEventListener('click', (e) => {
-  if (!audio.duration || !Number.isFinite(audio.duration)) return;
-  const rect = els.progressBar.getBoundingClientRect();
-  const pos = (e.clientX - rect.left) / rect.width;
-  audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
-});
-
-// ★ tocarMusicaDaLista: encodeURIComponent + history + abas
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   const safeId = String(id);
@@ -669,7 +656,7 @@ window.tocarMusicaDaLista = async (id) => {
   await initPlayer(safeId);
 };
 
-// ─── SHUFFLE ───
+// ─── SHUFFLE & REPEAT ───
 if (els.shuffleBtn) {
   els.shuffleBtn.addEventListener('click', () => {
     shuffleEnabled = !shuffleEnabled;
@@ -678,58 +665,39 @@ if (els.shuffleBtn) {
   });
 }
 
-// ─── REPEAT ───
-// Clique simples: alterna "repetir música atual" (one) / desligado (off)
-// Duplo clique: "repetir tudo" (all)
+function applyRepeatMode(mode) {
+  repeatMode = mode;
+  if (!els.repeatBtn) return;
+  els.repeatBtn.setAttribute('aria-pressed', String(mode !== 'off'));
+  els.repeatBtn.dataset.mode = mode;
+  els.repeatBtn.classList.toggle('active', mode !== 'off');
+  els.repeatBtn.setAttribute('aria-label', mode === 'off' ? 'Repetição desligada' : mode === 'one' ? 'Repetir faixa atual' : 'Repetir álbum');
+}
+
 if (els.repeatBtn) {
-  let repeatClickTimer = null;
-
-  const applyRepeatMode = (mode) => {
-    repeatMode = mode;
-    els.repeatBtn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
-    els.repeatBtn.classList.toggle('active', repeatMode !== 'off');
-    els.repeatBtn.dataset.mode = repeatMode;
-    els.repeatBtn.setAttribute(
-      'aria-label',
-      repeatMode === 'off' ? 'Repetir: desligado'
-        : repeatMode === 'one' ? 'Repetir: música atual'
-        : 'Repetir: tudo'
-    );
-  };
-
   els.repeatBtn.addEventListener('click', () => {
-    if (repeatClickTimer) return; // já é parte de um duplo clique
-    repeatClickTimer = setTimeout(() => {
-      repeatClickTimer = null;
-      applyRepeatMode(repeatMode === 'one' ? 'off' : 'one');
-    }, 250);
-  });
-
-  els.repeatBtn.addEventListener('dblclick', () => {
-    if (repeatClickTimer) {
-      clearTimeout(repeatClickTimer);
-      repeatClickTimer = null;
-    }
-    applyRepeatMode('all');
+    const nextMode = { off: 'one', one: 'all', all: 'off' };
+    applyRepeatMode(nextMode[repeatMode]);
   });
 }
 
-// ─── MODAIS (ALUGUEL / ASSINATURA) ───
+// ─── MODAIS ───
 window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
-
 window.abrirModalAluguel = () => {
   if (!currentTrackId) return;
-  // O modal de aluguel vive na home (index.html).
-  // Redireciona para a home e pede o aluguel via hash.
-  const url = `/?rent=${encodeURIComponent(currentTrackId)}`;
-  window.location.href = url;
-  // TODO: index.html precisa ler ?rent=UUID e abrir o modal de aluguel.
+  window.location.href = `/?rent=${encodeURIComponent(currentTrackId)}`;
 };
 
 // ─── BOOT ───
 window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
-  setupMediaSessionHandlers(); // ★ Inicializa os controles na notificação do celular
+  setupMediaSessionHandlers();
+  
+  if (els.repeatBtn) applyRepeatMode('off');
+  if (els.shuffleBtn) {
+    els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
+    els.shuffleBtn.classList.toggle('active', shuffleEnabled);
+  }
 
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
@@ -743,7 +711,5 @@ window.addEventListener('DOMContentLoaded', async () => {
 window.addEventListener('popstate', () => {
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
-  if (trackId && trackId !== currentTrackId) {
-    initPlayer(trackId);
-  }
+  if (trackId && trackId !== currentTrackId) initPlayer(trackId);
 });
