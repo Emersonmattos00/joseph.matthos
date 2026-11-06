@@ -354,7 +354,49 @@ body.immersive-mode .player-footer-actions {
   pointer-events: auto;
 }
 
-/* Toast / Notificações */
+/* Botão Assinar no cabeçalho da listagem */
+.btn-subscribe-header {
+  padding: 8px 20px;
+  background: var(--gold);
+  color: #000;
+  border: none;
+  border-radius: 50px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.2s, background 0.2s;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.btn-subscribe-header:hover {
+  background: #e5c04a;
+  transform: scale(1.05);
+}
+
+/* Removendo o footer antigo */
+.player-footer-actions {
+  display: none !important;
+}
+
+/* Ajuste no header da listagem para caber o botão */
+.album-tracklist-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+  margin-bottom: 0.5rem;
+  flex-shrink: 0;
+}
+
+.album-tracklist-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Toast */
 #playerToast {
   position: fixed;
   bottom: 100px;
@@ -379,7 +421,7 @@ body.immersive-mode .player-footer-actions {
   transform: translateX(-50%) translateY(0);
 }
 
-/* Hover na lista: ícone de Play aparece no lugar do número */
+/* Hover na lista: ícone de Play no lugar do número */
 .music-item .play-hover {
   display: none;
 }
