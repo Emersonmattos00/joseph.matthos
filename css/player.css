@@ -46,9 +46,12 @@ body.player-page {
   background-image: var(--player-bg, none);
   background-size: cover;
   background-position: center;
-  filter: blur(40px) brightness(0.2);
+  /* ★ CORREÇÃO: Aumenta o brilho, remove o blur excessivo e aplica uma cor de fundo semi-transparente */
+  filter: blur(10px) brightness(0.6) saturate(1.2);
+  opacity: 0.5; /* Deixa a imagem mais visível */
   z-index: 0;
   pointer-events: none;
+  background-color: rgba(11, 10, 12, 0.9); /* Fundo semi-transparente */
 }
 
 /* CONTEÚDO ACIMA DO FUNDO */
