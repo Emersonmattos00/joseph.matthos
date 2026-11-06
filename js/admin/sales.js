@@ -1,13 +1,13 @@
 /* ============================================================
    admin/sales.js — Vendas e assinaturas (via API)
    ------------------------------------------------------------
-   Correções aplicadas (auditoria):
-   - normalizeStatus: ACTIVE → authorized
-   - computeStats e filterByStatus usam normalizeStatus
-   - Dados preservados em erro (não zerar)
-   - normalizeCents aceita amountCents (novo contrato)
-   - Exibição em camelCase (trackTitle, createdAt, expiresAt)
-   - Backend agora retorna subscriptions, rentals, payments, summary
+   - Endpoint consolidado: /api/admin?action=sales
+   - Usa o `summary` que o servidor já calcula
+   - Filtro de período (days=7|30|90|365|all)
+   - Paginação de eventos (pageSize configurável)
+   - Filtro de status (todas | ativas | pendentes | canceladas)
+   - try/catch com estado de erro visível
+   - Aviso quando a lista pode estar truncada
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -24,7 +24,7 @@ const state = {
   payments: [],
   summary: null,
   period: 'all',
-  statusFilter: 'all',
+  statusFilter: 'all',       // all | authorized | pending | canceled
   pageSubs: 1,
   pageRentals: 1,
   pageSize: DEFAULT_PAGE_SIZE,
@@ -32,23 +32,6 @@ const state = {
   error: null,
   fetchedAt: 0
 };
-
-// ─────────────────────────────────────────────────────────────
-// Normalização de status (ACTIVE → authorized)
-// ─────────────────────────────────────────────────────────────
-function normalizeStatus(status) {
-  const value = String(status || '').trim().toLowerCase();
-  const aliases = {
-    active: 'authorized',
-    authorized: 'authorized',
-    cancelled: 'canceled',
-    canceled: 'canceled',
-    pending: 'pending',
-    paused: 'paused',
-    trialing: 'trialing'
-  };
-  return aliases[value] || value;
-}
 
 // ─────────────────────────────────────────────────────────────
 // Entrada
@@ -68,7 +51,7 @@ export async function renderSales({ force = false, days = null } = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch
+// Fetch — agora com query param correto
 // ─────────────────────────────────────────────────────────────
 async function fetchSales(days) {
   state.loading = true;
@@ -91,6 +74,7 @@ async function fetchSales(days) {
     state.period = result?.period || (days || 'all');
     state.fetchedAt = Date.now();
 
+    // Reseta paginação ao trocar período
     state.pageSubs = 1;
     state.pageRentals = 1;
   } catch (err) {
@@ -98,7 +82,10 @@ async function fetchSales(days) {
       throw err;
     }
     state.error = err?.message || 'Falha ao carregar vendas.';
-    // ★ Preserva dados anteriores em caso de erro de rede/5xx
+    state.subscriptions = [];
+    state.rentals = [];
+    state.payments = [];
+    state.summary = null;
   } finally {
     state.loading = false;
   }
@@ -136,7 +123,7 @@ function computeStats() {
   const totalSubs = s?.subscriptions?.total ?? state.subscriptions.length;
   const activeSubs =
     s?.subscriptions?.active ??
-    state.subscriptions.filter(item => normalizeStatus(item.status) === 'authorized').length;
+    state.subscriptions.filter((x) => x.status === 'authorized').length;
 
   const totalRentals = s?.rentals?.total ?? state.rentals.length;
   const rentalRevenueCents =
@@ -159,7 +146,6 @@ function computeStats() {
 }
 
 function normalizeCents(r) {
-  if (Number.isFinite(r?.amountCents)) return r.amountCents;
   if (Number.isFinite(r?.amount_cents)) return r.amount_cents;
   if (Number.isFinite(r?.amount)) return Math.round(r.amount * 100);
   return 0;
@@ -209,7 +195,7 @@ function renderTable(html) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Construção das tabelas
+// Construção das tabelas com filtros + paginação
 // ─────────────────────────────────────────────────────────────
 function buildTablesHtml() {
   const { subscriptions, rentals } = state;
@@ -227,8 +213,9 @@ function buildTablesHtml() {
        </p>`
     : '';
 
+  // Filtro de status aplicado em assinaturas
   const filteredSubs = filterByStatus(subscriptions);
-  const filteredRentals = rentals;
+  const filteredRentals = rentals; // aluguéis não têm status, mantemos todos
 
   return `
     ${warn}
@@ -240,11 +227,11 @@ function buildTablesHtml() {
 
 function filterByStatus(arr) {
   if (state.statusFilter === 'all') return arr;
-  return arr.filter(item => normalizeStatus(item.status) === state.statusFilter);
+  return arr.filter((x) => String(x.status || '').toLowerCase() === state.statusFilter);
 }
 
 // ─────────────────────────────────────────────────────────────
-// Toolbar
+// Toolbar de vendas
 // ─────────────────────────────────────────────────────────────
 function renderSalesToolbar(subsCount, rentalsCount) {
   const sf = state.statusFilter;
@@ -280,7 +267,7 @@ function renderSalesToolbar(subsCount, rentalsCount) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Assinaturas
+// Seção: Assinaturas
 // ─────────────────────────────────────────────────────────────
 function renderSubsSection(subs) {
   if (!subs.length) return '';
@@ -300,10 +287,10 @@ function renderSubsSection(subs) {
       <tbody>
         ${items.map((s) => `
           <tr>
-            <td>${formatDate(s.createdAt)}</td>
+            <td>${formatDate(s.created_at || s.createdAt)}</td>
             <td>${esc(s.plan || '—')}</td>
             <td>${badgeStatus(s.status)}</td>
-            <td>${formatDate(s.currentPeriodEnd)}</td>
+            <td>${formatDate(s.current_period_end)}</td>
           </tr>`).join('')}
       </tbody>
     </table>
@@ -312,7 +299,7 @@ function renderSubsSection(subs) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Aluguéis
+// Seção: Aluguéis
 // ─────────────────────────────────────────────────────────────
 function renderRentalsSection(rentals) {
   if (!rentals.length) return '';
@@ -327,15 +314,15 @@ function renderRentalsSection(rentals) {
     </h3>
     <table class="admin-table">
       <thead><tr>
-        <th>Data</th><th>Faixa</th><th>Valor</th><th>Expira em</th>
+        <th>Data</th><th>Track</th><th>Valor</th><th>Expira em</th>
       </tr></thead>
       <tbody>
         ${items.map((r) => `
           <tr>
-            <td>${formatDate(r.createdAt)}</td>
-            <td>${esc(r.trackTitle || '—')}</td>
+            <td>${formatDate(r.created_at || r.createdAt)}</td>
+            <td>${esc(r.track_id || '—')}</td>
             <td>${formatCents(normalizeCents(r))}</td>
-            <td>${formatDate(r.expiresAt)}</td>
+            <td>${formatDate(r.expires_at)}</td>
           </tr>`).join('')}
       </tbody>
     </table>
@@ -344,7 +331,7 @@ function renderRentalsSection(rentals) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Paginação
+// Paginação interna
 // ─────────────────────────────────────────────────────────────
 function paginate(arr, page, size) {
   const total = arr.length;
@@ -370,6 +357,7 @@ function paginationHtml(totalPages, currentPage, total, kind) {
   const prev = currentPage <= 1 ? 'disabled' : '';
   const next = currentPage >= totalPages ? 'disabled' : '';
 
+  // Janela de 5 páginas
   const windowSize = 5;
   let start = Math.max(1, currentPage - Math.floor(windowSize / 2));
   let end = Math.min(totalPages, start + windowSize - 1);
@@ -396,7 +384,7 @@ function paginationHtml(totalPages, currentPage, total, kind) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Binds
+// Binds pós-render
 // ─────────────────────────────────────────────────────────────
 document.addEventListener('click', (e) => {
   const pageBtn = e.target.closest('[data-sales-page]');
@@ -417,9 +405,14 @@ document.addEventListener('click', (e) => {
     else state.pageRentals = next;
 
     paint();
+    return;
   }
+
+  const periodEl = e.target.closest('#salesPeriod');
+  // change handler (ver bindSalesToolbar abaixo)
 });
 
+// Binds dos selects (toolbar)
 document.addEventListener('change', (e) => {
   if (e.target.id === 'salesPeriod') {
     const v = e.target.value;
@@ -437,6 +430,7 @@ document.addEventListener('change', (e) => {
     state.pageSubs = 1;
     state.pageRentals = 1;
     paint();
+    return;
   }
 });
 
@@ -444,9 +438,9 @@ document.addEventListener('change', (e) => {
 // Badge de status
 // ─────────────────────────────────────────────────────────────
 function badgeStatus(status) {
-  const s = normalizeStatus(status);
+  const s = String(status || '').toLowerCase();
 
-  if (s === 'authorized' || s === 'trialing') {
+  if (s === 'authorized' || s === 'active' || s === 'trialing') {
     return `<span class="badge-mini badge-premium">${esc(status)}</span>`;
   }
   if (s === 'pending') {
@@ -455,7 +449,7 @@ function badgeStatus(status) {
   if (s === 'paused') {
     return `<span class="badge-mini badge-paused">${esc(status)}</span>`;
   }
-  if (s === 'canceled') {
+  if (s === 'canceled' || s === 'cancelled') {
     return `<span class="badge-mini badge-canceled">${esc(status)}</span>`;
   }
   return `<span class="badge-mini">${esc(status || '—')}</span>`;
