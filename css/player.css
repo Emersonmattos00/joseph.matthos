@@ -229,6 +229,20 @@ body.player-page {
 .action-icon { background: none; border: none; color: inherit; cursor: pointer; padding: 0; display: flex; }
 .music-item-duration { font-size: 0.8rem; min-width: 30px; text-align: right; }
 
+.action-icon {
+  align-items: center;
+  justify-content: center;
+  transition: color 0.2s;
+}
+
+.action-icon:hover {
+  color: #fff;
+}
+
+.music-item-duration {
+  color: var(--text-dim);
+}
+
 /* ══════════════ ABA 3: LETRA ══════════════ */
 #tab-lyrics {
   padding: 1rem 1.5rem 2rem;
@@ -339,3 +353,4 @@ body.immersive-mode .player-footer-actions {
 .player-cover-wrap, .album-cover {
   pointer-events: auto;
 }
+

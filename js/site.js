@@ -1,7 +1,7 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v25 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v26 FINAL DEFINITIVO)
    ------------------------------------------------------------
-   - CORREÇÃO: renderiza 'Mais Ouvidos' e lê tracks nos álbuns
+   - CORREÇÃO: redireciona o clique no álbum direto para o player
    - Mantém TODAS as funcionalidades originais (player, modais)
    ============================================================ */
 
@@ -9,7 +9,7 @@ import {
   DEFAULT_CONTENT,
   SOCIAL_LABELS,
   RENTAL_PLANS_FALLBACK,
-  SUBSCRIPTION_PLAN_METADATA // Importado, caso precise validar IDs no futuro
+  SUBSCRIPTION_PLAN_METADATA
 } from './config.js';
 
 import {
@@ -676,7 +676,7 @@ function initCarousels() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SPOTIFY SECTIONS (CORRIGIDO)
+// SPOTIFY SECTIONS
 // ─────────────────────────────────────────────────────────────
 function renderSpotifySections() {
   const albums = SITE.albums || [];
@@ -699,13 +699,19 @@ function renderSpotifySections() {
 
       lancamentosEl.querySelectorAll('[data-spotify-card]').forEach(card => {
         card.addEventListener('click', () => {
-          openAlbumModal(card.dataset.albumId);
+          const albumId = card.dataset.albumId;
+          const album = findAlbum(albumId);
+          if (album) {
+            const tracks = resolveAlbumTracks(album);
+            if (tracks.length > 0 && tracks[0].id) {
+              window.location.href = `/player.html?id=${encodeURIComponent(tracks[0].id)}`;
+            }
+          }
         });
       });
     }
   }
 
-  // ✅ CORREÇÃO: Preencher 'Mais Ouvidos' com os primeiros 8 álbuns
   const albunsRecentesEl = document.getElementById('gridAlbunsRecentes');
   if (albunsRecentesEl) {
     const sortedAlbums = [...albums].slice(0, 8);
@@ -724,7 +730,14 @@ function renderSpotifySections() {
 
       albunsRecentesEl.querySelectorAll('[data-spotify-card]').forEach(card => {
         card.addEventListener('click', () => {
-          openAlbumModal(card.dataset.albumId);
+          const albumId = card.dataset.albumId;
+          const album = findAlbum(albumId);
+          if (album) {
+            const tracks = resolveAlbumTracks(album);
+            if (tracks.length > 0 && tracks[0].id) {
+              window.location.href = `/player.html?id=${encodeURIComponent(tracks[0].id)}`;
+            }
+          }
         });
       });
     }
@@ -780,7 +793,13 @@ function bindSpotifyCards(container) {
       if (e.target.closest('[data-action="share-track"]')) return;
       if (e.target.closest('[data-action="open-rent"]')) return;
       e.preventDefault(); e.stopPropagation();
-      openAlbumModal(albumId);
+      const album = findAlbum(albumId);
+      if (album) {
+        const tracks = resolveAlbumTracks(album);
+        if (tracks.length > 0 && tracks[0].id) {
+          window.location.href = `/player.html?id=${encodeURIComponent(tracks[0].id)}`;
+        }
+      }
     });
   });
 }
@@ -915,48 +934,15 @@ function resolvePlaylistTracks(playlist) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM (CORRIGIDO)
+// MODAL DE ÁLBUM (AGORA REDIRECIONA PARA O PLAYER)
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
-  const existing = document.getElementById('albumModal');
-  if (existing && existing.classList.contains('open')) existing.classList.remove('open');
   const album = findAlbum(albumId);
   if (!album) { console.warn('[album] não encontrado:', albumId); return; }
   const tracks = resolveAlbumTracks(album);
-  let modal = document.getElementById('albumModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'albumModal';
-    modal.className = 'modal-overlay';
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
-    modal.innerHTML = `<div class="modal modal-wide album-detail"><button class="modal-close" data-close aria-label="Fechar">×</button><div class="album-detail__header"><div class="album-detail__cover" id="albumModalCover"></div><div class="album-detail__info"><div class="album-detail__type" id="albumModalType"></div><h2 class="album-detail__title" id="albumModalTitle"></h2><div class="album-detail__artist">Joseph Matthos</div><div class="album-detail__meta" id="albumModalMeta"></div><button class="album-detail__play" id="albumModalPlay" type="button" aria-label="Tocar álbum"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>Tocar</span></button></div></div><div class="album-detail__tracks" id="albumModalTracks"></div></div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', (e) => { if (e.target === modal || e.target.closest('[data-close]')) closeAlbumModal(); });
+  if (tracks.length > 0 && tracks[0].id) {
+    window.location.href = `/player.html?id=${encodeURIComponent(tracks[0].id)}`;
   }
-  const coverEl = modal.querySelector('#albumModalCover');
-  const coverImg = album.coverImage || album.coverUrl;
-  if (coverImg) { coverEl.style.backgroundImage = `url('${safeMediaUrl(coverImg)}')`; coverEl.textContent = ''; }
-  else { coverEl.style.backgroundImage = ''; coverEl.textContent = album.coverInitials || album.cover || '♪'; }
-  modal.querySelector('#albumModalType').textContent = (album.type || 'Álbum').toString().toUpperCase();
-  modal.querySelector('#albumModalTitle').textContent = album.title || '—';
-  const metaParts = [];
-  if (album.year) metaParts.push(album.year);
-  metaParts.push(`${tracks.length} faixa${tracks.length === 1 ? '' : 's'}`);
-  modal.querySelector('#albumModalMeta').textContent = metaParts.join(' • ');
-  const tracksEl = modal.querySelector('#albumModalTracks');
-  if (!tracks.length) tracksEl.innerHTML = '<p class="album-empty">Nenhuma faixa cadastrada neste álbum.</p>';
-  else tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
-  const playBtn = modal.querySelector('#albumModalPlay');
-  if (playBtn && !playBtn.dataset.bound) {
-    playBtn.dataset.bound = '1';
-    playBtn.addEventListener('click', () => {
-      const first = tracks[0]; if (!first) return;
-      closeAlbumModal(); openExpandedPlayer(album.id, first.id);
-    });
-  }
-  requestAnimationFrame(() => modal.classList.add('open'));
-  document.body.classList.add('modal-open');
 }
 
 function closeAlbumModal() {
@@ -966,6 +952,9 @@ function closeAlbumModal() {
   document.body.classList.remove('modal-open');
 }
 
+// ─────────────────────────────────────────────────────────────
+// MENU DE MAIS OPÇÕES (ÍCONES DA LISTA)
+// ─────────────────────────────────────────────────────────────
 function openTrackMoreMenu(albumId, trackIndex, anchorEl) {
   document.getElementById('trackMoreMenu')?.remove();
   const album = findAlbum(albumId);
@@ -991,12 +980,6 @@ function openTrackMoreMenu(albumId, trackIndex, anchorEl) {
       const act = btn.dataset.menuAction;
       if (act === 'like') {
         toggleLike(albumId, trackIndex, null);
-        const modal = document.getElementById('albumModal');
-        if (modal) {
-          const tracks = resolveAlbumTracks(album);
-          const tracksEl = modal.querySelector('#albumModalTracks');
-          if (tracksEl) tracksEl.innerHTML = tracks.map((t, i) => renderTrackCard(album, t, i + 1)).join('');
-        }
         document.querySelectorAll(`[data-action="like-track"][data-album="${albumId}"][data-track-index="${trackIndex}"]`).forEach((el) => {
           const liked = localStorage.getItem(`jm_like_${albumId}_${trackIndex}`) === '1';
           el.classList.toggle('liked', liked);
