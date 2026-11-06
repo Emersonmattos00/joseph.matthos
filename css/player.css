@@ -38,7 +38,7 @@ body.player-page {
   box-sizing: border-box;
 }
 
-/* FUNDO MARCA D'ÁGUA */
+/* FUNDO MARCA D'ÁGUA — CAPA NÍTIDA */
 .music-player--fullscreen::before {
   content: '';
   position: absolute;
@@ -46,9 +46,8 @@ body.player-page {
   background-image: var(--player-bg, none);
   background-size: cover;
   background-position: center;
-  /* ★ CORREÇÃO: Aumenta o brilho, remove o blur excessivo e aplica uma cor de fundo semi-transparente */
-  filter: blur(10px) brightness(0.6) saturate(1.2);
-  opacity: 0.5; /* Deixa a imagem mais visível */
+  filter: brightness(0.4) saturate(1.2); /* Removido o blur */
+  opacity: 0.5; /* Controla a transparência */
   z-index: 0;
   pointer-events: none;
   background-color: rgba(11, 10, 12, 0.9); /* Fundo semi-transparente */
