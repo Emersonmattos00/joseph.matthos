@@ -1,4 +1,4 @@
-// js/player.js — versão final auditada (com Modo Rádio)
+// js/player.js — versão final auditada (com Modo Rádio e ícones)
 
 'use strict';
 
@@ -9,6 +9,7 @@
    - onerror: distingue 403 de erro real via format=json
    - Ended: Respeita o modo rádio, repeat e shuffle
    - Media Session: comandos play/pause corretos e setPositionState
+   - Ícones de ação na listagem de músicas (curtir, compartilhar, alugar, mais opções)
    ============================================================ */
 
 function formatTime(secs) {
@@ -290,7 +291,7 @@ function syncLyrics() {
   }
 }
 
-// ─── LISTA DE MÚSICAS ───
+// ─── LISTA DE MÚSICAS (COM ÍCONES) ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
   meta.albumTracks.forEach((track, index) => {
@@ -314,14 +315,64 @@ function renderPlayerTrackList(meta, currentId) {
     artist.textContent = meta.artist || 'Joseph Matthos';
 
     info.append(title, artist);
+
     const actions = document.createElement('div');
     actions.className = 'music-item-actions';
 
+    // Curtir
+    const likeBtn = document.createElement('button');
+    likeBtn.className = 'action-icon';
+    const isLiked = localStorage.getItem(`jm_like_${meta.id}_${index}`) === '1';
+    likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    likeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = `jm_like_${meta.id}_${index}`;
+      const liked = localStorage.getItem(key) === '1';
+      localStorage.setItem(key, liked ? '0' : '1');
+      likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${!liked ? '#1DB954' : 'none'}" stroke="${!liked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    });
+    actions.appendChild(likeBtn);
+
+    // Compartilhar
+    const shareBtn = document.createElement('button');
+    shareBtn.className = 'action-icon';
+    shareBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
+    shareBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+      navigator.clipboard.writeText(url);
+      alert('Link copiado!');
+    });
+    actions.appendChild(shareBtn);
+
+    // Alugar
+    if (track.locked) {
+      const rentBtn = document.createElement('button');
+      rentBtn.className = 'action-icon';
+      rentBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>';
+      rentBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
+      });
+      actions.appendChild(rentBtn);
+    }
+
+    // Duração
     const duration = document.createElement('span');
     duration.className = 'music-item-duration';
     duration.textContent = track.locked ? '🔒' : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
+    actions.appendChild(duration);
 
-    actions.append(duration);
+    // Mais opções
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'action-icon';
+    moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      alert('Mais opções em breve');
+    });
+    actions.appendChild(moreBtn);
+
     item.append(number, info, actions);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
     els.musicList.appendChild(item);
