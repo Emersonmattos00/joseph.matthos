@@ -1,4 +1,4 @@
-// js/player.js — versão final auditada (com Modo Rádio, ícones e hover)
+// js/player.js — versão final auditada (com Modo Rádio, ícones e pré-carregamento)
 
 'use strict';
 
@@ -13,6 +13,7 @@
    - Hover: ícone de Play aparece no lugar do número ao passar o mouse
    - Toast elegante para feedback visual
    - Compartilhamento nativo (navigator.share)
+   - Pré-carregamento de imagens para eliminar delay na exibição
    ============================================================ */
 
 function formatTime(secs) {
@@ -45,6 +46,26 @@ function showToast(message) {
     toast.classList.remove('visible');
     setTimeout(() => toast.remove(), 300);
   }, 2500);
+}
+
+// ─── PRÉ-CARREGAMENTO DE IMAGENS ───
+const imageCache = new Map();
+
+function preloadImage(url) {
+  if (!url || imageCache.has(url)) return;
+  const img = new Image();
+  img.src = url;
+  imageCache.set(url, img);
+}
+
+function preloadAlbumCover(meta) {
+  if (!meta || !meta.coverUrl) return;
+  preloadImage(meta.coverUrl);
+  if (Array.isArray(meta.albumTracks)) {
+    meta.albumTracks.forEach(track => {
+      if (track.coverUrl) preloadImage(track.coverUrl);
+    });
+  }
 }
 
 const els = {
@@ -340,7 +361,6 @@ function renderPlayerTrackList(meta, currentId) {
     const actions = document.createElement('div');
     actions.className = 'music-item-actions';
 
-    // Função interna para atualizar o ícone de curtir
     const atualizarIconeCurtir = (btn) => {
       const key = `jm_like_${meta.id}_${index}`;
       const isLiked = localStorage.getItem(key) === '1';
@@ -523,6 +543,9 @@ async function initPlayer(trackId, autoplay = true) {
     const meta = await fetchMetadata(trackId, playerAbortController.signal);
     if (requestId !== playerRequestId) return;
     currentTrackMeta = meta;
+
+    // Pré-carrega a imagem antes de exibir
+    preloadAlbumCover(meta);
 
     els.title.textContent = meta.title;
     els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
@@ -779,6 +802,13 @@ window.tocarMusicaDaLista = async (id) => {
   const safeId = String(id);
   history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}${isRadioMode ? '&radio=true' : ''}`);
   switchTab('player');
+  
+  // Pré-carrega a imagem se já tivermos os metadados
+  if (currentTrackMeta && currentTrackMeta.albumTracks) {
+    const track = currentTrackMeta.albumTracks.find(t => String(t.id) === safeId);
+    if (track && track.coverUrl) preloadImage(track.coverUrl);
+  }
+  
   await initPlayer(safeId);
 };
 
