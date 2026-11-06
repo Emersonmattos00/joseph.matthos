@@ -127,4 +127,4 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: 'Erro interno no servidor' });
     }
   }
-};
+};// redeploy Thu Nov  5 18:32:20 UTC 2026
