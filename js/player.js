@@ -10,6 +10,7 @@
    - Ended: Respeita o modo rádio, repeat e shuffle
    - Media Session: comandos play/pause corretos e setPositionState
    - Ícones de ação na listagem de músicas (curtir, compartilhar, alugar, mais opções)
+   - Hover: ícone de Play aparece no lugar do número ao passar o mouse
    ============================================================ */
 
 function formatTime(secs) {
@@ -291,7 +292,7 @@ function syncLyrics() {
   }
 }
 
-// ─── LISTA DE MÚSICAS (COM ÍCONES E MENU DE OPÇÕES) ───
+// ─── LISTA DE MÚSICAS (COM ÍCONES E HOVER) ───
 function renderPlayerTrackList(meta, currentId) {
   els.musicList.replaceChildren();
   meta.albumTracks.forEach((track, index) => {
@@ -301,7 +302,7 @@ function renderPlayerTrackList(meta, currentId) {
 
     const number = document.createElement('div');
     number.className = 'music-item-number';
-    number.textContent = String(index + 1);
+    number.innerHTML = `<span class="num-text">${index + 1}</span><span class="play-hover">▶</span>`;
 
     const info = document.createElement('div');
     info.className = 'music-item-info';
@@ -337,25 +338,36 @@ function renderPlayerTrackList(meta, currentId) {
     const shareBtn = document.createElement('button');
     shareBtn.className = 'action-icon';
     shareBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
-    shareBtn.addEventListener('click', (e) => {
+    shareBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-      navigator.clipboard.writeText(url);
-      alert('Link copiado!');
+      const shareData = {
+        title: `${track.title} — Joseph Matthos`,
+        text: `Ouça "${track.title}" de Joseph Matthos`,
+        url
+      };
+      if (navigator.share) {
+        try { await navigator.share(shareData); return; } catch {}
+      }
+      try {
+        await navigator.clipboard.writeText(url);
+        alert('Link copiado!');
+      } catch {
+        alert('Não foi possível compartilhar.');
+      }
     });
     actions.appendChild(shareBtn);
 
-    // Alugar (se bloqueado)
-    if (track.locked) {
-      const rentBtn = document.createElement('button');
-      rentBtn.className = 'action-icon';
-      rentBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>';
-      rentBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
-      });
-      actions.appendChild(rentBtn);
-    }
+    // Alugar (sempre visível, a menos que o usuário seja Premium)
+    const rentBtn = document.createElement('button');
+    rentBtn.className = 'action-icon';
+    rentBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>';
+    rentBtn.title = 'Alugar';
+    rentBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
+    });
+    actions.appendChild(rentBtn);
 
     // Duração
     const duration = document.createElement('span');
@@ -370,7 +382,6 @@ function renderPlayerTrackList(meta, currentId) {
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       
-      // Remove menu anterior
       document.getElementById('playerTrackMenu')?.remove();
       
       const menu = document.createElement('div');
@@ -390,12 +401,10 @@ function renderPlayerTrackList(meta, currentId) {
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
           <span>Compartilhar</span>
         </button>
-        ${track.locked ? `
         <button type="button" data-menu-action="rent">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2zm-4.42 4.8L13 14.62V17h-2v-6h2v2.38l2.58-2.18 1.42 1.4L14.42 15l2.58 2.4-1.42 1.4z"/></svg>
           <span>Alugar</span>
         </button>
-        ` : ''}
         <button type="button" data-menu-action="copy-link">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
           <span>Copiar link</span>
@@ -426,8 +435,16 @@ function renderPlayerTrackList(meta, currentId) {
             likeBtn.click();
           } else if (act === 'share') {
             const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-            await navigator.clipboard.writeText(url);
-            alert('Link copiado!');
+            const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}" de Joseph Matthos`, url };
+            if (navigator.share) {
+              try { await navigator.share(shareData); return; } catch {}
+            }
+            try {
+              await navigator.clipboard.writeText(url);
+              alert('Link copiado!');
+            } catch {
+              alert('Não foi possível compartilhar.');
+            }
           } else if (act === 'rent') {
             window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
           } else if (act === 'copy-link') {

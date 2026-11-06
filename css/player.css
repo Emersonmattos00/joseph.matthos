@@ -354,3 +354,15 @@ body.immersive-mode .player-footer-actions {
   pointer-events: auto;
 }
 
+.music-item .play-hover {
+  display: none;
+}
+
+.music-item:hover .num-text {
+  display: none;
+}
+
+.music-item:hover .play-hover {
+  display: inline;
+  color: #fff;
+}
