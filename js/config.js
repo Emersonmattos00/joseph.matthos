@@ -13,7 +13,7 @@
      - títulos de seção
      - IDs de planos (mas NÃO preços)
      - redes sociais, aparência
-     - metadata de exibição dos planos de aluguel (label, days, popular)
+     - metadata de exibição dos planos de aluguel (label, days, hours, popular)
 
    🎯 Este arquivo é apenas FALLBACK:
      - Quando /api/public falha, o site usa o conteúdo daqui.
@@ -35,6 +35,25 @@
 
 // Bump quando a estrutura mudar de forma incompatível
 export const CONTENT_SCHEMA_VERSION = 3;
+
+// ─────────────────────────────────────────────────────────────
+// Planos de assinatura — metadados de apresentação.
+// Identificadores precisam corresponder aos IDs canônicos do backend.
+// ─────────────────────────────────────────────────────────────
+export const SUBSCRIPTION_PLAN_METADATA = [
+  {
+    id: 'free',
+    interval: null
+  },
+  {
+    id: 'premium',
+    interval: 'month'
+  },
+  {
+    id: 'anual',
+    interval: 'year'
+  }
+];
 
 // ─────────────────────────────────────────────────────────────
 // Conteúdo padrão
@@ -100,8 +119,6 @@ export const DEFAULT_CONTENT = {
   discografia: {
     title: "Disco<span class=\"gold\">grafia</span>",
     subtitle: "Explore álbuns, EPs e singles. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads."
-    // ⚠️ `albums` foi movido para o Supabase (tabelas `albums` + `tracks`).
-    //    Vem via /api/public → SITE.albums
   },
 
   playlists: [
@@ -110,7 +127,6 @@ export const DEFAULT_CONTENT = {
       title: "O começo",
       description: "Uma seleção para entrar no universo de Joseph.",
       cover: "JM",
-      // ⚠️ IDs são resolvidos via /api/public (tracks.id).
       tracks: []
     }
   ],
@@ -126,7 +142,6 @@ export const DEFAULT_CONTENT = {
   planos: {
     title: "Escolha seu <span class=\"gold\">plano</span>",
     subtitle: "Apoie a arte independente e tenha acesso ilimitado a toda a obra de Joseph Matthos.",
-    // ⚠️ SEM `price` — preço sempre de /api/public (envs MP_PREMIUM_*).
     plans: [
       {
         id: "free",
@@ -224,12 +239,12 @@ export const DEFAULT_CONTENT = {
 // falha ou ainda não carregou. NUNCA exibe `price` daqui.
 // ─────────────────────────────────────────────────────────────
 export const RENTAL_PLANS_FALLBACK = [
-  { id: '24h', label: '24 horas', days: 1,  popular: false },
-  { id: '48h', label: '48 horas', days: 2,  popular: true  },
-  { id: '3d',  label: '3 dias',   days: 3,  popular: false },
-  { id: '5d',  label: '5 dias',   days: 5,  popular: false },
-  { id: '10d', label: '10 dias',  days: 10, popular: false },
-  { id: '15d', label: '15 dias',  days: 15, popular: false }
+  { id: '24h', label: '24 horas', days: 1, hours: 24, popular: false },
+  { id: '48h', label: '48 horas', days: 2, hours: 48, popular: true  },
+  { id: '3d',  label: '3 dias',   days: 3, hours: 72, popular: false },
+  { id: '5d',  label: '5 dias',   days: 5, hours: 120, popular: false },
+  { id: '10d', label: '10 dias',  days: 10, hours: 240, popular: false },
+  { id: '15d', label: '15 dias',  days: 15, hours: 360, popular: false }
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -284,6 +299,7 @@ deepFreeze(DEFAULT_CONTENT);
 deepFreeze(RENTAL_PLANS_FALLBACK);
 deepFreeze(SOCIAL_LABELS);
 deepFreeze(NETWORKS_ORDER);
+deepFreeze(SUBSCRIPTION_PLAN_METADATA);
 
 // ─────────────────────────────────────────────────────────────
 // Compatibilidade com código legado
@@ -292,6 +308,7 @@ if (typeof window !== 'undefined') {
   window.DEFAULT_CONTENT = DEFAULT_CONTENT;
   window.RENTAL_PLANS = RENTAL_PLANS_FALLBACK;      // alias legado
   window.RENTAL_PLANS_FALLBACK = RENTAL_PLANS_FALLBACK;
+  window.SUBSCRIPTION_PLAN_METADATA = SUBSCRIPTION_PLAN_METADATA;
   window.SOCIAL_LABELS = SOCIAL_LABELS;
   window.NETWORKS_ORDER = NETWORKS_ORDER;
   window.PRICE_FORMATTER = PRICE_FORMATTER;

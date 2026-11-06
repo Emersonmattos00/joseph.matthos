@@ -1,14 +1,10 @@
 /* ============================================================
-   js/admin/editors/albums.js — v7 (auditado)
+   js/admin/editors/albums.js — v6 (drag & drop + downloads)
    ------------------------------------------------------------
-   - IDs UUID preservados como string (nunca Number())
-   - Reordenação de faixas consistente (mapa por string)
-   - Normalização camelCase/snake_case na entrada de dados
-   - Preserva dados em falha de carregamento (não apaga)
-   - requestId evita corrida entre requisições
-   - Botão de ajuda das letras registrado após abrir o modal
-   - Download de faixa/álbum com filename do backend
-   - Drag & drop mantido
+   - Listeners diretos em cada botão (sem delegação)
+   - Drag & drop para reordenar faixas dentro de um álbum
+   - Backend: PATCH /api/admin?action=track-order
+   - Download de faixa individual e álbum completo (admin)
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -22,55 +18,11 @@ const State = {
   tracks: new Map(),
   expandedAlbumIds: new Set(),
   loading: false,
-  error: null,
-  // Controle de concorrência por tipo de requisição.
-  albumsRequestId: 0,
-  trackRequestIds: new Map()
+  error: null
 };
 
 // ⚡ Estado do drag & drop
 let _dragState = null;
-
-// ─────────────────────────────────────────────────────────────
-// Normalização camelCase ↔ snake_case
-// ─────────────────────────────────────────────────────────────
-function normalizeAlbum(album) {
-  return {
-    ...album,
-    id: String(album.id || ''),
-    cover_image: album.cover_image ?? album.coverUrl ?? '',
-    cover_initials: album.cover_initials ?? album.coverInitials ?? '',
-    order_index: album.order_index ?? album.orderIndex ?? album.sortOrder ?? 0,
-    artist: album.artist || '',
-    published: Boolean(album.published)
-  };
-}
-
-function normalizeTrack(track) {
-  const durationSeconds = Number(
-    track.durationSeconds ?? track.duration_seconds ?? 0
-  );
-
-  return {
-    ...track,
-    id: String(track.id || ''),
-    album_id: String(track.album_id ?? track.albumId ?? ''),
-    track_index: track.track_index ?? track.trackNumber ?? 0,
-    preview_path: track.preview_path ?? track.previewPath ?? '',
-    full_path: track.full_path ?? track.fullPath ?? '',
-    duration: track.duration ?? formatTrackDuration(durationSeconds),
-    published: track.published ?? track.status === 'PUBLISHED'
-  };
-}
-
-function formatTrackDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '';
-
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-
-  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
-}
 
 // ─────────────────────────────────────────────────────────────
 // parseLyricsInput
@@ -155,61 +107,34 @@ async function loadAlbums() {
   const body = document.querySelector('[data-albums-body]');
   if (!body) return;
 
-  const requestId = ++State.albumsRequestId;
-
   State.loading = true;
   State.error = null;
   paintBody(body);
 
   try {
     const res = await apiFetch('albums', { method: 'GET' });
-
-    if (requestId !== State.albumsRequestId) return;
-
-    State.albums = Array.isArray(res?.albums)
-      ? res.albums.map(normalizeAlbum)
-      : [];
+    State.albums = Array.isArray(res?.albums) ? res.albums : [];
 
     await Promise.all(
       Array.from(State.expandedAlbumIds).map((id) => loadTracksForAlbum(id))
     );
   } catch (err) {
-    if (requestId !== State.albumsRequestId) return;
     if (err?.status === 401 || err?.status === 403) throw err;
-
-    // Preserva State.albums anterior — não apaga em erro.
     State.error = err?.message || 'Falha ao carregar álbuns.';
+    State.albums = [];
   } finally {
-    if (requestId === State.albumsRequestId) {
-      State.loading = false;
-      paintBody(body);
-    }
+    State.loading = false;
+    paintBody(body);
   }
 }
 
 async function loadTracksForAlbum(albumId) {
-  const requestId = (State.trackRequestIds.get(albumId) || 0) + 1;
-  State.trackRequestIds.set(albumId, requestId);
-
   try {
     const res = await apiFetch('tracks', { method: 'GET', query: { albumId } });
-
-    if (State.trackRequestIds.get(albumId) !== requestId) return;
-
-    State.tracks.set(
-      albumId,
-      Array.isArray(res?.tracks) ? res.tracks.map(normalizeTrack) : []
-    );
+    State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
   } catch (err) {
-    if (State.trackRequestIds.get(albumId) !== requestId) return;
-    if (err?.status === 401 || err?.status === 403) throw err;
-
     console.warn(`[albums] falha faixas ${albumId}:`, err);
-
-    // Não apaga a lista anterior — mantém o que já estava na tela.
-    if (!State.tracks.has(albumId)) {
-      State.tracks.set(albumId, []);
-    }
+    State.tracks.set(albumId, []);
   }
 }
 
@@ -267,7 +192,7 @@ function bindAlbumButtons(scope) {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const albumId = String(btn.dataset.albumToggle || '');
+      const albumId = btn.dataset.albumToggle;
 
       if (State.expandedAlbumIds.has(albumId)) {
         State.expandedAlbumIds.delete(albumId);
@@ -285,8 +210,8 @@ function bindAlbumButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const albumId = String(btn.dataset.albumEdit || '');
-      const album = State.albums.find((a) => String(a.id) === albumId);
+      const albumId = btn.dataset.albumEdit;
+      const album = State.albums.find((a) => a.id === albumId);
       if (album) openAlbumModal(album);
       else toast('Álbum não encontrado.', '⚠');
     });
@@ -296,16 +221,14 @@ function bindAlbumButtons(scope) {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const albumId = String(btn.dataset.albumDelete || '');
-      const album = State.albums.find((a) => String(a.id) === albumId);
-      const label = album?.title || albumId;
+      const albumId = btn.dataset.albumDelete;
 
-      if (!confirm(`Excluir o álbum "${label}"? As faixas também serão removidas.`)) return;
+      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
 
       try {
         await apiFetch('album', {
           method: 'DELETE',
-          query: { id: albumId }
+          query: { id: albumId, force: 'true' }
         });
         State.expandedAlbumIds.delete(albumId);
         State.tracks.delete(albumId);
@@ -322,7 +245,7 @@ function bindAlbumButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      downloadAlbum(String(btn.dataset.albumDownload || ''));
+      downloadAlbum(btn.dataset.albumDownload);
     });
   });
 
@@ -330,7 +253,7 @@ function bindAlbumButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      openTrackModal(String(btn.dataset.trackNew || ''), null);
+      openTrackModal(btn.dataset.trackNew, null);
     });
   });
 }
@@ -343,18 +266,13 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-
-      const trackId = String(btn.dataset.trackEdit || '');
-      const albumId = String(btn.dataset.trackAlbum || '');
+      const trackId = Number(btn.dataset.trackEdit);
+      const albumId = btn.dataset.trackAlbum;
 
       const list = State.tracks.get(albumId) || [];
-      const track = list.find((item) => String(item.id) === trackId);
-
-      if (track) {
-        openTrackModal(albumId, track);
-      } else {
-        toast('Faixa não encontrada.', '⚠');
-      }
+      const track = list.find((t) => Number(t.id) === trackId);
+      if (track) openTrackModal(albumId, track);
+      else toast('Faixa não encontrada.', '⚠');
     });
   });
 
@@ -362,9 +280,8 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-
-      const trackId = String(btn.dataset.trackDelete || '');
-      const albumId = String(btn.dataset.trackAlbum || '');
+      const trackId = Number(btn.dataset.trackDelete);
+      const albumId = btn.dataset.trackAlbum;
 
       if (!confirm('Excluir esta faixa?')) return;
 
@@ -384,10 +301,7 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      downloadTrack(
-        String(btn.dataset.trackDownload || ''),
-        btn.dataset.trackDownloadTitle
-      );
+      downloadTrack(btn.dataset.trackDownload, btn.dataset.trackDownloadTitle);
     });
   });
 
@@ -401,7 +315,7 @@ function bindTrackButtons(scope) {
 async function downloadTrack(trackId, titleHint) {
   if (!trackId) return;
 
-  const btn = document.querySelector(`[data-track-download="${CSS.escape(trackId)}"]`);
+  const btn = document.querySelector(`[data-track-download="${trackId}"]`);
   const originalHtml = btn?.innerHTML;
 
   try {
@@ -420,7 +334,7 @@ async function downloadTrack(trackId, titleHint) {
     }
 
     triggerDownload(res.url, res.filename);
-    toast(`Download iniciado: ${res.filename || titleHint || trackId}`, '⬇');
+    toast(`Download iniciado: ${res.filename}`, '⬇');
   } catch (err) {
     console.error('[albums] downloadTrack:', err);
     toast(err?.message || `Falha ao baixar "${titleHint || trackId}".`, '⚠');
@@ -438,7 +352,7 @@ async function downloadTrack(trackId, titleHint) {
 async function downloadAlbum(albumId) {
   if (!albumId) return;
 
-  const album = State.albums.find((a) => String(a.id) === albumId);
+  const album = State.albums.find((a) => a.id === albumId);
   const albumTitle = album?.title || albumId;
 
   const confirmed = confirm(
@@ -495,25 +409,10 @@ async function downloadAlbum(albumId) {
 // Helpers de download
 // ─────────────────────────────────────────────────────────────
 function triggerDownload(url, filename) {
-  if (!url || typeof url !== 'string') {
-    throw new Error('URL inválida.');
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(url, window.location.href);
-  } catch {
-    throw new Error('URL inválida.');
-  }
-
-  if (!['https:', 'http:'].includes(parsed.protocol)) {
-    throw new Error('Protocolo de download não permitido.');
-  }
-
   const a = document.createElement('a');
-  a.href = parsed.href;
+  a.href = url;
   if (filename) a.download = filename;
-  a.rel = 'noopener noreferrer';
+  a.rel = 'noopener';
   a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
@@ -534,7 +433,7 @@ function bindTrackDragDrop(scope) {
     if (tbody.dataset.dragBound === '1') return;
     tbody.dataset.dragBound = '1';
 
-    const albumId = String(tbody.dataset.tracksBody || '');
+    const albumId = tbody.dataset.tracksBody;
 
     tbody.addEventListener('dragstart', (e) => {
       const row = e.target.closest('tr[data-track-id]');
@@ -589,9 +488,9 @@ function bindTrackDragDrop(scope) {
       rows.splice(insertAt, 0, _dragState.row);
 
       const order = rows.map((row, i) => ({
-        id: String(row.dataset.trackId),
-        track_number: i + 1
-      }));
+      id: String(row.dataset.trackId),
+      track_number: i + 1
+    }));
 
       const originalHtml = tbody.innerHTML;
       cleanupDrag(scope);
@@ -635,21 +534,16 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
 
 function reorderTableRows(tbody, order) {
   const rowsById = new Map();
-
   tbody.querySelectorAll('tr[data-track-id]').forEach((row) => {
-    rowsById.set(String(row.dataset.trackId), row);
+    rowsById.set(Number(row.dataset.trackId), row);
   });
 
   order.forEach((item, newIndex) => {
-    const row = rowsById.get(String(item.id));
-
+    const row = rowsById.get(item.id);
     if (!row) return;
 
     const idxCell = row.children[1];
-
-    if (idxCell) {
-      idxCell.textContent = String(newIndex + 1);
-    }
+    if (idxCell) idxCell.textContent = String(newIndex + 1);
 
     row.dataset.trackIndex = String(newIndex);
     tbody.appendChild(row);
@@ -660,14 +554,13 @@ function reorderTableRows(tbody, order) {
 // Render — álbum
 // ─────────────────────────────────────────────────────────────
 function renderAlbumBlock(album) {
-  const albumId = String(album.id);
-  const isExpanded = State.expandedAlbumIds.has(albumId);
-  const tracks = State.tracks.get(albumId) || [];
+  const isExpanded = State.expandedAlbumIds.has(album.id);
+  const tracks = State.tracks.get(album.id) || [];
   const trackCount = tracks.length;
   const published = !!album.published;
 
   return `
-    <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(albumId)}">
+    <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(album.id)}">
       <div class="album-header">
         <div class="album-cover" ${
           album.cover_image
@@ -692,22 +585,22 @@ function renderAlbumBlock(album) {
         </div>
         <div class="album-actions" style="display:flex;gap:0.4rem;align-items:center;">
           <button class="btn btn-ghost btn-sm"
-                  data-album-download="${escAttr(albumId)}"
+                  data-album-download="${escAttr(album.id)}"
                   type="button" title="Baixar álbum completo">⬇</button>
           <button class="btn btn-ghost btn-sm"
-                  data-album-edit="${escAttr(albumId)}"
+                  data-album-edit="${escAttr(album.id)}"
                   type="button" title="Editar álbum">✎</button>
           <button class="btn btn-ghost btn-sm"
-                  data-album-delete="${escAttr(albumId)}"
+                  data-album-delete="${escAttr(album.id)}"
                   type="button" title="Excluir álbum">🗑</button>
           <button class="album-toggle"
-                  data-album-toggle="${escAttr(albumId)}"
+                  data-album-toggle="${escAttr(album.id)}"
                   type="button" aria-label="Expandir/recolher">▼</button>
         </div>
       </div>
 
       <div class="album-tracks">
-        ${isExpanded ? renderTracksList(albumId, tracks) : ''}
+        ${isExpanded ? renderTracksList(album.id, tracks) : ''}
       </div>
     </div>
   `;
@@ -756,7 +649,6 @@ function renderTracksList(albumId, tracks) {
 function renderTrackRow(albumId, track, idx) {
   const hasPreview = !!track.preview_path;
   const hasFull = !!track.full_path;
-  const trackId = String(track.id);
 
   const audioChips = `
     <span class="audio-chip ${hasPreview ? '' : 'none'}" title="Preview">
@@ -774,7 +666,7 @@ function renderTrackRow(albumId, track, idx) {
   const price = Number(track.price_cents) || 0;
 
   return `
-    <tr data-track-id="${escAttr(trackId)}"
+    <tr data-track-id="${escAttr(String(track.id))}"
         data-track-index="${Number(track.track_index) || 0}"
         draggable="true"
         class="track-row">
@@ -792,17 +684,17 @@ function renderTrackRow(albumId, track, idx) {
       <td>
         <div class="actions">
           <button class="btn btn-ghost btn-sm"
-                  data-track-download="${escAttr(trackId)}"
+                  data-track-download="${escAttr(String(track.id))}"
                   data-track-download-title="${escAttr(track.title || '')}"
                   type="button"
                   title="Baixar áudio completo"
                   ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
           <button class="btn btn-ghost btn-sm"
-                  data-track-edit="${escAttr(trackId)}"
+                  data-track-edit="${escAttr(String(track.id))}"
                   data-track-album="${escAttr(albumId)}"
                   type="button">✎ Editar</button>
           <button class="btn btn-ghost btn-sm"
-                  data-track-delete="${escAttr(trackId)}"
+                  data-track-delete="${escAttr(String(track.id))}"
                   data-track-album="${escAttr(albumId)}"
                   type="button">🗑</button>
         </div>
@@ -828,11 +720,11 @@ function openAlbumModal(album) {
 
     <div class="form-row">
       <div class="form-group">
-        <label for="albumId">ID (gerado pelo servidor)</label>
+        <label for="albumId">ID (slug)</label>
         <input type="text" id="albumId" value="${escAttr(a.id)}"
                ${isNew ? '' : 'disabled'}
-               placeholder="gerado automaticamente" maxlength="64" readonly>
-        <div class="form-hint">O servidor gera um UUID. O slug é derivado do título.</div>
+               placeholder="album-bbb" maxlength="64">
+        <div class="form-hint">Letras, números e hífens.</div>
       </div>
       <div class="form-group">
         <label for="albumType">Tipo</label>
@@ -905,9 +797,9 @@ function openAlbumModal(album) {
     const errEl = document.getElementById('albumError');
     if (errEl) errEl.textContent = '';
 
-    const title = document.getElementById('albumTitle').value.trim();
     const payload = {
-      title,
+      id: document.getElementById('albumId').value.trim(),
+      title: document.getElementById('albumTitle').value.trim(),
       artist: document.getElementById('albumArtist').value.trim(),
       year: Number(document.getElementById('albumYear').value) || null,
       type: document.getElementById('albumType').value,
@@ -918,7 +810,11 @@ function openAlbumModal(album) {
       published: document.getElementById('albumPublished').checked
     };
 
-    if (!title) {
+    if (!payload.id || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(payload.id)) {
+      if (errEl) errEl.textContent = 'ID inválido.';
+      return;
+    }
+    if (!payload.title) {
       if (errEl) errEl.textContent = 'Título obrigatório.';
       return;
     }
@@ -928,10 +824,12 @@ function openAlbumModal(album) {
         await apiFetch('albums', { method: 'POST', body: payload });
         toast('Álbum criado.', '💿');
       } else {
+        const patch = { ...payload };
+        delete patch.id;
         await apiFetch('album', {
           method: 'PATCH',
           query: { id: a.id },
-          body: payload
+          body: patch
         });
         toast('Álbum atualizado.', '💿');
       }
@@ -956,6 +854,7 @@ function openTrackModal(albumId, track) {
     preview_path: null, full_path: null, lyrics: []
   };
 
+  // Mostra a letra como JSON (para permitir edição de timestamps)
   const lyricsText = (() => {
     if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '[]';
     return JSON.stringify(t.lyrics, null, 2);
@@ -1048,9 +947,6 @@ function openTrackModal(albumId, track) {
     </div>
   `);
 
-  // Registra o botão de ajuda DEPOIS que o modal existe no DOM.
-  document.getElementById('trackLyricsHelpBtn')?.addEventListener('click', openLyricsHelpModal);
-
   bindTrackUpload({
     buttonSel: '[data-upload-preview]',
     inputId: 'trackPreviewInput',
@@ -1128,48 +1024,49 @@ function openTrackModal(albumId, track) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Modal — Ajuda das letras
-// ─────────────────────────────────────────────────────────────
-function openLyricsHelpModal() {
-  openAdminModal(`
-    <h3>Formato da letra sincronizada</h3>
+// ── Botão de ajuda do formato JSON
+const helpBtn = document.getElementById('trackLyricsHelpBtn');
+if (helpBtn) {
+  helpBtn.addEventListener('click', () => {
+    openAdminModal(`
+      <h3>Formato da letra sincronizada</h3>
 
-    <p style="color:var(--text-dim);margin-bottom:1rem;">
-      Cole um array JSON onde cada linha tem um <code>time</code> (em segundos) e um <code>text</code>.
-    </p>
+      <p style="color:var(--text-dim);margin-bottom:1rem;">
+        Cole um array JSON onde cada linha tem um <code>time</code> (em segundos) e um <code>text</code>.
+      </p>
 
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem;">
-      <pre style="font-family:monospace;font-size:0.8rem;line-height:1.6;color:var(--text);overflow-x:auto;margin:0;">[
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem;">
+        <pre style="font-family:monospace;font-size:0.8rem;line-height:1.6;color:var(--text);overflow-x:auto;margin:0;">[
   { "time": 0,    "text": "Primeira linha" },
   { "time": 4.5,  "text": "Segunda linha" },
   { "time": 9,    "text": "Terceira linha" },
   { "time": 13.2, "text": "Quarta linha" }
 ]</pre>
-    </div>
+      </div>
 
-    <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
-      Como calcular o <code>time</code>
-    </h4>
-    <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
-      <li>Ouve a música e anota o segundo exato em que cada verso começa</li>
-      <li>Pode usar decimais: <code>4.5</code> = 4 segundos e meio</li>
-      <li>A letra acende no player quando o áudio chega nesse tempo</li>
-    </ul>
+      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
+        Como calcular o <code>time</code>
+      </h4>
+      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
+        <li>Ouve a música e anota o segundo exato em que cada verso começa</li>
+        <li>Pode usar decimais: <code>4.5</code> = 4 segundos e meio</li>
+        <li>A letra acende no player quando o áudio chega nesse tempo</li>
+      </ul>
 
-    <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
-      Dicas
-    </h4>
-    <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
-      <li>Se colar texto puro, o sistema distribui 4s por linha automaticamente</li>
-      <li>Linhas vazias são ignoradas</li>
-      <li>Não pode ter vírgula depois do último item</li>
-    </ul>
+      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
+        Dicas
+      </h4>
+      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
+        <li>Se colar texto puro, o sistema distribui 4s por linha automaticamente</li>
+        <li>Linhas vazias são ignoradas</li>
+        <li>Não pode ter vírgula depois do último item</li>
+      </ul>
 
-    <div style="display:flex;justify-content:flex-end;margin-top:1.5rem;">
-      <button class="btn btn-primary btn-sm" data-close type="button">Entendi</button>
-    </div>
-  `);
+      <div style="display:flex;justify-content:flex-end;margin-top:1.5rem;">
+        <button class="btn btn-primary btn-sm" data-close type="button">Entendi</button>
+      </div>
+    `);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────

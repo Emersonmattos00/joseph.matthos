@@ -6,7 +6,7 @@
    - getByPath / setByPath : acesso e mutação segura de objetos
    - esc                   : escape de HTML (conteúdo em elementos)
    - escAttr               : escape de atributos HTML (mais rigoroso)
-   - sanitizeHtml          : permite apenas tags seguras
+   - sanitizeHtml          : permite apenas tags seguras (b/i/br/span)
    - stripHtml             : remove todas as tags
    - reexports             : safeExternalUrl (compat com socials.js)
 
@@ -27,130 +27,64 @@
 // ─────────────────────────────────────────────────────────────
 export { safeExternalUrl } from '../../utils.js';
 
-// ============================================================
-// VALIDAÇÃO DE CAMINHOS
-// ------------------------------------------------------------
-// Bloqueia chaves que poderiam causar prototype pollution.
-// ============================================================
-
-const FORBIDDEN_KEYS = new Set([
-  '__proto__',
-  'prototype',
-  'constructor'
-]);
-
-function parseSafePath(path) {
-  if (typeof path !== 'string' || !path.trim()) {
-    return null;
-  }
-
-  const keys = path.split('.');
-
-  if (
-    keys.length === 0 ||
-    keys.some(
-      key =>
-        !key ||
-        key.trim() !== key ||
-        FORBIDDEN_KEYS.has(key)
-    )
-  ) {
-    return null;
-  }
-
-  return keys;
-}
-
-// ============================================================
-// LEITURA DE PROPRIEDADES
-// ------------------------------------------------------------
-// Usa Object.hasOwn para não acessar propriedades herdadas.
-// ============================================================
-
+// ─────────────────────────────────────────────────────────────
+// ACESSO A PATHS
+// ─────────────────────────────────────────────────────────────
 export function getByPath(obj, path) {
-  const keys = parseSafePath(path);
-
-  if (
-    !obj ||
-    typeof obj !== 'object' ||
-    !keys
-  ) {
+  if (!obj || typeof path !== 'string' || !path) {
     return undefined;
   }
 
-  let current = obj;
-
-  for (const key of keys) {
-    if (
-      current === null ||
-      typeof current !== 'object' ||
-      !Object.hasOwn(current, key)
-    ) {
-      return undefined;
-    }
-
-    current = current[key];
-  }
-
-  return current;
+  return path
+    .split('.')
+    .reduce(
+      (o, k) => (
+        o && o[k] !== undefined
+          ? o[k]
+          : undefined
+      ),
+      obj
+    );
 }
-
-// ============================================================
-// GRAVAÇÃO DE PROPRIEDADES
-// ------------------------------------------------------------
-// Retorna true em caso de sucesso, false caso contrário.
-// Nunca cria/atravessa arrays nem chaves proibidas.
-// ============================================================
 
 export function setByPath(obj, path, value) {
-  const keys = parseSafePath(path);
-
-  if (
-    !obj ||
-    typeof obj !== 'object' ||
-    Array.isArray(obj) ||
-    !keys
-  ) {
-    return false;
+  if (!obj || typeof obj !== 'object') {
+    return;
   }
 
-  let current = obj;
+  if (typeof path !== 'string' || !path) {
+    return;
+  }
 
-  for (let i = 0; i < keys.length - 1; i++) {
-    const key = keys[i];
+  const keys = path.split('.');
+  const last = keys.pop();
 
-    if (!Object.hasOwn(current, key)) {
-      current[key] = {};
-    }
+  if (!last) return;
 
-    const next = current[key];
-
+  const target = keys.reduce((o, k) => {
     if (
-      !next ||
-      typeof next !== 'object' ||
-      Array.isArray(next)
+      typeof o[k] !== 'object' ||
+      o[k] === null ||
+      Array.isArray(o[k])
     ) {
-      return false;
+      o[k] = {};
     }
 
-    current = next;
-  }
+    return o[k];
+  }, obj);
 
-  const last = keys[keys.length - 1];
-
-  current[last] = value;
-
-  return true;
+  target[last] = value;
 }
 
-// ============================================================
+// ─────────────────────────────────────────────────────────────
 // ESCAPE — TEXTO EM ELEMENTOS HTML
 // ------------------------------------------------------------
+// Use para conteúdo que vai DENTRO de elementos:
 //   <div>${esc(userText)}</div>
 //
 // Escapa: & < > " ' ` =
+// (inclui backtick e igual para cobrir casos em atributos sem quotes)
 // ─────────────────────────────────────────────────────────────
-
 const HTML_ESCAPE_MAP = {
   '&': '&amp;',
   '<': '&lt;',
@@ -162,20 +96,23 @@ const HTML_ESCAPE_MAP = {
 };
 
 export function esc(value) {
-  return String(value ?? '')
-    .replace(/[&<>"'`=]/g, char => HTML_ESCAPE_MAP[char]);
+  return String(value == null ? '' : value)
+    .replace(/[&<>"'`=]/g, (char) => HTML_ESCAPE_MAP[char]);
 }
 
-// ============================================================
+// ─────────────────────────────────────────────────────────────
 // ESCAPE — VALORES DE ATRIBUTOS HTML
 // ------------------------------------------------------------
+// Use para valores de atributos:
 //   <input value="${escAttr(userText)}">
 //   <a href="${escAttr(url)}">
 //
-// Escapa < > " ' ` e também newlines/tabs.
-// ⚠️ Sempre usar quotes duplas nos atributos.
+// Diferente do esc(): NÃO escapa '&' e '=' porque em atributos
+// eles são legítimos. Mas escapa < > " ' ` e também newlines/tabs
+// para evitar quebras em atributos não citados.
+//
+// ⚠️ Sempre use quotes duplas nos atributos quando usar escAttr.
 // ─────────────────────────────────────────────────────────────
-
 const ATTR_ESCAPE_MAP = {
   '&': '&amp;',
   '<': '&lt;',
@@ -189,220 +126,152 @@ const ATTR_ESCAPE_MAP = {
 };
 
 export function escAttr(value) {
-  return String(value ?? '')
-    .replace(
-      /[&<>"'`\n\r\t]/g,
-      char => ATTR_ESCAPE_MAP[char]
-    );
+  return String(value == null ? '' : value)
+    .replace(/[&<>"'`\n\r\t]/g, (char) => ATTR_ESCAPE_MAP[char]);
 }
 
-// ============================================================
-// SANITIZAÇÃO HTML
-// ------------------------------------------------------------
-// Tags permitidas: b, i, em, strong, br, span, p, a
-// Atributos: apenas span.gold e a[href|target|rel]
-// Tags bloqueadas: removidas integralmente (sem preservar texto).
-// Demais tags não permitidas: removidas, filhos preservados.
 // ─────────────────────────────────────────────────────────────
-
+// SANITIZE HTML — permite apenas tags seguras
+// ------------------------------------------------------------
+// Use quando o admin pode escrever HTML simples no painel:
+//   hero.title     → <br>, <span class="gold">
+//   sobre.paragraphs → <strong>, <em>, <br>
+//
+// Tags permitidas: b, i, em, strong, br, span, p, a
+// Atributos permitidos: apenas em <span> (class="gold") e <a>
+//   (href com whitelist http(s), target, rel)
+//
+// Se a string vier com tags maliciosas (<script>, <iframe>, etc),
+// elas são REMOVIDAS — o texto interno é mantido.
+// ─────────────────────────────────────────────────────────────
 const ALLOWED_TAGS = new Set([
-  'B',
-  'I',
-  'EM',
-  'STRONG',
-  'BR',
-  'SPAN',
-  'P',
-  'A'
+  'B', 'I', 'EM', 'STRONG', 'BR', 'SPAN', 'P', 'A'
 ]);
 
-const BLOCKED_TAGS = new Set([
-  'SCRIPT',
-  'STYLE',
-  'IFRAME',
-  'OBJECT',
-  'EMBED',
-  'SVG',
-  'MATH',
-  'FORM',
-  'INPUT',
-  'BUTTON',
-  'TEXTAREA',
-  'SELECT',
-  'TEMPLATE',
-  'NOSCRIPT'
-]);
+const ALLOWED_SPAN_CLASSES = new Set(['gold']);
 
-const ALLOWED_SPAN_CLASSES = new Set([
-  'gold'
-]);
+const ALLOWED_A_ATTRS = new Set(['href', 'target', 'rel']);
 
 export function sanitizeHtml(input) {
-  const raw = String(input ?? '');
-
+  const raw = String(input == null ? '' : input);
   if (!raw) return '';
 
   if (typeof DOMParser === 'undefined') {
+    // Ambiente sem DOM → apenas escapa
     return esc(raw);
   }
 
   const doc = new DOMParser().parseFromString(
-    raw,
+    `<div>${raw}</div>`,
     'text/html'
   );
 
-  const root = doc.body;
-
+  const root = doc.body.firstChild;
   if (!root) return '';
 
-  function cleanNode(parent) {
-    for (const child of Array.from(parent.childNodes)) {
+  // Walk recursivo
+  const walk = (node) => {
+    for (const child of Array.from(node.childNodes)) {
       // Texto → mantém
-      if (child.nodeType === 3) {
-        continue;
-      }
+      if (child.nodeType === Node.TEXT_NODE) continue;
 
       // Comentários e outros nós → remove
-      if (child.nodeType !== 1) {
+      if (child.nodeType !== Node.ELEMENT_NODE) {
         child.remove();
         continue;
       }
 
       const tag = child.tagName.toUpperCase();
 
-      // Remove completamente elementos perigosos.
-      if (BLOCKED_TAGS.has(tag)) {
-        child.remove();
-        continue;
-      }
-
-      // Tags não autorizadas são removidas,
-      // mas seus filhos são preservados e sanitizados.
+      // Tag não permitida → troca por texto
       if (!ALLOWED_TAGS.has(tag)) {
-        cleanNode(child);
-
-        while (child.firstChild) {
-          child.parentNode.insertBefore(
-            child.firstChild,
-            child
-          );
-        }
-
-        child.remove();
+        child.replaceWith(doc.createTextNode(child.textContent || ''));
         continue;
       }
 
-      // SPAN: somente class="gold".
+      // Tag permitida → limpa atributos
       if (tag === 'SPAN') {
-        const validClass =
-          ALLOWED_SPAN_CLASSES.has(
-            child.getAttribute('class')
-          );
-
+        const cls = child.getAttribute('class');
+        // Só permite class="gold"
         for (const attr of Array.from(child.attributes)) {
           child.removeAttribute(attr.name);
         }
-
-        if (validClass) {
-          child.setAttribute('class', 'gold');
+        if (cls && ALLOWED_SPAN_CLASSES.has(cls)) {
+          child.setAttribute('class', cls);
         }
-      }
-
-      // A: somente href, target e rel.
-      else if (tag === 'A') {
+      } else if (tag === 'A') {
+        for (const attr of Array.from(child.attributes)) {
+          if (!ALLOWED_A_ATTRS.has(attr.name.toLowerCase())) {
+            child.removeAttribute(attr.name);
+          }
+        }
+        // Valida href
         const href = child.getAttribute('href') || '';
-
-        for (const attr of Array.from(child.attributes)) {
-          child.removeAttribute(attr.name);
+        if (!isSafeHref(href)) {
+          child.removeAttribute('href');
         }
-
-        if (isSafeHref(href)) {
-          child.setAttribute('href', href.trim());
+        // Força rel seguro em links externos
+        if (child.getAttribute('href')) {
           child.setAttribute('target', '_blank');
-          child.setAttribute(
-            'rel',
-            'noopener noreferrer'
-          );
+          child.setAttribute('rel', 'noopener noreferrer');
         }
-      }
-
-      // Demais tags permitidas: nenhum atributo.
-      else {
+      } else {
+        // b/i/em/strong/br/p → remove todos os atributos
         for (const attr of Array.from(child.attributes)) {
           child.removeAttribute(attr.name);
         }
       }
 
-      cleanNode(child);
+      // Recursivo
+      walk(child);
     }
-  }
+  };
 
-  cleanNode(root);
-
+  walk(root);
   return root.innerHTML;
 }
 
-// ============================================================
-// VALIDAÇÃO DE LINKS
-// ------------------------------------------------------------
-// Aceita: #ancora, http(s):, mailto:
-// Rejeita: javascript:, data:, file:, //host, controles.
 // ─────────────────────────────────────────────────────────────
-
-function isSafeHref(href) {
-  const raw = String(href || '').trim();
-
-  if (!raw) return false;
-
-  // Rejeita caracteres de controle.
-  if (/[\u0000-\u001F\u007F]/.test(raw)) {
-    return false;
-  }
-
-  if (raw.startsWith('#')) {
-    return true;
-  }
-
-  if (raw.startsWith('//')) {
-    return false;
-  }
-
-  try {
-    const url = new URL(raw, 'https://local.invalid');
-
-    return [
-      'https:',
-      'http:',
-      'mailto:'
-    ].includes(url.protocol);
-  } catch {
-    return false;
-  }
-}
-
-// ============================================================
-// REMOÇÃO DE HTML
-// ------------------------------------------------------------
-// Remove todas as tags, preservando o texto.
-// O fallback por regex é apenas emergência.
+// STRIP HTML — remove todas as tags
 // ─────────────────────────────────────────────────────────────
-
 export function stripHtml(input) {
-  const raw = String(input ?? '');
-
+  const raw = String(input == null ? '' : input);
   if (!raw) return '';
-
   if (typeof DOMParser === 'undefined') {
-    return raw
-      .replace(/<[^>]*>/g, '')
-      .replace(/&nbsp;/gi, ' ')
-      .trim();
+    return raw.replace(/<[^>]*>/g, '');
   }
-
   const doc = new DOMParser().parseFromString(
-    raw,
+    `<div>${raw}</div>`,
     'text/html'
   );
+  return doc.body.textContent || '';
+}
 
-  return doc.body?.textContent || '';
+// ─────────────────────────────────────────────────────────────
+// HELPERS INTERNOS
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Valida href de link:
+ *  - aceita http:// e https://
+ *  - aceita mailto:
+ *  - aceita caminhos relativos (#ancora, /pagina)
+ *  - rejeita javascript:, data:, file:, etc.
+ */
+function isSafeHref(href) {
+  const raw = String(href || '').trim();
+  if (!raw) return false;
+
+  // Âncora interna
+  if (raw.startsWith('#')) return true;
+
+  // Caminho relativo (sem esquema)
+  if (!/^[a-z][a-z0-9+.\-]*:/i.test(raw)) return true;
+
+  // Esquema explícito → whitelist
+  const lower = raw.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return true;
+  if (lower.startsWith('mailto:')) return true;
+
+  return false;
 }
