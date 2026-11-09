@@ -1,8 +1,15 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v26 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v27 FINAL AUDITADO)
    ------------------------------------------------------------
-   - CORREÇÃO: redireciona o clique no álbum direto para o player
-   - Mantém TODAS as funcionalidades originais (player, modais)
+   Correções aplicadas:
+   - isPremium() retorna booleano padronizado
+   - findTrackByIndex() prioriza UUID e evita conversões ambíguas
+   - collectAllTracks() retorna trackId, albumId, trackIndex
+   - loadPublicData() verifica response.ok e limpa estado em falha
+   - resolvePlaylistTracks() aceita UUID, albumId:trackIndex e objetos
+   - openPlaylistPlayer() passa a playlist via URL
+   - setQueue/getQueue da rádio preservam trackId
+   - loadUser() distingue não autenticado de falha do servidor
    ============================================================ */
 
 import {
@@ -119,10 +126,21 @@ async function boot() {
         esc,
         safeMediaUrl,
         setQueue: (queue) => {
-          playerQueue = queue.map((t) => ({ albumId: t.albumId, trackIndex: t.trackIndex }));
-          playerQueueIndex = 0;
+          if (!Array.isArray(queue)) {
+            playerQueue = [];
+            playerQueueIndex = -1;
+            return;
+          }
+          playerQueue = queue
+            .filter(t => t && t.albumId != null && t.trackId != null)
+            .map(t => ({
+              albumId: String(t.albumId),
+              trackId: String(t.trackId),
+              trackIndex: t.trackIndex ?? null
+            }));
+          playerQueueIndex = playerQueue.length ? 0 : -1;
         },
-        getQueue: () => playerQueue.slice(),
+        getQueue: () => playerQueue.map(t => ({ ...t })),
         getQueueIndex: () => playerQueueIndex,
         setQueueIndex: (idx) => {
           if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) playerQueueIndex = idx;
@@ -162,13 +180,22 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    const r = await fetch(`/api/public?t=${Date.now()}`, {
+    const response = await fetch(`/api/public?t=${Date.now()}`, {
+      method: 'GET',
       credentials: 'same-origin',
-      cache: 'no-store'
+      cache: 'no-store',
+      headers: { Accept: 'application/json' }
     });
-    const json = await r.json();
 
-    if (!json || !json.ok) return;
+    if (!response.ok) {
+      throw new Error(`Erro HTTP ${response.status} ao carregar catálogo.`);
+    }
+
+    const json = await response.json();
+
+    if (!json || json.ok !== true) {
+      throw new Error(json?.error || 'Resposta inválida da API pública.');
+    }
 
     SITE.content = json.content && typeof json.content === 'object'
       ? deepMerge(clone(DEFAULT_CONTENT), json.content)
@@ -260,7 +287,7 @@ async function loadPublicData() {
       }));
     }
   } catch (err) {
-    console.warn('[public] falha:', err?.message);
+    console.error('[public] falha:', err);
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
     SITE.tracks = {};
@@ -287,8 +314,12 @@ async function loadUser() {
       SITE.rentals = [];
       return;
     }
+    if (!r.ok) {
+      console.warn('[auth] Falha temporária ao verificar sessão:', r.status);
+      return;
+    }
     const json = await r.json();
-    if (r.ok && json.ok && json.user) {
+    if (json.ok && json.user) {
       SITE.user = json.user;
       SITE.rentals = Array.isArray(json.rentals) ? json.rentals : [];
     } else {
@@ -296,8 +327,7 @@ async function loadUser() {
       SITE.rentals = [];
     }
   } catch {
-    SITE.user = null;
-    SITE.rentals = [];
+    console.warn('[auth] Erro de rede — mantendo estado anterior.');
   }
 }
 
@@ -305,7 +335,8 @@ async function loadUser() {
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 function isPremium() {
-  return SITE.user && (SITE.user.plan === 'premium' || SITE.user.plan === 'anual');
+  const plan = String(SITE.user?.plan || '').trim().toLowerCase();
+  return plan === 'premium' || plan === 'anual';
 }
 
 function trackInfo(albumId, trackIndexOrId) {
@@ -335,13 +366,28 @@ function findAlbum(albumId) {
 
 function findTrackByIndex(albumId, realTrackIndexOrId) {
   const album = findAlbum(albumId);
-  if (!album) return null;
+  if (!album || realTrackIndexOrId == null) return null;
+
+  const searchValue = String(realTrackIndexOrId).trim();
+  if (!searchValue) return null;
+
   const tracks = resolveAlbumTracks(album);
-  return tracks.find((t) =>
-    String(t.id) === String(realTrackIndexOrId) ||
-    Number(t.trackNumber) === Number(realTrackIndexOrId) ||
-    Number(t.trackIndex) === Number(realTrackIndexOrId)
-  ) || null;
+
+  const byId = tracks.find(track =>
+    track?.id != null && String(track.id) === searchValue
+  );
+  if (byId) return byId;
+
+  const numericIndex = Number(searchValue);
+  if (!Number.isInteger(numericIndex) || numericIndex < 0) return null;
+
+  return tracks.find(track => {
+    if (!track) return false;
+    const index = track.trackNumber ?? track.trackIndex;
+    return index != null &&
+      Number.isInteger(Number(index)) &&
+      Number(index) === numericIndex;
+  }) || null;
 }
 
 function collectAllTracks() {
@@ -354,20 +400,19 @@ function collectAllTracks() {
     const tracks = resolveAlbumTracks(album);
 
     for (const track of tracks) {
-      if (!track?.id) continue;
+      if (!track || track.id == null) continue;
 
-      const trackIndex = Number(
-        track.trackNumber ?? track.trackIndex
-      );
+      const trackId = String(track.id).trim();
+      if (!trackId) continue;
 
-      if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+      const rawIndex = track.trackNumber ?? track.trackIndex;
+      const trackIndex = Number(rawIndex);
+
+      if (rawIndex == null || !Number.isInteger(trackIndex) || trackIndex < 0) {
         continue;
       }
 
-      const trackId = String(track.id);
-
       if (seen.has(trackId)) continue;
-
       seen.add(trackId);
 
       out.push({
@@ -928,34 +973,75 @@ function renderPlaylists() {
 }
 
 function resolvePlaylistTracks(playlist) {
-  if (!playlist || !Array.isArray(playlist.tracks)) return [];
-  const index = new Map();
+  if (!playlist || !Array.isArray(playlist.tracks)) {
+    return [];
+  }
+
+  const indexById = new Map();
+  const indexByAlbumAndTrack = new Map();
+
   for (const album of SITE.albums || []) {
-    const tracks = resolveAlbumTracks(album);
-    tracks.forEach((track) => {
-      if (track && track.id !== undefined && track.id !== null) {
-        index.set(String(track.id), { album, track, trackIndex: Number(track.trackNumber ?? track.trackIndex) || 0 });
+    if (!album?.id) continue;
+
+    for (const track of resolveAlbumTracks(album)) {
+      if (!track || track.id == null) continue;
+
+      const entry = {
+        album,
+        track,
+        trackIndex: Number(track.trackNumber ?? track.trackIndex)
+      };
+
+      indexById.set(String(track.id), entry);
+
+      if (Number.isInteger(entry.trackIndex)) {
+        indexByAlbumAndTrack.set(
+          `${album.id}:${entry.trackIndex}`,
+          entry
+        );
       }
-    });
+    }
   }
-  const out = [];
+
+  const result = [];
+  const seen = new Set();
+
   for (const ref of playlist.tracks) {
-    if (typeof ref === 'number' && Number.isFinite(ref)) {
-      const entry = index.get(String(ref));
-      if (entry) out.push(entry);
-      continue;
+    let entry = null;
+
+    if (ref && typeof ref === 'object') {
+      const trackId = ref.trackId ?? ref.id;
+      if (trackId != null) {
+        entry = indexById.get(String(trackId)) || null;
+      }
+      if (!entry && ref.albumId != null) {
+        const idx = ref.trackIndex ?? ref.trackNumber;
+        if (idx != null) {
+          entry = indexByAlbumAndTrack.get(`${ref.albumId}:${idx}`) || null;
+        }
+      }
+    } else if (typeof ref === 'string' || typeof ref === 'number') {
+      const value = String(ref).trim();
+      entry = indexById.get(value) || null;
+      if (!entry && value.includes(':')) {
+        entry = indexByAlbumAndTrack.get(value) || null;
+      }
     }
-    if (typeof ref === 'string') {
-      const trimmed = ref.trim();
-      const entry = index.get(trimmed);
-      if (entry) out.push(entry);
-    }
+
+    if (!entry) continue;
+
+    const key = String(entry.track.id);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(entry);
   }
-  return out;
+
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM (AGORA REDIRECIONA PARA O PLAYER)
+// MODAL DE ÁLBUM (REDIRECIONA PARA O PLAYER)
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
   const album = findAlbum(albumId);
@@ -2095,11 +2181,16 @@ function renderLyricsPanel() {
 }
 
 function openPlaylistPlayer(playlistIndex) {
-  const playlist = SITE.content?.playlists?.[playlistIndex]; if (!playlist) return;
+  const playlist = SITE.content?.playlists?.[playlistIndex];
+  if (!playlist) return;
   const queue = resolvePlaylistTracks(playlist);
   if (!queue.length) { toast('Esta playlist não tem faixas válidas.', '⚠'); return; }
   const first = queue[0];
-  openExpandedPlayer(first.album.id, first.track.id);
+  const params = new URLSearchParams({
+    id: String(first.track.id),
+    playlist: String(playlistIndex)
+  });
+  window.location.assign(`/player.html?${params.toString()}`);
 }
 
 function openModal(id) { const el = document.getElementById(id); if (!el) return; el.style.zIndex = '800'; el.classList.add('open'); el.setAttribute('aria-hidden', 'false'); document.body.style.overflow = 'hidden'; }
