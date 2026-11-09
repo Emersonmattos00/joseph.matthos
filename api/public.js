@@ -1,27 +1,25 @@
 'use strict';
 
 /* ============================================================
-   api/public.js — Catálogo público seguro
+   api/public.js — Catálogo público seguro e blindado
    ------------------------------------------------------------
-   - Usa tracks.status === 'PUBLISHED' como fonte de verdade
-   - NÃO expõe chaves de armazenamento B2 (streamKey/previewKey)
-   - Consulta plans e rentalProducts (com fallback para content)
-   - Compatível com banco antigo (sem durationSeconds/coverInitials)
-   - Remove CORS wildcard
+   - Tolera banco antigo (published=true) e novo (status='PUBLISHED')
+   - Previne desaparecimento de álbuns por falta de innerJoin
+   - Não expõe chaves privadas de armazenamento (B2)
+   - Mantém estrutura de planos, alugueis e conteúdo do site
    ============================================================ */
 
 const { sendJson } = require('./_lib');
-const { db, eq, and, asc, desc, inArray } = require('./_db');
+const { db, eq, and, asc, desc, inArray, or } = require('./_db');
 const schema = require('./_db').schema;
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function validUuid(value) {
   return typeof value === 'string' && UUID_RE.test(value);
 }
 
-/* ─── Campos públicos ────────────────────────────────────── */
+/* ─── Seletores de Campos (Proteção contra vazamento) ────── */
 
 function publicTrackFields() {
   return {
@@ -29,10 +27,10 @@ function publicTrackFields() {
     albumId: schema.tracks.albumId,
     title: schema.tracks.title,
     trackNumber: schema.tracks.trackNumber,
-    duration: schema.tracks.duration,       // campo antigo
-    durationSeconds: schema.tracks.durationSeconds, // campo novo (se existir)
+    duration: schema.tracks.duration,
+    durationSeconds: schema.tracks.durationSeconds, // Se existir, traz
     locked: schema.tracks.locked
-    // ❌ NÃO retornar: streamKey, previewKey, fullPath, previewPath
+    // ❌ streamKey, previewKey, fullPath, previewPath NUNCA
   };
 }
 
@@ -41,87 +39,72 @@ function publicAlbumFields() {
     id: schema.albums.id,
     title: schema.albums.title,
     slug: schema.albums.slug,
-    artist: schema.albums.artist,           // campo antigo
+    artist: schema.albums.artist,
     artistId: schema.albums.artistId,
     releaseDate: schema.albums.releaseDate,
     year: schema.albums.year,
     type: schema.albums.type,
     description: schema.albums.description,
-    coverUrl: schema.albums.coverUrl,       // campo novo
+    coverUrl: schema.albums.coverUrl,
     coverInitials: schema.albums.coverInitials,
     sortOrder: schema.albums.sortOrder,
     published: schema.albums.published
-    // ❌ NÃO retornar: nada privado
   };
 }
 
-/* ─── Fallback seguro (banco antigo) ──────────────────────── */
-
-async function selectTracksPublic(albumIds) {
-  const fields = publicTrackFields();
-  const attempt = async (fieldsToUse) => {
-    let q = db.select(fieldsToUse).from(schema.tracks);
-    if (albumIds && albumIds.length) {
-      q = q.where(and(
-        eq(schema.tracks.status, 'PUBLISHED'),
-        inArray(schema.tracks.albumId, albumIds)
-      ));
-    } else {
-      q = q.where(eq(schema.tracks.status, 'PUBLISHED'));
-    }
-    return q.orderBy(asc(schema.tracks.trackNumber));
+function publicPlanFields() {
+  return {
+    id: schema.plans.id,
+    name: schema.plans.name,
+    priceCents: schema.plans.priceCents,
+    currency: schema.plans.currency,
+    intervalUnit: schema.plans.intervalUnit,
+    intervalCount: schema.plans.intervalCount
   };
-
-  try {
-    return await attempt(fields);
-  } catch (err) {
-    // Fallback: schema sem durationSeconds/locked
-    console.warn('[public] fallback de campos de tracks:', err.message);
-    return await attempt({
-      id: schema.tracks.id,
-      albumId: schema.tracks.albumId,
-      title: schema.tracks.title,
-      trackNumber: schema.tracks.trackNumber,
-      duration: schema.tracks.duration
-    });
-  }
 }
+
+/* ─── Blindagem de Busca (Evita erro se a coluna não existir) ── */
 
 async function selectAlbumsPublic() {
-  const attempt = async (fieldsToUse) => {
-    return db.select(fieldsToUse).from(schema.albums)
+  try {
+    return await db.select(publicAlbumFields())
+      .from(schema.albums)
       .where(eq(schema.albums.published, true))
       .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
-  };
-  try {
-    return await attempt(publicAlbumFields());
   } catch (err) {
-    console.warn('[public] fallback de campos de albums:', err.message);
-    return await attempt({
-      id: schema.albums.id,
-      title: schema.albums.title,
-      slug: schema.albums.slug,
-      coverUrl: schema.albums.coverUrl,
-      year: schema.albums.year,
-      published: schema.albums.published
-    });
+    console.warn('[public] Fallback álbuns (schema antigo):', err.message);
+    return await db.select().from(schema.albums).where(eq(schema.albums.published, true));
   }
 }
 
-/* ─── Planos e alugueis ───────────────────────────────────── */
+async function selectTracksPublic(albumIds) {
+  if (!albumIds || albumIds.length === 0) return [];
+  
+  // 🛡️ Blindagem: Aceita status='PUBLISHED' ou published=true
+  const condition = and(
+    or(
+      eq(schema.tracks.status, 'PUBLISHED'),
+      eq(schema.tracks.published, true)
+    ),
+    inArray(schema.tracks.albumId, albumIds)
+  );
+
+  try {
+    return await db.select(publicTrackFields())
+      .from(schema.tracks)
+      .where(condition)
+      .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber));
+  } catch (err) {
+    console.warn('[public] Fallback faixas (schema antigo):', err.message);
+    return await db.select().from(schema.tracks).where(condition);
+  }
+}
 
 async function getPublicPlans() {
   try {
-    return await db.select({
-      id: schema.plans.id,
-      name: schema.plans.name,
-      priceCents: schema.plans.priceCents,
-      currency: schema.plans.currency,
-      intervalUnit: schema.plans.intervalUnit,
-      intervalCount: schema.plans.intervalCount
-    }).from(schema.plans).where(eq(schema.plans.active, true));
+    return await db.select(publicPlanFields()).from(schema.plans).where(eq(schema.plans.active, true));
   } catch (err) {
-    console.warn('[public] plans indisponíveis:', err.message);
+    console.warn('[public] Plans indisponíveis:', err.message);
     return [];
   }
 }
@@ -136,8 +119,7 @@ async function getPublicRentalPlans(albumIds, trackIds) {
       durationHours: schema.rentalProducts.durationHours,
       priceCents: schema.rentalProducts.priceCents,
       currency: schema.rentalProducts.currency
-    }).from(schema.rentalProducts)
-      .where(eq(schema.rentalProducts.active, true));
+    }).from(schema.rentalProducts).where(eq(schema.rentalProducts.active, true));
 
     const albumSet = new Set(albumIds);
     const trackSet = new Set(trackIds);
@@ -171,19 +153,17 @@ async function getPublicRentalPlans(albumIds, trackIds) {
       })
       .filter(Boolean);
   } catch (err) {
-    console.warn('[public] rentalProducts indisponíveis, usando content:', err.message);
-    return []; // fallback feito abaixo
+    console.warn('[public] rentalProducts indisponíveis:', err.message);
+    return [];
   }
 }
 
-/* ─── Handler ────────────────────────────────────────────── */
-
+/* ─── Handler Principal ───────────────────────────────────── */
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  // ❌ Removido: Access-Control-Allow-Origin: *
 
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
@@ -198,27 +178,27 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // ── 1. Faixa individual
+    // ── 1. Faixa individual ────────────────────────────────
     if (trackId) {
-      if (!validUuid(trackId)) {
-        return sendJson(res, 400, { ok: false, error: 'INVALID_TRACK_ID' });
-      }
+      if (!validUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'INVALID_TRACK_ID' });
 
       const [track] = await db.select({
         id: schema.tracks.id,
         albumId: schema.tracks.albumId,
         title: schema.tracks.title,
         lyrics: schema.tracks.lyrics,
-        status: schema.tracks.status
+        status: schema.tracks.status,
+        published: schema.tracks.published
       }).from(schema.tracks)
-        .where(and(eq(schema.tracks.id, trackId), eq(schema.tracks.status, 'PUBLISHED')))
-        .limit(1);
+        .where(and(
+          eq(schema.tracks.id, trackId),
+          or(eq(schema.tracks.status, 'PUBLISHED'), eq(schema.tracks.published, true))
+        )).limit(1);
 
       if (!track) return sendJson(res, 404, { ok: false, error: 'TRACK_NOT_FOUND' });
 
-      const [album] = await selectAlbumsPublic().then(rows =>
-        rows.filter(a => a.id === track.albumId).slice(0, 1)
-      );
+      const albums = await selectAlbumsPublic();
+      const album = albums.find(a => a.id === track.albumId);
 
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
@@ -236,11 +216,9 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ── 2. Álbum individual
+    // ── 2. Álbum individual ────────────────────────────────
     if (albumId) {
-      if (!validUuid(albumId)) {
-        return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
-      }
+      if (!validUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
 
       const albums = await selectAlbumsPublic();
       const album = albums.find(a => a.id === albumId);
@@ -248,16 +226,14 @@ module.exports = async (req, res) => {
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
       const tracks = await selectTracksPublic([album.id]);
-
       return sendJson(res, 200, { ok: true, album, tracks });
     }
 
-    // ── 3. Catálogo completo
+    // ── 3. Home: catálogo completo ─────────────────────────
     const albums = await selectAlbumsPublic();
     const albumIds = albums.map(a => a.id);
-    const tracks = albumIds.length ? await selectTracksPublic(albumIds) : [];
+    const tracks = await selectTracksPublic(albumIds);
 
-    // Aninha tracks
     const byAlbum = new Map();
     for (const t of tracks) {
       if (!byAlbum.has(t.albumId)) byAlbum.set(t.albumId, []);
@@ -272,10 +248,8 @@ module.exports = async (req, res) => {
     let content = {};
     try {
       const [row] = await db.select({ data: schema.siteContent.data })
-        .from(schema.siteContent)
-        .where(eq(schema.siteContent.key, 'default'))
-        .limit(1);
-      if (row?.data) content = row.data;
+        .from(schema.siteContent).where(eq(schema.siteContent.key, 'default')).limit(1);
+      if (row && row.data) content = row.data;
     } catch (err) {
       console.warn('[public] site_content indisponível:', err.message);
     }
@@ -283,12 +257,11 @@ module.exports = async (req, res) => {
     // Planos e alugueis
     const plans = await getPublicPlans();
     let rentalPlans = await getPublicRentalPlans(albumIds, tracks.map(t => t.id));
-
-    // Fallback: se rentalProducts estiver vazio, usa o content
     if (!rentalPlans.length && Array.isArray(content.rentalPlans)) {
       rentalPlans = content.rentalPlans;
     }
 
+    // ── 4. Retorno final ───────────────────────────────────
     return sendJson(res, 200, {
       ok: true,
       content,
@@ -297,6 +270,7 @@ module.exports = async (req, res) => {
       plans,
       rentalPlans
     });
+
   } catch (error) {
     console.error('[public] Erro:', error.code || error.message);
     return sendJson(res, 500, {
