@@ -9,7 +9,7 @@
    - Cookies __Host- em produção (HttpOnly + SameSite=Lax)
    - CSRF: Origin check em métodos mutantes
    - Senhas com scrypt (nativo do Node)
-   - Sessão via JWT (7 dias)
+   - Sessão via access token (1h) + refresh token (7d)
    - Rate limit por IP + e-mail (Redis/KV)
    - Auditoria em todas as ações
    ============================================================ */
@@ -20,12 +20,19 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { eq, and, gt } = require('drizzle-orm');
 
-const { users, rentals, tracks } = require('../src/schema.js');
+const {
+  users,
+  rentals,
+  tracks,
+  refreshTokens
+} = require('../src/schema.js');
 
 const {
   sendJson,
   setAuthCookies,
   clearAuthCookies,
+  getAccessToken,
+  getRefreshToken,
   getPlanForUserDetailed,
   VALID_PLANS,
   checkAndIncrement,
@@ -33,6 +40,8 @@ const {
   audit,
   checkOrigin,
 } = require('./_lib');
+
+const { db, sql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Constantes
@@ -42,6 +51,7 @@ const MIN_NAME_LENGTH = 2;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_PASSWORD_LENGTH = 256;
 const MIN_PASSWORD_LENGTH = 8;
+const MAX_REFRESH_TOKENS_PER_USER = 5;
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const NAME_REGEX = /^[\p{L}\p{N}\s.'-]+$/u;
@@ -53,18 +63,20 @@ const COMMON_PASSWORDS = new Set([
 ]);
 
 const MAX_EMAILS_PER_HOUR = 3;
-const MAX_LOGIN_ATTEMPTS_PER_IP = 1000;
-const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 10;
-const MAX_SIGNUPS_PER_IP = 1000;
+const MAX_LOGIN_ATTEMPTS_PER_IP = 60;
+const MAX_LOGIN_ATTEMPTS_PER_EMAIL = 8;
+const MAX_SIGNUPS_PER_IP = 10;
 const MIN_RESPONSE_MS = 350;
 
 const MAX_RENTALS = 100;
+
+const ACCESS_TTL = '1h';
+const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const GENERIC_AUTH_ERROR = 'E-mail ou senha incorretos.';
 const GENERIC_SIGNUP_ERROR = 'Não foi possível concluir o cadastro.';
 const GENERIC_RATE_ERROR = 'Muitas tentativas. Tente novamente mais tarde.';
 const GENERIC_ERROR = 'Serviço indisponível.';
-const { db, sql } = require('./_db');
 
 // ─────────────────────────────────────────────────────────────
 // Handler
@@ -86,7 +98,7 @@ module.exports = async function handler(req, res) {
     if (!checkOrigin(req)) {
       console.warn('[auth] Origin rejeitada:', {
         action, method,
-        origin: req.headers.origin || req.headers.referer || null
+        origin: req.headers.origin || null
       });
       return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
     }
@@ -120,8 +132,11 @@ module.exports = async function handler(req, res) {
 function hashPassword(password) {
   return new Promise((resolve, reject) => {
     const salt = crypto.randomBytes(16).toString('hex');
+
     crypto.scrypt(password, salt, 64, (err, derivedKey) => {
-      if (err) reject(err);
+      if (err) {
+        return reject(err);
+      }
       resolve(`scrypt$${salt}$${derivedKey.toString('hex')}`);
     });
   });
@@ -130,12 +145,34 @@ function hashPassword(password) {
 function verifyPassword(password, storedHash) {
   return new Promise((resolve) => {
     try {
-      const [algo, salt, hash] = String(storedHash).split('$');
-      if (algo !== 'scrypt') return resolve(false);
+      if (typeof storedHash !== 'string') return resolve(false);
+
+      const parts = storedHash.split('$');
+      if (parts.length !== 3) return resolve(false);
+
+      const [algo, salt, hash] = parts;
+
+      if (
+        algo !== 'scrypt' ||
+        !/^[a-f0-9]{32}$/.test(salt) ||
+        !/^[a-f0-9]{128}$/.test(hash)
+      ) {
+        return resolve(false);
+      }
+
       const expected = Buffer.from(hash, 'hex');
+
       crypto.scrypt(password, salt, expected.length, (err, derived) => {
         if (err) return resolve(false);
-        resolve(derived.length === expected.length && crypto.timingSafeEqual(derived, expected));
+
+        try {
+          resolve(
+            derived.length === expected.length &&
+            crypto.timingSafeEqual(derived, expected)
+          );
+        } catch {
+          resolve(false);
+        }
       });
     } catch {
       resolve(false);
@@ -144,26 +181,75 @@ function verifyPassword(password, storedHash) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// JWT
+// JWT — access + refresh
 // ─────────────────────────────────────────────────────────────
-function signToken(user) {
+function signAccessToken(user) {
   const secret = String(process.env.JWT_SECRET || '').trim();
-  if (!secret) throw new Error('JWT_SECRET não configurado.');
+  if (!secret || secret.length < 32) {
+    throw new Error('JWT_SECRET ausente ou muito curto.');
+  }
+
   return jwt.sign(
-    { id: user.id, email: user.email, role: user.role },
+    {
+      id: String(user.id),
+      email: user.email,
+      role: user.role
+    },
     secret,
-    { expiresIn: '7d' }
+    {
+      algorithm: 'HS256',
+      expiresIn: ACCESS_TTL
+    }
   );
 }
 
-function verifyToken(token) {
+function verifyAccessToken(token) {
   try {
     const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret) return null;
-    return jwt.verify(token, secret);
+    if (!secret || secret.length < 32) return null;
+
+    const payload = jwt.verify(token, secret, {
+      algorithms: ['HS256']
+    });
+
+    if (!payload || typeof payload.id !== 'string') return null;
+    return payload;
   } catch {
     return null;
   }
+}
+
+async function createRefreshToken(userId) {
+  const token = crypto.randomBytes(48).toString('base64url');
+  const tokenHash = crypto
+    .createHash('sha256')
+    .update(token)
+    .digest('hex');
+
+  const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+
+  await db.insert(refreshTokens).values({
+    id: crypto.randomUUID(),
+    userId,
+    tokenHash,
+    expiresAt,
+    createdAt: new Date().toISOString()
+  });
+
+  // Limita a quantidade de refresh tokens por usuário.
+  const rows = await db.select({ id: refreshTokens.id })
+    .from(refreshTokens)
+    .where(eq(refreshTokens.userId, userId))
+    .orderBy(refreshTokens.createdAt);
+
+  if (rows.length > MAX_REFRESH_TOKENS_PER_USER) {
+    const removeCount = rows.length - MAX_REFRESH_TOKENS_PER_USER;
+    for (let i = 0; i < removeCount; i++) {
+      await db.delete(refreshTokens).where(eq(refreshTokens.id, rows[i].id));
+    }
+  }
+
+  return token;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -177,19 +263,26 @@ async function handleLogin(req, res) {
 
   const email = normalizeEmail(body.email);
   const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+    typeof body.password === 'string' ? body.password : '';
 
-  if (!EMAIL_REGEX.test(email) || password.length < MIN_PASSWORD_LENGTH) {
+  if (!EMAIL_REGEX.test(email)) {
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
     await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_input' });
     return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
   }
 
+  if (
+    password.length < MIN_PASSWORD_LENGTH ||
+    password.length > MAX_PASSWORD_LENGTH
+  ) {
+    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
+    await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_password_length' });
+    return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
+  }
+
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000),
-    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000)
+    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_ATTEMPTS_PER_IP, 15 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_ATTEMPTS_PER_EMAIL, 15 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -220,8 +313,13 @@ async function handleLogin(req, res) {
 
     await resetBucket(`login:email:${email}`).catch(() => {});
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const accessToken = signAccessToken(user);
+    const refreshToken = await createRefreshToken(user.id);
+
+    setAuthCookies(res, {
+      access_token: accessToken,
+      refresh_token: refreshToken
+    });
 
     let plan = 'free';
     try {
@@ -265,9 +363,7 @@ async function handleSignup(req, res) {
   const name = normalizeName(body.name);
   const email = normalizeEmail(body.email);
   const password =
-    typeof body.password === 'string'
-      ? body.password.slice(0, MAX_PASSWORD_LENGTH)
-      : '';
+    typeof body.password === 'string' ? body.password : '';
 
   if (
     !isValidName(name) ||
@@ -279,8 +375,8 @@ async function handleSignup(req, res) {
   }
 
   const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000),
-    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000)
+    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUPS_PER_IP, 60 * 60 * 1000, { failClosed: true }),
+    checkAndIncrement(`signup:email:${email}`, MAX_EMAILS_PER_HOUR, 60 * 60 * 1000, { failClosed: true })
   ]);
 
   if (ipRate.limited || emailRate.limited) {
@@ -296,19 +392,25 @@ async function handleSignup(req, res) {
 
     if (existing) {
       await audit('signup', { email, ip, userAgent, success: false, reason: 'email_exists' });
-      return sendJson(res, 400, { ok: false, error: 'Este e-mail já está cadastrado.' });
+      // Mensagem genérica para não revelar cadastro
+      return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
     }
 
     const passwordHash = await hashPassword(password);
 
     const [user] = await sql`
-    INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
-    VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
-    RETURNING id, email, name, role, created_at, updated_at
-  `;
+      INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
+      VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
+      RETURNING id, email, name, role, created_at, updated_at
+    `;
 
-    const token = signToken(user);
-    setAuthCookies(res, { access_token: token });
+    const accessToken = signAccessToken(user);
+    const refreshToken = await createRefreshToken(user.id);
+
+    setAuthCookies(res, {
+      access_token: accessToken,
+      refresh_token: refreshToken
+    });
 
     await audit('signup', {
       email, ip, userAgent, userId: user.id, success: true, reason: 'authenticated'
@@ -340,6 +442,21 @@ async function handleLogout(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
 
+  // Revoga o refresh token no banco, se existir
+  try {
+    const refreshToken = getRefreshToken(req);
+    if (refreshToken) {
+      const tokenHash = crypto
+        .createHash('sha256')
+        .update(refreshToken)
+        .digest('hex');
+
+      await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, tokenHash));
+    }
+  } catch (err) {
+    console.warn('[auth/logout] falha ao revogar refresh token:', err.message);
+  }
+
   try {
     clearAuthCookies(res);
   } catch (err) {
@@ -358,7 +475,7 @@ async function handleLogout(req, res) {
 // ─────────────────────────────────────────────────────────────
 async function handleMe(req, res) {
   const method = (req.method || 'GET').toUpperCase();
-  const token = getAccessTokenFromCookie(req);
+  const token = getAccessToken(req);
 
   if (!token) {
     if (method === 'HEAD') {
@@ -368,7 +485,7 @@ async function handleMe(req, res) {
     return sendJson(res, 401, { ok: false });
   }
 
-  const payload = verifyToken(token);
+  const payload = verifyAccessToken(token);
   if (!payload) {
     if (method === 'HEAD') {
       res.status(401);
@@ -434,41 +551,20 @@ async function handleMe(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers de cookie
-// ─────────────────────────────────────────────────────────────
-function getAccessTokenFromCookie(req) {
-  const header = req.headers.cookie || req.headers.Cookie || '';
-  const cookies = {};
-  String(header).split(';').forEach((item) => {
-    const i = item.indexOf('=');
-    if (i < 0) return;
-    const k = item.slice(0, i).trim();
-    const v = item.slice(i + 1).trim();
-    if (k) {
-      try { cookies[k] = decodeURIComponent(v); }
-      catch { cookies[k] = v; }
-    }
-  });
-
-  const IS_PROD = process.env.NODE_ENV === 'production';
-  const name = IS_PROD ? '__Host-jm_auth_access' : 'jm_auth_access';
-  return cookies[name] || '';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Rentals
+// Rentals — trata faixa e álbum
 // ─────────────────────────────────────────────────────────────
 async function getActiveRentals(userId) {
   const nowIso = new Date().toISOString();
 
-  const rows = await db.select({
+  // Aluguel de faixa
+  const trackRows = await db.select({
     trackId: rentals.trackId,
     expiresAt: rentals.expiresAt,
     albumId: tracks.albumId,
-    trackNumber: tracks.trackNumber,
+    trackNumber: tracks.trackNumber
   })
   .from(rentals)
-  .leftJoin(tracks, eq(rentals.trackId, tracks.id))
+  .innerJoin(tracks, eq(rentals.trackId, tracks.id))
   .where(and(
     eq(rentals.userId, userId),
     eq(rentals.status, 'ACTIVE'),
@@ -476,15 +572,34 @@ async function getActiveRentals(userId) {
   ))
   .limit(MAX_RENTALS);
 
-  return rows
-    .map((r) => {
-      if (!r.albumId || r.trackNumber == null) return null;
-      return {
-        trackKey: `${r.albumId}:${r.trackNumber}`,
-        expiresAt: r.expiresAt,
-      };
-    })
-    .filter(Boolean);
+  // Aluguel de álbum
+  const albumRows = await db.select({
+    albumId: rentals.albumId,
+    expiresAt: rentals.expiresAt
+  })
+  .from(rentals)
+  .where(and(
+    eq(rentals.userId, userId),
+    eq(rentals.status, 'ACTIVE'),
+    gt(rentals.expiresAt, nowIso)
+  ))
+  .limit(MAX_RENTALS);
+
+  const trackKeys = trackRows
+    .filter(r => r.albumId != null && r.trackNumber != null)
+    .map(r => ({
+      trackKey: `${r.albumId}:${r.trackNumber}`,
+      expiresAt: r.expiresAt
+    }));
+
+  const albumKeys = albumRows
+    .filter(r => r.albumId != null)
+    .map(r => ({
+      albumId: r.albumId,
+      expiresAt: r.expiresAt
+    }));
+
+  return [...trackKeys, ...albumKeys];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -545,6 +660,7 @@ function isValidName(name) {
 }
 
 function isValidPassword(password) {
+  if (typeof password !== 'string') return false;
   if (password.length < MIN_PASSWORD_LENGTH) return false;
   if (password.length > MAX_PASSWORD_LENGTH) return false;
   if (COMMON_PASSWORDS.has(password.toLowerCase())) return false;
@@ -558,16 +674,17 @@ function isValidPassword(password) {
 function clientIp(req) {
   const h = req.headers || {};
   const trusted = h['x-vercel-forwarded-for'] || h['x-real-ip'];
-  if (trusted) return String(trusted).split(',')[0].trim();
+  if (trusted) return String(trusted).split(',')[0].trim().slice(0, 128);
 
   if (process.env.NODE_ENV !== 'production') {
     const fwd = h['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
+    if (fwd) return String(fwd).split(',')[0].trim().slice(0, 128);
   }
 
   return String((req.socket && req.socket.remoteAddress) || 'unknown')
     .split(',')[0]
-    .trim();
+    .trim()
+    .slice(0, 128);
 }
 
 function methodNotAllowed(res, allow) {
