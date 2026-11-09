@@ -1,28 +1,11 @@
 /* ============================================================
-   js/admin/editors/plans.js — Editor de planos de assinatura
+   js/admin/editors/plans.js — Editor de Planos (v2 Corrigida)
    ------------------------------------------------------------
-   ⚠️ IMPORTANTE — Preços:
-     • Este editor NÃO define preços.
-     • Os preços vivem no servidor (envs do Mercado Pago):
-         - MP_PREMIUM_MONTHLY_PRICE
-         - MP_PREMIUM_ANNUAL_PRICE
-     • O frontend lê de /api/plans e usa apenas para exibição.
-     • O backend SEMPRE cobra o preço da env, nunca do que o
-       frontend enviar.
-
-   Este editor controla APENAS:
-     • nome do plano
-     • descrição curta
-     • badge ("Recomendado", etc.)
-     • CTA do botão
-     • lista de features (texto + ok/sem ok)
-     • flags "featured" e "disabled"
-
-   🛡️ BLINDAGENS:
-     • IDs são canônicos e imutáveis (free / premium / anual)
-     • Sufixos são fixos por plano (/mês, /ano)
-     • Whitelist de campos no save (nada de price/stripePriceId)
-     • Estrutura sempre garantida (3 planos, mesmo se vazios)
+   - Separação entre plano VISUAL (site_content) e COMERCIAL (banco)
+   - Vinculação do ID visual ao UUID do plano no banco
+   - Proteção contra perda de dados na renderização
+   - Validação de limites de texto e quantidade de recursos
+   - Aviso correto sobre a origem dos preços (banco/env)
    ============================================================ */
 
 import { AdminState, markDirty } from '../state.js';
@@ -35,37 +18,33 @@ import { toast } from '../ui/toast.js';
 // ─────────────────────────────────────────────────────────────
 const VALID_PLAN_IDS = new Set(['free', 'premium', 'anual']);
 
-/**
- * Sufixos fixos por plano — não editáveis pelo admin.
- * Refletem o intervalo cobrado pelo backend (envs MP_PREMIUM_*).
- */
 const PLAN_SUFFIXES = {
   free: '',
   premium: '/mês',
   anual: '/ano'
 };
 
-/**
- * Campos que o editor pode gravar. Tudo mais é descartado.
- */
 const ALLOWED_PLAN_FIELDS = new Set([
   'id', 'name', 'desc', 'badge', 'cta', 'suffix',
-  'features', 'featured', 'disabled'
+  'features', 'featured', 'disabled', 'dbPlanId' // ← Novo campo para linkar ao banco
 ]);
 
-/**
- * Campos proibidos — nunca podem existir no plano.
- * Se aparecerem, são removidos antes de gravar.
- */
 const FORBIDDEN_PLAN_FIELDS = new Set([
   'price', 'priceCents', 'stripePriceId',
   'mpPreferenceId', 'amount', 'currency'
 ]);
 
-/**
- * Definições canônicas dos 3 planos.
- * Usadas como fallback quando o admin apaga ou corrompe.
- */
+// Limites de texto
+const LIMITS = {
+  name: 80,
+  desc: 300,
+  badge: 40,
+  cta: 60,
+  featureText: 160,
+  maxFeatures: 20
+};
+
+// Definições canônicas dos 3 planos
 const CANONICAL_PLANS = [
   {
     id: 'free',
@@ -78,11 +57,11 @@ const CANONICAL_PLANS = [
       { text: 'Prévias de 30s de todas as faixas', ok: true },
       { text: 'Acesso à discografia completa', ok: true },
       { text: 'Aluguel de faixas individuais', ok: true },
-      { text: 'Faixas completas na assinatura', ok: false },
-      { text: 'Downloads ilimitados', ok: false }
+      { text: 'Faixas completas na assinatura', ok: false }
     ],
     cta: 'Plano atual',
-    disabled: true
+    disabled: true,
+    dbPlanId: '' // Preenchido pelo admin
   },
   {
     id: 'premium',
@@ -94,12 +73,12 @@ const CANONICAL_PLANS = [
     features: [
       { text: 'Toda a discografia desbloqueada', ok: true },
       { text: 'Áudio em alta qualidade', ok: true },
-      { text: 'Downloads ilimitados', ok: true },
       { text: 'Aluguel de faixas incluído', ok: true },
       { text: 'Cancele quando quiser', ok: true }
     ],
     cta: 'Assinar Premium',
-    disabled: false
+    disabled: false,
+    dbPlanId: ''
   },
   {
     id: 'anual',
@@ -116,19 +95,18 @@ const CANONICAL_PLANS = [
       { text: 'Badge de apoiador oficial', ok: true }
     ],
     cta: 'Assinar Anual',
-    disabled: false
+    disabled: false,
+    dbPlanId: ''
   }
 ];
 
 // ─────────────────────────────────────────────────────────────
-// Normalização: garante 3 planos canônicos, IDs imutáveis,
-// sufixos fixos, sem campos proibidos
+// Normalização Segura (Não Destrutiva)
 // ─────────────────────────────────────────────────────────────
 function ensureCanonicalPlans(rawPlans) {
   const input = Array.isArray(rawPlans) ? rawPlans : [];
-
-  // Indexa por ID (aceita apenas IDs canônicos)
   const byId = new Map();
+
   for (const p of input) {
     if (!p || typeof p !== 'object') continue;
     const id = String(p.id || '').toLowerCase().trim();
@@ -136,51 +114,26 @@ function ensureCanonicalPlans(rawPlans) {
     byId.set(id, p);
   }
 
-  // Monta os 3 canônicos, mesclando customizações existentes
   return CANONICAL_PLANS.map((def) => {
     const existing = byId.get(def.id) || {};
     const merged = {};
 
-    // ID sempre canônico
     merged.id = def.id;
-
-    // Textos editáveis (fallback para o default)
-    merged.name = typeof existing.name === 'string' && existing.name.trim()
-      ? existing.name.trim()
-      : def.name;
-    merged.desc = typeof existing.desc === 'string'
-      ? existing.desc
-      : def.desc;
-    merged.badge = typeof existing.badge === 'string' && existing.badge.trim()
-      ? existing.badge.trim()
-      : def.badge;
-    merged.cta = typeof existing.cta === 'string' && existing.cta.trim()
-      ? existing.cta.trim()
-      : def.cta;
-
-    // Sufixo sempre fixo (ignora o que estiver no existing)
+    merged.name = typeof existing.name === 'string' && existing.name.trim() ? existing.name.trim().slice(0, LIMITS.name) : def.name;
+    merged.desc = typeof existing.desc === 'string' ? existing.desc.slice(0, LIMITS.desc) : def.desc;
+    merged.badge = typeof existing.badge === 'string' && existing.badge.trim() ? existing.badge.trim().slice(0, LIMITS.badge) : def.badge;
+    merged.cta = typeof existing.cta === 'string' && existing.cta.trim() ? existing.cta.trim().slice(0, LIMITS.cta) : def.cta;
     merged.suffix = PLAN_SUFFIXES[def.id] || '';
+    merged.featured = typeof existing.featured === 'boolean' ? existing.featured : def.featured;
+    merged.disabled = typeof existing.disabled === 'boolean' ? existing.disabled : def.disabled;
+    merged.dbPlanId = typeof existing.dbPlanId === 'string' ? existing.dbPlanId.trim() : '';
 
-    // Flags booleanas
-    merged.featured = typeof existing.featured === 'boolean'
-      ? existing.featured
-      : def.featured;
-    merged.disabled = typeof existing.disabled === 'boolean'
-      ? existing.disabled
-      : def.disabled;
-
-    // Features — normaliza para {text: string, ok: boolean}
-    const rawFeatures = Array.isArray(existing.features)
-      ? existing.features
-      : def.features;
+    const rawFeatures = Array.isArray(existing.features) ? existing.features : def.features;
     merged.features = rawFeatures
       .filter((f) => f && typeof f.text === 'string')
-      .map((f) => ({
-        text: String(f.text),
-        ok: f.ok !== false
-      }));
+      .map((f) => ({ text: String(f.text).slice(0, LIMITS.featureText), ok: f.ok !== false }))
+      .slice(0, LIMITS.maxFeatures);
 
-    // Se ficou vazio, usa os defaults
     if (!merged.features.length) {
       merged.features = JSON.parse(JSON.stringify(def.features));
     }
@@ -190,27 +143,21 @@ function ensureCanonicalPlans(rawPlans) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Sanitização no save: whitelist + remoção de campos proibidos
+// Sanitização
 // ─────────────────────────────────────────────────────────────
 function sanitizePlan(plan) {
   const clean = {};
-
   for (const key of Object.keys(plan || {})) {
-    if (ALLOWED_PLAN_FIELDS.has(key)) {
-      clean[key] = plan[key];
-    }
+    if (ALLOWED_PLAN_FIELDS.has(key)) clean[key] = plan[key];
   }
+  for (const key of FORBIDDEN_PLAN_FIELDS) delete clean[key];
 
-  for (const key of FORBIDDEN_PLAN_FIELDS) {
-    delete clean[key];
-  }
-
-  // Reforça tipos
   if (clean.id) clean.id = String(clean.id).toLowerCase().trim();
   if (clean.features && Array.isArray(clean.features)) {
     clean.features = clean.features
       .filter((f) => f && typeof f.text === 'string')
-      .map((f) => ({ text: String(f.text), ok: f.ok !== false }));
+      .map((f) => ({ text: String(f.text).slice(0, LIMITS.featureText), ok: f.ok !== false }))
+      .slice(0, LIMITS.maxFeatures);
   }
 
   return clean;
@@ -223,136 +170,133 @@ export function renderPlansEditor(content = AdminState.content) {
   const wrap = document.getElementById('plansEditor');
   if (!wrap) return;
 
-  // Guard: garante estrutura mínima
+  if (!content || typeof content !== 'object') {
+    wrap.innerHTML = '<p class="admin-error-box">Conteúdo inválido.</p>';
+    return;
+  }
+
   if (!content.planos) content.planos = {};
   if (!Array.isArray(content.planos.plans)) content.planos.plans = [];
 
-  // 🛡️ BLINDAGEM 1: força 3 planos canônicos
+  // A normalização NÃO apaga dados existentes, apenas mescla
   content.planos.plans = ensureCanonicalPlans(content.planos.plans);
   const plans = content.planos.plans;
 
-  // Cabeçalho
   const header = `
-    <div class="plans-editor__header">
-      <span class="plans-editor__count">
-        ${plans.length} plano${plans.length === 1 ? '' : 's'}
-      </span>
+    <div class="plans-editor__header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <span>${plans.length} planos visuais</span>
     </div>
   `;
 
-  // Lista de planos
   const listHTML = plans.map((p, i) => {
-    const featured = p.featured
-      ? ' · <span style="color:var(--accent);">★ destaque</span>'
-      : '';
-    const disabled = p.disabled
-      ? ' · <span style="color:var(--text-dim);">desabilitado</span>'
-      : '';
+    const featured = p.featured ? ' · <span style="color:var(--accent);">★ destaque</span>' : '';
+    const disabled = p.disabled ? ' · <span style="color:var(--text-dim);">desabilitado</span>' : '';
+    const dbInfo = p.dbPlanId 
+      ? `<span style="color:var(--success,#4ade80);font-size:0.75rem;">🔗 Vinculado ao banco (ID: ${esc(p.dbPlanId)})</span>`
+      : `<span style="color:var(--warning,#f0a100);font-size:0.75rem;">⚠️ Não vinculado ao banco comercial</span>`;
 
     return `
-      <div class="track-editor">
-        <div class="track-head">
-          <strong>
-            ${esc(p.name || 'Plano')}
-            ${p.badge ? `<span class="hint" style="color:var(--accent);"> · ${esc(p.badge)}</span>` : ''}
-          </strong>
-          <button class="btn btn-ghost btn-sm"
-                  data-action="edit"
-                  data-i="${i}">✏ Editar</button>
+      <div class="track-editor" style="border:1px solid #333;padding:1rem;margin-bottom:0.8rem;border-radius:8px;">
+        <div class="track-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <strong>${esc(p.name || 'Plano')}</strong>
+            ${p.badge ? `<span class="hint" style="color:var(--accent);margin-left:8px;">${esc(p.badge)}</span>` : ''}
+          </div>
+          <button class="btn btn-ghost btn-sm" data-action="edit" data-i="${i}">✏ Editar</button>
         </div>
-        <div style="color:var(--text-dim);font-size:0.8rem;">
-          <code>${esc(p.id || '?')}</code>
-          · sufixo <code>${esc(p.suffix || '—')}</code>
-          ${featured}${disabled}
+        <div style="color:var(--text-dim);font-size:0.8rem;margin-top:0.5rem;">
+          <code>${esc(p.id)}</code> · sufixo <code>${esc(p.suffix)}</code> ${featured}${disabled}
         </div>
-        ${p.desc ? `<div style="color:var(--text-dim);font-size:0.8rem;margin-top:0.3rem;">${esc(p.desc)}</div>` : ''}
+        <div style="margin-top:0.5rem;">${dbInfo}</div>
       </div>`;
   }).join('');
 
-  // Aviso permanente sobre preços
   const warnHTML = `
-    <p class="plans-pricing-warn hint" style="color:var(--text-dim);font-size:0.75rem;margin-top:1rem;padding:0.7rem;background:rgba(212,175,55,0.05);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;line-height:1.5;">
-      <strong style="color:var(--accent);">🔒 Preços não são editáveis aqui.</strong>
-      O valor cobrado vem das variáveis de ambiente no servidor
-      (<code>MP_PREMIUM_MONTHLY_PRICE</code> e <code>MP_PREMIUM_ANNUAL_PRICE</code>).
-      Este editor controla apenas os <em>textos</em> dos planos.
-    </p>
+    <div style="margin-top:1.5rem;padding:1rem;background:rgba(212,175,55,0.05);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;">
+      <strong style="color:var(--accent);">⚠️ Preços não são editáveis aqui.</strong>
+      <p style="margin:0.5rem 0 0 0;font-size:0.8rem;color:var(--text-dim);line-height:1.4;">
+        Os valores cobrados vêm da tabela <code>plans</code> no banco de dados (ou das variáveis de ambiente no servidor). 
+        Este editor controla apenas a <strong>apresentação visual</strong> (textos, badges e recursos).
+        Certifique-se de vincular o ID do banco (UUID) para que o checkout do Mercado Pago funcione corretamente.
+      </p>
+    </div>
   `;
 
   wrap.innerHTML = `${header}${listHTML}${warnHTML}`;
 
-  // Bind dos botões "Editar"
   wrap.querySelectorAll('[data-action="edit"]').forEach((b) => {
-    b.addEventListener('click', () => openPlanModal(Number(b.dataset.i)));
+    b.addEventListener('click', () => openPlanModal(content, Number(b.dataset.i)));
   });
 }
 
 // ─────────────────────────────────────────────────────────────
 // Modal de edição
 // ─────────────────────────────────────────────────────────────
-function openPlanModal(i) {
-  const content = AdminState.content;
+function openPlanModal(content, i) {
   const plan = content.planos.plans[i];
   if (!plan) return;
 
-  // Trabalha com uma cópia para não mutar o modelo até salvar
   const cloned = JSON.parse(JSON.stringify(plan));
-
-  // Sufixo canônico (não editável)
   const canonicalSuffix = PLAN_SUFFIXES[plan.id] || '';
 
   openAdminModal(`
-    <h3>Editar plano <span style="color:var(--accent);">${esc(plan.name || '')}</span></h3>
+    <h3>Editar plano <span style="color:var(--accent);">${esc(plan.name)}</span></h3>
 
     <div class="form-row">
       <div class="form-group">
-        <label>ID (não editável)</label>
-        <input type="text" value="${esc(cloned.id || '')}" disabled>
+        <label>ID Visual (não editável)</label>
+        <input type="text" value="${esc(cloned.id)}" disabled>
       </div>
       <div class="form-group">
-        <label>Nome</label>
-        <input type="text" id="pmName" value="${esc(cloned.name || '')}">
+        <label>UUID do Plano no Banco (Comercial)</label>
+        <input type="text" id="pmDbPlanId" value="${esc(cloned.dbPlanId || '')}" placeholder="Ex: 550e8400-e29b-41d4-a716-446655440000">
+        <small class="hint" style="color:var(--text-dim);font-size:0.7rem;margin-top:4px;display:block;">
+          Obrigatório para o botão de assinatura funcionar.
+        </small>
       </div>
     </div>
 
-    <div class="form-row-3">
+    <div class="form-row">
       <div class="form-group">
-        <label>Sufixo (fixo)</label>
-        <input type="text" value="${esc(canonicalSuffix || '—')}" disabled>
+        <label>Nome</label>
+        <input type="text" id="pmName" maxlength="${LIMITS.name}" value="${esc(cloned.name)}">
       </div>
       <div class="form-group">
-        <label>Badge</label>
-        <input type="text" id="pmBadge" value="${esc(cloned.badge || '')}">
+        <label>Sufixo (fixo)</label>
+        <input type="text" value="${esc(canonicalSuffix)}" disabled>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Badge (ex: Recomendado)</label>
+        <input type="text" id="pmBadge" maxlength="${LIMITS.badge}" value="${esc(cloned.badge || '')}">
       </div>
       <div class="form-group">
         <label>Texto do botão (CTA)</label>
-        <input type="text" id="pmCta" value="${esc(cloned.cta || '')}">
+        <input type="text" id="pmCta" maxlength="${LIMITS.cta}" value="${esc(cloned.cta)}">
       </div>
     </div>
 
     <div class="form-group">
       <label>Descrição</label>
-      <input type="text" id="pmDesc" value="${esc(cloned.desc || '')}">
+      <input type="text" id="pmDesc" maxlength="${LIMITS.desc}" value="${esc(cloned.desc)}">
     </div>
 
-    <div class="form-group">
-      <label><input type="checkbox" id="pmFeatured" ${cloned.featured ? 'checked' : ''}> Destaque visual</label>
-    </div>
-    <div class="form-group">
-      <label><input type="checkbox" id="pmDisabled" ${cloned.disabled ? 'checked' : ''}> Botão desabilitado</label>
+    <div class="form-row">
+      <div class="form-group">
+        <label><input type="checkbox" id="pmFeatured" ${cloned.featured ? 'checked' : ''}> Destaque visual</label>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="pmDisabled" ${cloned.disabled ? 'checked' : ''}> Botão desabilitado</label>
+      </div>
     </div>
 
-    <h3 style="margin-top:1rem;">Recursos</h3>
-    <div id="pmFeatures"></div>
-    <button class="btn btn-outline btn-sm" id="pmAddFeature" style="margin-top:0.5rem;">
+    <h3 style="margin-top:1.5rem;font-size:1rem;">Recursos (máx ${LIMITS.maxFeatures})</h3>
+    <div id="pmFeatures" style="margin-top:0.5rem;"></div>
+    <button class="btn btn-outline btn-sm" id="pmAddFeature" style="margin-top:0.5rem;" ${cloned.features.length >= LIMITS.maxFeatures ? 'disabled' : ''}>
       + Adicionar recurso
     </button>
-
-    <p class="hint" style="margin-top:1rem;color:var(--text-dim);font-size:0.8rem;line-height:1.5;padding:0.7rem;background:rgba(212,175,55,0.05);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;">
-      <strong style="color:var(--accent);">🔒 Preço:</strong>
-      o valor cobrado vem do servidor (<code>MP_PREMIUM_MONTHLY_PRICE</code>
-      / <code>MP_PREMIUM_ANNUAL_PRICE</code>), nunca deste editor.
-    </p>
 
     <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
       <button class="btn btn-outline btn-sm" id="pmCancel">Cancelar</button>
@@ -360,31 +304,24 @@ function openPlanModal(i) {
     </div>
   `);
 
-  // ── Features
   const featuresWrap = document.getElementById('pmFeatures');
+  const addFeatureBtn = document.getElementById('pmAddFeature');
 
   const renderFeatures = () => {
     featuresWrap.innerHTML = cloned.features.map((f, fi) => `
-      <div class="track-editor">
-        <div class="track-head">
-          <strong>Recurso ${fi + 1}</strong>
-          <button class="btn btn-ghost btn-sm"
-                  data-action="remove-feature"
-                  data-fi="${fi}">🗑</button>
+      <div class="track-editor" style="border:1px solid #333;padding:0.8rem;margin-bottom:0.5rem;border-radius:6px;">
+        <div class="track-head" style="display:flex;justify-content:space-between;margin-bottom:0.5rem;">
+          <strong style="font-size:0.85rem;">Recurso ${fi + 1}</strong>
+          <button class="btn btn-ghost btn-sm" data-action="remove-feature" data-fi="${fi}" style="color:#ff4d4d;">🗑</button>
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label>Texto</label>
-            <input type="text"
-                   value="${esc(f.text || '')}"
-                   data-feature-field="text"
-                   data-fi="${fi}">
+            <input type="text" maxlength="${LIMITS.featureText}" value="${esc(f.text || '')}" data-feature-field="text" data-fi="${fi}" placeholder="Ex: Downloads ilimitados">
           </div>
-          <div class="form-group">
-            <label><input type="checkbox"
-                          data-feature-field="ok"
-                          data-fi="${fi}"
-                          ${f.ok ? 'checked' : ''}> Incluído</label>
+          <div class="form-group" style="display:flex;align-items:center;">
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+              <input type="checkbox" data-feature-field="ok" data-fi="${fi}" ${f.ok ? 'checked' : ''}> Incluído
+            </label>
           </div>
         </div>
       </div>`).join('');
@@ -393,7 +330,7 @@ function openPlanModal(i) {
       el.addEventListener('input', () => {
         const fi = Number(el.dataset.fi);
         const key = el.dataset.featureField;
-        if (!cloned.features[fi]) cloned.features[fi] = {};
+        if (!cloned.features[fi]) return;
         cloned.features[fi][key] = el.type === 'checkbox' ? el.checked : el.value;
       });
     });
@@ -401,54 +338,57 @@ function openPlanModal(i) {
     featuresWrap.querySelectorAll('[data-action="remove-feature"]').forEach((b) => {
       b.addEventListener('click', () => {
         const fi = Number(b.dataset.fi);
+        if (!Number.isInteger(fi) || fi < 0 || fi >= cloned.features.length) return;
         cloned.features.splice(fi, 1);
         renderFeatures();
+        if (cloned.features.length < LIMITS.maxFeatures) addFeatureBtn.disabled = false;
       });
     });
   };
 
   renderFeatures();
 
-  document.getElementById('pmAddFeature').addEventListener('click', () => {
-    cloned.features.push({ text: 'Novo recurso', ok: true });
+  addFeatureBtn.addEventListener('click', () => {
+    if (cloned.features.length >= LIMITS.maxFeatures) return;
+    cloned.features.push({ text: '', ok: true });
     renderFeatures();
+    if (cloned.features.length >= LIMITS.maxFeatures) addFeatureBtn.disabled = true;
   });
 
   document.getElementById('pmCancel').addEventListener('click', () => closeAdminModal());
 
-  // 🛡️ BLINDAGEM 2: whitelist no save
   document.getElementById('pmSave').addEventListener('click', () => {
-    // Monta o payload a partir do estado + inputs (fonte de verdade)
     const payload = {
-      id: plan.id, // sempre o ID original
+      id: plan.id,
+      dbPlanId: document.getElementById('pmDbPlanId').value.trim(),
       name: document.getElementById('pmName').value.trim() || plan.name,
-      suffix: canonicalSuffix, // sempre fixo, ignora input
+      suffix: canonicalSuffix,
       badge: document.getElementById('pmBadge').value.trim() || null,
-      cta: document.getElementById('pmCta').value,
-      desc: document.getElementById('pmDesc').value,
+      cta: document.getElementById('pmCta').value.trim(),
+      desc: document.getElementById('pmDesc').value.trim(),
       featured: document.getElementById('pmFeatured').checked,
       disabled: document.getElementById('pmDisabled').checked,
       features: cloned.features
         .filter((f) => f && typeof f.text === 'string' && f.text.trim())
-        .map((f) => ({ text: f.text, ok: f.ok !== false }))
+        .map((f) => ({ text: f.text.trim(), ok: f.ok !== false }))
+        .slice(0, LIMITS.maxFeatures)
     };
 
-    // Aplica whitelist + remove campos proibidos
-    const sanitized = sanitizePlan(payload);
+    if (!payload.cta) {
+      toast('O texto do botão (CTA) não pode ficar vazio.', '⚠');
+      return;
+    }
 
-    // Substitui no array
+    const sanitized = sanitizePlan(payload);
     content.planos.plans[i] = sanitized;
 
     markDirty();
     renderPlansEditor(content);
     closeAdminModal();
-    toast('Plano atualizado. Clique em "Salvar alterações" no topo.', '💳');
+    toast('Plano atualizado. Salve no topo para confirmar.', '💳');
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Exports utilitários (para reuso)
-// ─────────────────────────────────────────────────────────────
 export {
   ensureCanonicalPlans,
   sanitizePlan,
