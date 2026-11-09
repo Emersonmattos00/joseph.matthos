@@ -346,19 +346,40 @@ function findTrackByIndex(albumId, realTrackIndexOrId) {
 
 function collectAllTracks() {
   const out = [];
+  const seen = new Set();
+
   for (const album of SITE.albums || []) {
+    if (!album?.id) continue;
+
     const tracks = resolveAlbumTracks(album);
+
     for (const track of tracks) {
-      const idx = Number(track.trackNumber ?? track.trackIndex);
-      if (!Number.isInteger(idx) || idx < 0) continue;
+      if (!track?.id) continue;
+
+      const trackIndex = Number(
+        track.trackNumber ?? track.trackIndex
+      );
+
+      if (!Number.isInteger(trackIndex) || trackIndex < 0) {
+        continue;
+      }
+
+      const trackId = String(track.id);
+
+      if (seen.has(trackId)) continue;
+
+      seen.add(trackId);
+
       out.push({
-        albumId: album.id,
-        trackIndex: idx,
+        albumId: String(album.id),
+        trackId,
+        trackIndex,
         title: track.title || '—',
         albumTitle: album.title || ''
       });
     }
   }
+
   return out;
 }
 
