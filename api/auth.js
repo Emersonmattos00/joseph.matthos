@@ -3,22 +3,17 @@
 /* ============================================================
    api/auth.js — Autenticação (Neon + JWT + Refresh)
    ------------------------------------------------------------
-   POST /api/auth?action=login      → login
-   POST /api/auth?action=signup     → cadastro
-   POST /api/auth?action=logout     → encerra sessão atual
-   POST /api/auth?action=logout-all → revoga todas as sessões
-   POST /api/auth?action=refresh    → renova access token
-   GET  /api/auth?action=me         → usuário + rentals
-
-   - Compatível com _lib.js (clientIp, setAuthCookies, checkOrigin)
-   - Refresh token persistido (hash SHA-256, 7 dias)
-   - Rate limit com failClosed em produção
-   - /me retorna 503 se o banco falhar (não mascara como "free")
+   - Rotação de refresh atômica (transação com isNull(revokedAt))
+   - Limite de 5 sessões atômico (transação)
+   - Logout retorna 503 se revogação falhar
+   - Signup transacional (user + refresh)
+   - inArray em vez de ANY()
+   - Revogação não sobrescreve revokedAt
    ============================================================ */
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { eq, and, gt, lte, isNotNull, sql } = require('drizzle-orm');
+const { eq, and, gt, lte, isNull, inArray, sql } = require('drizzle-orm');
 
 const { users, rentals, tracks, refreshTokens } = require('../src/schema.js');
 
@@ -59,7 +54,6 @@ const COMMON_PASSWORDS = new Set([
   'welcome1', 'iloveyou', 'abc12345', '1q2w3e4r', '1qaz2wsx'
 ]);
 
-// Rate limit
 const MAX_LOGIN_PER_IP = 30;
 const MAX_LOGIN_PER_EMAIL = 8;
 const MAX_SIGNUP_PER_IP = 10;
@@ -129,7 +123,7 @@ function hashPassword(password) {
   return new Promise((resolve, reject) => {
     const salt = crypto.randomBytes(16).toString('hex');
     crypto.scrypt(password, salt, 64, (err, derived) => {
-      if (err) return reject(err); // ✅ retorna aqui
+      if (err) return reject(err);
       resolve(`scrypt$${salt}$${derived.toString('hex')}`);
     });
   });
@@ -194,49 +188,83 @@ function verifyAccessToken(token) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// REFRESH TOKENS
+// REFRESH TOKENS (com transação)
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Gera e persiste um novo refresh token dentro de uma transação.
+ * Já aplica o limite de 5 sessões ativas.
+ */
 async function createRefreshToken(userId) {
   const raw = crypto.randomBytes(48).toString('base64url');
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
   const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+  const nowIso = new Date().toISOString();
 
-  await db.insert(refreshTokens).values({
-    id: crypto.randomUUID(),
-    userId,
-    tokenHash: hash,
-    expiresAt,
-    createdAt: new Date().toISOString()
-  });
+  await db.transaction(async (tx) => {
+    await tx.insert(refreshTokens).values({
+      id: crypto.randomUUID(),
+      userId,
+      tokenHash: hash,
+      expiresAt,
+      revokedAt: null,
+      createdAt: nowIso
+    });
 
-  // Limita a 5 sessões ativas por usuário
-  const rows = await db.select({ id: refreshTokens.id })
-    .from(refreshTokens)
-    .where(eq(refreshTokens.userId, userId))
-    .orderBy(refreshTokens.createdAt);
+    // Busca tokens ativos ordenados por criação (mais antigos primeiro)
+    const rows = await tx.select({ id: refreshTokens.id })
+      .from(refreshTokens)
+      .where(and(
+        eq(refreshTokens.userId, userId),
+        isNull(refreshTokens.revokedAt)
+      ))
+      .orderBy(refreshTokens.createdAt);
 
-  if (rows.length > MAX_REFRESH_TOKENS_PER_USER) {
-    const excess = rows.length - MAX_REFRESH_TOKENS_PER_USER;
-    for (let i = 0; i < excess; i++) {
-      await db.delete(refreshTokens).where(eq(refreshTokens.id, rows[i].id));
+    if (rows.length > MAX_REFRESH_TOKENS_PER_USER) {
+      const excess = rows.length - MAX_REFRESH_TOKENS_PER_USER;
+      const idsToRevoke = rows.slice(0, excess).map(r => r.id);
+
+      await tx.update(refreshTokens)
+        .set({ revokedAt: nowIso })
+        .where(inArray(refreshTokens.id, idsToRevoke));
     }
-  }
+  });
 
   return raw;
 }
 
+/**
+ * Busca um refresh token ativo (não revogado).
+ */
 async function findRefreshToken(raw) {
   if (!raw) return null;
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
   const [row] = await db.select().from(refreshTokens)
-    .where(eq(refreshTokens.tokenHash, hash)).limit(1);
+    .where(and(
+      eq(refreshTokens.tokenHash, hash),
+      isNull(refreshTokens.revokedAt)
+    ))
+    .limit(1);
   return row || null;
 }
 
+/**
+ * Revoga um refresh token (soft delete).
+ * Retorna true se revogou, false se já estava revogado ou não existia.
+ */
 async function revokeRefreshToken(raw) {
-  if (!raw) return;
+  if (!raw) return false;
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
-  await db.delete(refreshTokens).where(eq(refreshTokens.tokenHash, hash));
+
+  const updated = await db.update(refreshTokens)
+    .set({ revokedAt: new Date().toISOString() })
+    .where(and(
+      eq(refreshTokens.tokenHash, hash),
+      isNull(refreshTokens.revokedAt)
+    ))
+    .returning({ id: refreshTokens.id });
+
+  return updated.length > 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -257,13 +285,21 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
   }
 
-  const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_PER_IP, RATE_WINDOW_MS, { failClosed: true }),
-    checkAndIncrement(`login:email:${email}`, MAX_LOGIN_PER_EMAIL, RATE_WINDOW_MS, { failClosed: true })
-  ]);
+  // Rate limit dentro do try para capturar falhas do Redis
+  let ipRate, emailRate;
+  try {
+    [ipRate, emailRate] = await Promise.all([
+      checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_PER_IP, RATE_WINDOW_MS, { failClosed: true }),
+      checkAndIncrement(`login:email:${email}`, MAX_LOGIN_PER_EMAIL, RATE_WINDOW_MS, { failClosed: true })
+    ]);
+  } catch (rateErr) {
+    console.error('[auth/login] rate limit indisponível:', rateErr.message);
+    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
+    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
+  }
 
   if (ipRate.limited || emailRate.limited) {
-    const retryAfter = Math.max(ipRate.retryAfter, emailRate.retryAfter, 1);
+    const retryAfter = Math.max(ipRate.retryAfter || 1, emailRate.retryAfter || 1, 1);
     res.setHeader('Retry-After', String(retryAfter));
     await equalizeTiming(startedAt, MIN_RESPONSE_MS);
     await audit('login', { email, ip, userAgent, success: false, reason: 'rate_limited' });
@@ -320,7 +356,7 @@ async function handleLogin(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SIGNUP
+// SIGNUP (transacional)
 // ─────────────────────────────────────────────────────────────
 async function handleSignup(req, res) {
   const ip = clientIp(req);
@@ -336,13 +372,19 @@ async function handleSignup(req, res) {
     return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
   }
 
-  const [ipRate, emailRate] = await Promise.all([
-    checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUP_PER_IP, SIGNUP_WINDOW_MS, { failClosed: true }),
-    checkAndIncrement(`signup:email:${email}`, MAX_SIGNUP_PER_EMAIL, SIGNUP_WINDOW_MS, { failClosed: true })
-  ]);
+  let ipRate, emailRate;
+  try {
+    [ipRate, emailRate] = await Promise.all([
+      checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUP_PER_IP, SIGNUP_WINDOW_MS, { failClosed: true }),
+      checkAndIncrement(`signup:email:${email}`, MAX_SIGNUP_PER_EMAIL, SIGNUP_WINDOW_MS, { failClosed: true })
+    ]);
+  } catch (rateErr) {
+    console.error('[auth/signup] rate limit indisponível:', rateErr.message);
+    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
+  }
 
   if (ipRate.limited || emailRate.limited) {
-    const retryAfter = Math.max(ipRate.retryAfter, emailRate.retryAfter, 1);
+    const retryAfter = Math.max(ipRate.retryAfter || 1, emailRate.retryAfter || 1, 1);
     res.setHeader('Retry-After', String(retryAfter));
     await audit('signup', { email, ip, userAgent, success: false, reason: 'rate_limited' });
     return sendJson(res, 429, { ok: false, error: GENERIC_RATE_ERROR });
@@ -358,15 +400,44 @@ async function handleSignup(req, res) {
 
     const passwordHash = await hashPassword(password);
 
-    const [user] = await db.execute(sql`
-      INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
-      VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
-      RETURNING id, email, name, role, created_at, updated_at
-    `);
+    // ★ Transação: user + refresh token juntos
+    let user;
+    let refreshToken;
+    try {
+      await db.transaction(async (tx) => {
+        const [inserted] = await tx.execute(sql`
+          INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
+          VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
+          RETURNING id, email, name, role, created_at, updated_at
+        `);
+
+        // Adaptador Neon pode retornar { rows: [...] } ou array
+        user = inserted?.rows?.[0] || inserted?.[0] || inserted;
+        if (!user) throw new Error('INSERT_RETURNED_NOTHING');
+
+        // Cria refresh token na mesma transação
+        const raw = crypto.randomBytes(48).toString('base64url');
+        const hash = crypto.createHash('sha256').update(raw).digest('hex');
+        const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+
+        await tx.insert(refreshTokens).values({
+          id: crypto.randomUUID(),
+          userId: user.id,
+          tokenHash: hash,
+          expiresAt,
+          revokedAt: null,
+          createdAt: new Date().toISOString()
+        });
+
+        refreshToken = raw;
+      });
+    } catch (txErr) {
+      await audit('signup', { email, ip, userAgent, success: false, reason: txErr.code || 'error' });
+      console.error('[auth/signup] falha na transação:', txErr.code || txErr.message);
+      return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    }
 
     const accessToken = signAccessToken(user);
-    const refreshToken = await createRefreshToken(user.id);
-
     setAuthCookies(res, { access_token: accessToken, refresh_token: refreshToken });
 
     await audit('signup', { email, ip, userAgent, userId: user.id, success: true });
@@ -389,28 +460,31 @@ async function handleSignup(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// LOGOUT (sessão atual)
+// LOGOUT (retorna 503 se revogação falhar)
 // ─────────────────────────────────────────────────────────────
 async function handleLogout(req, res) {
   const ip = clientIp(req);
   const userAgent = req.headers['user-agent'] || '';
+  const raw = getRefreshToken(req);
 
-  try {
-    await revokeRefreshToken(getRefreshToken(req));
-  } catch (err) {
-    console.warn('[auth/logout] falha ao revogar refresh:', err.message);
+  if (raw) {
+    try {
+      await revokeRefreshToken(raw);
+    } catch (err) {
+      console.error('[auth/logout] falha ao revogar refresh:', err.message);
+      // ★ Não limpa cookies: o token no navegador ainda é válido
+      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível. Tente novamente.' });
+    }
   }
 
-  try { clearAuthCookies(res); } catch {}
-
-  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+  clearAuthCookies(res);
+  res.setHeader('Clear-Site-Data', '"cookies"');
   await audit('logout', { ip, userAgent, success: true });
-
   return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
-// LOGOUT-ALL (todas as sessões do usuário)
+// LOGOUT-ALL
 // ─────────────────────────────────────────────────────────────
 async function handleLogoutAll(req, res) {
   const token = getAccessToken(req);
@@ -418,22 +492,25 @@ async function handleLogoutAll(req, res) {
   if (!payload) return sendJson(res, 401, { ok: false });
 
   try {
-    await db.delete(refreshTokens).where(eq(refreshTokens.userId, payload.id));
+    await db.update(refreshTokens)
+      .set({ revokedAt: new Date().toISOString() })
+      .where(and(
+        eq(refreshTokens.userId, payload.id),
+        isNull(refreshTokens.revokedAt)
+      ));
   } catch (err) {
-    console.warn('[auth/logout-all]', err.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    console.error('[auth/logout-all]', err.message);
+    return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
   }
 
-  try { clearAuthCookies(res); } catch {}
-
-  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
+  clearAuthCookies(res);
+  res.setHeader('Clear-Site-Data', '"cookies"');
   await audit('logout_all', { userId: payload.id, ip: clientIp(req), success: true });
-
   return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
-// REFRESH (renova access token)
+// REFRESH (rotação atômica)
 // ─────────────────────────────────────────────────────────────
 async function handleRefresh(req, res) {
   const ip = clientIp(req);
@@ -441,49 +518,80 @@ async function handleRefresh(req, res) {
 
   if (!raw) return sendJson(res, 401, { ok: false, error: 'Sessão ausente.' });
 
+  const hash = crypto.createHash('sha256').update(raw).digest('hex');
+
+  let newRefresh = null;
+  let user = null;
+
   try {
-    const row = await findRefreshToken(raw);
-    if (!row) return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+    await db.transaction(async (tx) => {
+      // ★ Revoga o antigo atomicamente (só se ainda não revogado)
+      const updated = await tx.update(refreshTokens)
+        .set({ revokedAt: new Date().toISOString() })
+        .where(and(
+          eq(refreshTokens.tokenHash, hash),
+          isNull(refreshTokens.revokedAt)
+        ))
+        .returning({ userId: refreshTokens.userId, expiresAt: refreshTokens.expiresAt });
 
-    if (new Date(row.expiresAt).getTime() < Date.now()) {
-      await revokeRefreshToken(raw);
-      return sendJson(res, 401, { ok: false, error: 'Sessão expirada.' });
-    }
-
-    const [user] = await db.select().from(users).where(eq(users.id, row.userId)).limit(1);
-    if (!user) {
-      await revokeRefreshToken(raw);
-      return sendJson(res, 401, { ok: false, error: 'Usuário inexistente.' });
-    }
-
-    const accessToken = signAccessToken(user);
-    // Rota o refresh token (single-use)
-    const newRefresh = await createRefreshToken(user.id);
-    await revokeRefreshToken(raw);
-
-    setAuthCookies(res, { access_token: accessToken, refresh_token: newRefresh });
-
-    let plan = 'free';
-    try {
-      const result = await getPlanForUserDetailed(user.id);
-      if (result && VALID_PLANS.has(result.plan)) plan = result.plan;
-    } catch {}
-
-    await audit('refresh', { userId: user.id, ip, success: true });
-
-    return sendJson(res, 200, {
-      ok: true,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
+      if (!updated.length) {
+        throw new Error('REFRESH_NOT_FOUND');
       }
+
+      const row = updated[0];
+
+      if (new Date(row.expiresAt).getTime() < Date.now()) {
+        throw new Error('REFRESH_EXPIRED');
+      }
+
+      const [u] = await tx.select().from(users).where(eq(users.id, row.userId)).limit(1);
+      if (!u) throw new Error('USER_NOT_FOUND');
+      user = u;
+
+      // Cria novo refresh na mesma transação
+      const newRaw = crypto.randomBytes(48).toString('base64url');
+      const newHash = crypto.createHash('sha256').update(newRaw).digest('hex');
+      const newExpires = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+
+      await tx.insert(refreshTokens).values({
+        id: crypto.randomUUID(),
+        userId: user.id,
+        tokenHash: newHash,
+        expiresAt: newExpires,
+        revokedAt: null,
+        createdAt: new Date().toISOString()
+      });
+
+      newRefresh = newRaw;
     });
   } catch (err) {
+    if (err.message === 'REFRESH_NOT_FOUND' || err.message === 'REFRESH_EXPIRED' || err.message === 'USER_NOT_FOUND') {
+      return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+    }
     console.error('[auth/refresh]', err.code || err.message);
     return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
   }
+
+  const accessToken = signAccessToken(user);
+  setAuthCookies(res, { access_token: accessToken, refresh_token: newRefresh });
+
+  let plan = 'free';
+  try {
+    const result = await getPlanForUserDetailed(user.id);
+    if (result && VALID_PLANS.has(result.plan)) plan = result.plan;
+  } catch {}
+
+  await audit('refresh', { userId: user.id, ip, success: true });
+
+  return sendJson(res, 200, {
+    ok: true,
+    user: {
+      id: String(user.id),
+      email: sanitizeEmail(user.email),
+      name: sanitizeName(user.name),
+      plan
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -511,7 +619,6 @@ async function handleMe(req, res) {
       return sendJson(res, 401, { ok: false });
     }
 
-    // Plano e aluguéis precisam ser obtidos sem mascarar falhas
     let plan = 'free';
     let userRentals = [];
 
@@ -556,12 +663,11 @@ async function handleMe(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// ALUGUÉIS ATIVOS (faixa + álbum)
+// ALUGUÉIS ATIVOS
 // ─────────────────────────────────────────────────────────────
 async function getActiveRentals(userId) {
   const nowIso = new Date().toISOString();
 
-  // Aluguéis genéricos do usuário
   const rows = await db.select({
     trackId: rentals.trackId,
     albumId: rentals.albumId,
@@ -574,9 +680,9 @@ async function getActiveRentals(userId) {
       lte(rentals.startsAt, nowIso),
       gt(rentals.expiresAt, nowIso)
     ))
+    .orderBy(rentals.expiresAt)  // ★ ordena por vencimento
     .limit(MAX_RENTALS);
 
-  // Busca metadados de faixas para montar a chave trackKey
   const trackIds = rows.map(r => r.trackId).filter(Boolean);
   const trackMeta = new Map();
   if (trackIds.length) {
@@ -584,7 +690,7 @@ async function getActiveRentals(userId) {
       id: tracks.id,
       albumId: tracks.albumId,
       trackNumber: tracks.trackNumber
-    }).from(tracks).where(sql`${tracks.id} = ANY(${trackIds})`);
+    }).from(tracks).where(inArray(tracks.id, trackIds));  // ★ inArray
 
     for (const t of list) trackMeta.set(t.id, t);
   }
@@ -632,7 +738,9 @@ function parseBody(req) {
 
 function normalizeEmail(value) {
   if (typeof value !== 'string') return '';
-  return value.normalize('NFC').trim().toLowerCase().slice(0, MAX_EMAIL_LENGTH);
+  const normalized = value.normalize('NFC').trim().toLowerCase();
+  if (normalized.length > MAX_EMAIL_LENGTH) return '';
+  return normalized;
 }
 
 function sanitizeEmail(value) {
@@ -642,7 +750,9 @@ function sanitizeEmail(value) {
 
 function normalizeName(value) {
   if (typeof value !== 'string') return '';
-  return value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LENGTH);
+  const normalized = value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
+  if (normalized.length > MAX_NAME_LENGTH) return '';
+  return normalized;
 }
 
 function sanitizeName(value) {
