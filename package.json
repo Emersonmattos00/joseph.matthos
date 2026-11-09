@@ -1,11 +1,11 @@
 {
   "name": "josephmatthos",
   "version": "1.0.0",
-  "description": "Plataforma oficial de Joseph Matthos — site, painel admin, loja de faixas e assinaturas.",
+  "description": "Plataforma oficial de Joseph Matthos — site, painel administrativo, loja de músicas e assinaturas.",
   "private": true,
   "main": "server.js",
   "engines": {
-  "node": "24.x"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node server.js",
@@ -27,7 +27,8 @@
     "jsonwebtoken": "^9.0.3",
     "music-metadata": "^12.2.3",
     "resend": "^6.32.1",
-    "sigv4-lite": "^1.0.1"
+    "sigv4-lite": "^1.0.1",
+    "ws": "^8.22.2"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.0",

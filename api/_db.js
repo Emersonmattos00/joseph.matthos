@@ -3,13 +3,14 @@
 /* ============================================================
    api/_db.js — Conexão Neon PostgreSQL + Drizzle ORM
    ------------------------------------------------------------
-   - Validação da DATABASE_URL
-   - Exporta `sql` (Neon) e `drizzleSql` (Drizzle)
-   - Compatível com auth.js e admin.js
+   - Driver: neon-serverless (WebSocket) para transações reais
+   - Pool + WebSocket configurado para Node.js
+   - Exporta `sql` (Neon HTTP) e `drizzleSql` (Drizzle)
    ============================================================ */
 
-const { neon } = require('@neondatabase/serverless');
-const { drizzle } = require('drizzle-orm/neon-http');
+const { Pool, neonConfig, neon } = require('@neondatabase/serverless');
+const { drizzle } = require('drizzle-orm/neon-serverless');
+const ws = require('ws');
 
 const {
   eq, and, or, asc, desc,
@@ -19,6 +20,9 @@ const {
 } = require('drizzle-orm');
 
 const schema = require('../src/schema.js');
+
+// ─── WebSocket para Node.js ─────────────────────────────────
+neonConfig.webSocketConstructor = ws;
 
 // ─── Validação da configuração ───────────────────────────────
 function getDatabaseUrl() {
@@ -46,8 +50,13 @@ function getDatabaseUrl() {
 
 // ─── Inicialização ───────────────────────────────────────────
 const databaseUrl = getDatabaseUrl();
+
+// Cliente HTTP para consultas simples (signup usa sql`...`)
 const sqlNeon = neon(databaseUrl);
-const db = drizzle(sqlNeon, { schema });
+
+// Pool WebSocket para transações reais
+const pool = new Pool({ connectionString: databaseUrl });
+const db = drizzle({ client: pool, schema });
 
 // ─── Diagnóstico ─────────────────────────────────────────────
 async function checkDatabase() {
@@ -65,20 +74,12 @@ async function checkDatabase() {
 
 // ─── Exportações ─────────────────────────────────────────────
 module.exports = {
-  db,
-  
-  // O Cliente Neon (usado em auth.js para `sql\`...\``)
-  sql: sqlNeon,
-  
-  // O Construtor do Drizzle (usado em admin.js para `db.execute(drizzleSql\`...\`)`)
+  db,        // ← AGORA com transações reais
+  sql: sqlNeon, // ← HTTP para queries simples
   drizzleSql,
-  
   schema,
-  
-  // Operadores
   eq, and, or, asc, desc, inArray,
   gt, gte, lt, lte, ne,
   isNull, isNotNull, count,
-  
   checkDatabase
 };
