@@ -11,7 +11,6 @@ const crypto = require('crypto');
 const { isIP } = require('node:net');
 const jwt = require('jsonwebtoken');
 
-// Guard: impede importação no cliente
 if (typeof window !== 'undefined') {
   throw new Error('[_lib] Este módulo não pode ser importado no cliente.');
 }
@@ -29,8 +28,8 @@ const REFRESH_COOKIE_DEV = 'jm_auth_refresh';
 const AUTH_COOKIE = IS_PROD ? AUTH_COOKIE_PROD : AUTH_COOKIE_DEV;
 const REFRESH_COOKIE = IS_PROD ? REFRESH_COOKIE_PROD : REFRESH_COOKIE_DEV;
 
-const ACCESS_MAX_AGE = 60 * 60;              // 1h
-const REFRESH_MAX_AGE = 60 * 60 * 24 * 7;    // 7 dias
+const ACCESS_MAX_AGE = 60 * 60;
+const REFRESH_MAX_AGE = 60 * 60 * 24 * 7;
 
 const VALID_PLANS = new Set(['free', 'premium', 'anual']);
 
@@ -101,12 +100,6 @@ function parseCookies(header) {
   return out;
 }
 
-/* ─── IP confiável ───────────────────────────────────────────
-   - Em produção, confia apenas em x-real-ip (proxy da Vercel).
-   - x-forwarded-for é usado só em desenvolvimento.
-   - x-vercel-forwarded-for é aceito porque a Vercel o sobrescreve.
-   - Sempre valida com isIP() para evitar injection de string.
-*/
 function clientIp(req) {
   const headers = req.headers || {};
 
@@ -160,10 +153,6 @@ function appendSetCookie(res, cookies) {
   else res.setHeader('Set-Cookie', [existing].concat(list));
 }
 
-/* ─── Compatibilidade com auth.js ────────────────────────────
-   O auth.js atual usa apenas { access_token: token }.
-   Aceitamos tanto um token único quanto o par access/refresh.
-*/
 function setAuthCookies(res, session) {
   if (!res || !session) {
     throw new Error('Sessão inválida.');
@@ -277,7 +266,6 @@ function getRedis() {
 async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options = {}) {
   const { failClosed = false } = options;
 
-  // Validação estrita dos parâmetros
   if (typeof bucket !== 'string' || !bucket.trim() || bucket.length > 200) {
     return { limited: true, retryAfter: 1, reason: 'INVALID_BUCKET' };
   }
@@ -354,7 +342,7 @@ async function resetBucket(bucket) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// AUDITORIA
+// AUDITORIA — com try/catch externo (nunca quebra o fluxo)
 // ═════════════════════════════════════════════════════════════
 function resolveAuditTable(event, override) {
   if (override === 'admin') return 'admin_audit';
@@ -412,46 +400,51 @@ function buildAdminAuditPayload(event, opts) {
 }
 
 async function audit(event, options = {}) {
-  const table = resolveAuditTable(event, options.table);
-  const payload = table === 'admin_audit'
-    ? buildAdminAuditPayload(event, options)
-    : buildAuthAuditPayload(event, options);
-
   try {
-    console.info('[_lib audit]', JSON.stringify({
-      table,
-      event: payload.event || payload.action,
-      success: options.success,
-      reason: options.reason
-    }));
-  } catch {}
+    const table = resolveAuditTable(event, options.table);
+    const payload = table === 'admin_audit'
+      ? buildAdminAuditPayload(event, options)
+      : buildAuthAuditPayload(event, options);
 
-  try {
-    const { db } = require('./_db');
-    const schema = require('../src/schema.js');
+    try {
+      console.info('[_lib audit]', JSON.stringify({
+        table,
+        event: payload.event || payload.action,
+        success: options.success,
+        reason: options.reason
+      }));
+    } catch {}
 
-    if (table === 'admin_audit') {
-      await db.insert(schema.adminAudit).values({
-        actor: payload.actor || null,
-        action: payload.action,
-        target: payload.target || null,
-        metadata: payload.metadata || null,
-        ip: payload.ip || null,
-        userAgent: payload.user_agent || null
-      });
-    } else {
-      await db.insert(schema.authAuditLog).values({
-        event: payload.event,
-        emailHash: payload.email_hash || null,
-        userId: payload.user_id || null,
-        ip: payload.ip || null,
-        userAgent: payload.user_agent || null,
-        success: !!payload.success,
-        reason: payload.reason || null
-      });
+    try {
+      const { db } = require('./_db');
+      const schema = require('../src/schema.js');
+
+      if (table === 'admin_audit') {
+        await db.insert(schema.adminAudit).values({
+          actor: payload.actor || null,
+          action: payload.action,
+          target: payload.target || null,
+          metadata: payload.metadata || null,
+          ip: payload.ip || null,
+          userAgent: payload.user_agent || null
+        });
+      } else {
+        await db.insert(schema.authAuditLog).values({
+          event: payload.event,
+          emailHash: payload.email_hash || null,
+          userId: payload.user_id || null,
+          ip: payload.ip || null,
+          userAgent: payload.user_agent || null,
+          success: !!payload.success,
+          reason: payload.reason || null
+        });
+      }
+    } catch (err) {
+      console.error(`[_lib] audit persist erro (${table}):`, err.code || err.message);
     }
   } catch (err) {
-    console.error(`[_lib] audit persist erro (${table}):`, err.code || err.message);
+    // ★ Auditoria NUNCA relança — não pode quebrar operação principal
+    console.error('[_lib] audit unexpected error:', err.message);
   }
 }
 
@@ -482,7 +475,6 @@ async function getPlanForUserDetailed(userId) {
   let reason = null;
 
   try {
-    // Reutiliza o cliente Neon centralizado
     const { sql } = require('./_db');
     const rows = await sql`
       SELECT plan
@@ -599,7 +591,6 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
     const now = Date.now();
 
-    // Rejeita iat futuro (com 30s de tolerância) e expirado
     if (payload.iat > now + 30_000) return null;
     if (now - payload.iat > maxAgeMs) return null;
 
