@@ -1,25 +1,21 @@
 'use strict';
 
 /* ============================================================
-   api/public.js — Catálogo público seguro e blindado
+   api/public.js — Catálogo Público (Versão Final Blindada)
    ------------------------------------------------------------
-   - Tolera banco antigo (published=true) e novo (status='PUBLISHED')
-   - Previne desaparecimento de álbuns por falta de innerJoin
-   - Não expõe chaves privadas de armazenamento (B2)
-   - Mantém estrutura de planos, alugueis e conteúdo do site
+   - SEM fallback com select() sem campos (evita vazar B2)
+   - Falhas retornam HTTP 500 em vez de listas vazias
+   - Regra única: usa tracks.status = 'PUBLISHED'
+   - Consulta plans e rentalProducts com ordenação
+   - Faixa individual busca álbum direto pelo ID
    ============================================================ */
 
 const { sendJson } = require('./_lib');
-const { db, eq, and, asc, desc, inArray, or } = require('./_db');
+const { db, eq, and, asc, desc, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function validUuid(value) {
-  return typeof value === 'string' && UUID_RE.test(value);
-}
-
-/* ─── Seletores de Campos (Proteção contra vazamento) ────── */
+function validUuid(v) { return typeof v === 'string' && UUID_RE.test(v); }
 
 function publicTrackFields() {
   return {
@@ -28,9 +24,8 @@ function publicTrackFields() {
     title: schema.tracks.title,
     trackNumber: schema.tracks.trackNumber,
     duration: schema.tracks.duration,
-    durationSeconds: schema.tracks.durationSeconds, // Se existir, traz
     locked: schema.tracks.locked
-    // ❌ streamKey, previewKey, fullPath, previewPath NUNCA
+    // ❌ NÃO incluir: streamKey, previewKey, fullPath, previewPath
   };
 }
 
@@ -47,8 +42,7 @@ function publicAlbumFields() {
     description: schema.albums.description,
     coverUrl: schema.albums.coverUrl,
     coverInitials: schema.albums.coverInitials,
-    sortOrder: schema.albums.sortOrder,
-    published: schema.albums.published
+    sortOrder: schema.albums.sortOrder
   };
 }
 
@@ -63,102 +57,75 @@ function publicPlanFields() {
   };
 }
 
-/* ─── Blindagem de Busca (Evita erro se a coluna não existir) ── */
-
+// ── Busca segura, sem fallback cego ─────────────────────────
 async function selectAlbumsPublic() {
-  try {
-    return await db.select(publicAlbumFields())
-      .from(schema.albums)
-      .where(eq(schema.albums.published, true))
-      .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
-  } catch (err) {
-    console.warn('[public] Fallback álbuns (schema antigo):', err.message);
-    return await db.select().from(schema.albums).where(eq(schema.albums.published, true));
-  }
+  return db.select(publicAlbumFields()).from(schema.albums)
+    .where(eq(schema.albums.published, true))
+    .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 }
 
 async function selectTracksPublic(albumIds) {
-  if (!albumIds || albumIds.length === 0) return [];
-  
-  // 🛡️ Blindagem: Aceita status='PUBLISHED' ou published=true
-  const condition = and(
-    or(
+  if (!Array.isArray(albumIds) || albumIds.length === 0) return [];
+  return db.select(publicTrackFields()).from(schema.tracks)
+    .where(and(
       eq(schema.tracks.status, 'PUBLISHED'),
-      eq(schema.tracks.published, true)
-    ),
-    inArray(schema.tracks.albumId, albumIds)
-  );
-
-  try {
-    return await db.select(publicTrackFields())
-      .from(schema.tracks)
-      .where(condition)
-      .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber));
-  } catch (err) {
-    console.warn('[public] Fallback faixas (schema antigo):', err.message);
-    return await db.select().from(schema.tracks).where(condition);
-  }
+      inArray(schema.tracks.albumId, albumIds)
+    ))
+    .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber), asc(schema.tracks.createdAt));
 }
 
 async function getPublicPlans() {
-  try {
-    return await db.select(publicPlanFields()).from(schema.plans).where(eq(schema.plans.active, true));
-  } catch (err) {
-    console.warn('[public] Plans indisponíveis:', err.message);
-    return [];
-  }
+  return db.select(publicPlanFields()).from(schema.plans)
+    .where(eq(schema.plans.active, true))
+    .orderBy(asc(schema.plans.priceCents), asc(schema.plans.createdAt));
 }
 
 async function getPublicRentalPlans(albumIds, trackIds) {
-  try {
-    const products = await db.select({
-      id: schema.rentalProducts.id,
-      trackId: schema.rentalProducts.trackId,
-      albumId: schema.rentalProducts.albumId,
-      name: schema.rentalProducts.name,
-      durationHours: schema.rentalProducts.durationHours,
-      priceCents: schema.rentalProducts.priceCents,
-      currency: schema.rentalProducts.currency
-    }).from(schema.rentalProducts).where(eq(schema.rentalProducts.active, true));
+  const products = await db.select({
+    id: schema.rentalProducts.id,
+    trackId: schema.rentalProducts.trackId,
+    albumId: schema.rentalProducts.albumId,
+    name: schema.rentalProducts.name,
+    durationHours: schema.rentalProducts.durationHours,
+    priceCents: schema.rentalProducts.priceCents,
+    currency: schema.rentalProducts.currency
+  }).from(schema.rentalProducts)
+    .where(eq(schema.rentalProducts.active, true))
+    .orderBy(asc(schema.rentalProducts.durationHours));
 
-    const albumSet = new Set(albumIds);
-    const trackSet = new Set(trackIds);
+  const albumSet = new Set(albumIds);
+  const trackSet = new Set(trackIds);
 
-    return products
-      .filter(p => {
-        const hasT = Boolean(p.trackId);
-        const hasA = Boolean(p.albumId);
-        if (hasT === hasA) return false;
-        if (hasT) return trackSet.has(p.trackId);
-        return albumSet.has(p.albumId);
-      })
-      .map(p => {
-        const hours = Number(p.durationHours);
-        const cents = Number(p.priceCents);
-        if (!Number.isSafeInteger(hours) || hours <= 0) return null;
-        if (!Number.isSafeInteger(cents) || cents <= 0) return null;
-        return {
-          id: p.id,
-          label: p.name,
-          days: Math.floor(hours / 24),
-          hours: hours % 24,
-          durationHours: hours,
-          price: cents / 100,
-          priceCents: cents,
-          currency: p.currency || 'BRL',
-          available: true,
-          trackId: p.trackId || null,
-          albumId: p.albumId || null
-        };
-      })
-      .filter(Boolean);
-  } catch (err) {
-    console.warn('[public] rentalProducts indisponíveis:', err.message);
-    return [];
-  }
+  return products
+    .filter(p => {
+      const hasT = Boolean(p.trackId);
+      const hasA = Boolean(p.albumId);
+      if (hasT === hasA) return false;
+      return hasT ? trackSet.has(p.trackId) : albumSet.has(p.albumId);
+    })
+    .map(p => {
+      const hours = Number(p.durationHours);
+      const cents = Number(p.priceCents);
+      if (!Number.isSafeInteger(hours) || hours <= 0) return null;
+      if (!Number.isSafeInteger(cents) || cents <= 0) return null;
+      return {
+        id: p.id,
+        label: p.name,
+        days: Math.floor(hours / 24),
+        hours: hours % 24,
+        durationHours: hours,
+        price: cents / 100,
+        priceCents: cents,
+        currency: p.currency || 'BRL',
+        available: true,
+        trackId: p.trackId || null,
+        albumId: p.albumId || null
+      };
+    })
+    .filter(Boolean);
 }
 
-/* ─── Handler Principal ───────────────────────────────────── */
+// ── Handler ────────────────────────────────────────────────
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -186,19 +153,16 @@ module.exports = async (req, res) => {
         id: schema.tracks.id,
         albumId: schema.tracks.albumId,
         title: schema.tracks.title,
-        lyrics: schema.tracks.lyrics,
-        status: schema.tracks.status,
-        published: schema.tracks.published
+        lyrics: schema.tracks.lyrics
       }).from(schema.tracks)
-        .where(and(
-          eq(schema.tracks.id, trackId),
-          or(eq(schema.tracks.status, 'PUBLISHED'), eq(schema.tracks.published, true))
-        )).limit(1);
+        .where(and(eq(schema.tracks.id, trackId), eq(schema.tracks.status, 'PUBLISHED')))
+        .limit(1);
 
       if (!track) return sendJson(res, 404, { ok: false, error: 'TRACK_NOT_FOUND' });
 
-      const albums = await selectAlbumsPublic();
-      const album = albums.find(a => a.id === track.albumId);
+      const [album] = await db.select(publicAlbumFields()).from(schema.albums)
+        .where(and(eq(schema.albums.id, track.albumId), eq(schema.albums.published, true)))
+        .limit(1);
 
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
@@ -220,8 +184,9 @@ module.exports = async (req, res) => {
     if (albumId) {
       if (!validUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
 
-      const albums = await selectAlbumsPublic();
-      const album = albums.find(a => a.id === albumId);
+      const [album] = await db.select(publicAlbumFields()).from(schema.albums)
+        .where(and(eq(schema.albums.id, albumId), eq(schema.albums.published, true)))
+        .limit(1);
 
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
@@ -229,7 +194,7 @@ module.exports = async (req, res) => {
       return sendJson(res, 200, { ok: true, album, tracks });
     }
 
-    // ── 3. Home: catálogo completo ─────────────────────────
+    // ── 3. Catálogo ────────────────────────────────────────
     const albums = await selectAlbumsPublic();
     const albumIds = albums.map(a => a.id);
     const tracks = await selectTracksPublic(albumIds);
@@ -244,24 +209,22 @@ module.exports = async (req, res) => {
       tracks: byAlbum.get(a.id) || []
     }));
 
-    // Conteúdo do site
+    // ── 4. Conteúdo ────────────────────────────────────────
     let content = {};
     try {
       const [row] = await db.select({ data: schema.siteContent.data })
         .from(schema.siteContent).where(eq(schema.siteContent.key, 'default')).limit(1);
-      if (row && row.data) content = row.data;
+      if (row?.data) content = row.data;
     } catch (err) {
       console.warn('[public] site_content indisponível:', err.message);
+      // conteúdo é opcional; não falha o catálogo
     }
 
-    // Planos e alugueis
+    // ── 5. Planos e alugueis ───────────────────────────────
     const plans = await getPublicPlans();
-    let rentalPlans = await getPublicRentalPlans(albumIds, tracks.map(t => t.id));
-    if (!rentalPlans.length && Array.isArray(content.rentalPlans)) {
-      rentalPlans = content.rentalPlans;
-    }
+    const rentalPlans = await getPublicRentalPlans(albumIds, tracks.map(t => t.id));
 
-    // ── 4. Retorno final ───────────────────────────────────
+    // ── 6. Resposta final ──────────────────────────────────
     return sendJson(res, 200, {
       ok: true,
       content,
@@ -272,6 +235,7 @@ module.exports = async (req, res) => {
     });
 
   } catch (error) {
+    // Falha real de banco → 500 (não mascara com listas vazias)
     console.error('[public] Erro:', error.code || error.message);
     return sendJson(res, 500, {
       ok: false,
