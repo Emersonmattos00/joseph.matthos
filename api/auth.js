@@ -1,16 +1,17 @@
 'use strict';
 
 /* ============================================================
-   API: /api/auth — Autenticação (Versão Final Corrigida)
+   API: /api/auth — Autenticação (v3 — final)
    Contrato:
      POST ?action=signup   { name, email, password }
      POST ?action=login    { email, password }
-     POST ?action=refresh  (cookie rt)
-     POST ?action=logout   (cookie rt)
+     POST ?action=refresh  (cookie __Secure-jm_auth_refresh)
+     POST ?action=logout   (cookie __Secure-jm_auth_refresh)
      POST ?action=logout-all (auth)
      GET  ?action=me       (auth)
    ⚠️  Toda operação mutável exige checkOrigin (CSRF), inclusive OPTIONS.
    ⚠️  Todo fluxo que cria/revoga sessão usa acquireUserLock().
+   ⚠️  Cookies centralizados em _lib.js (__Host- access, __Secure- refresh).
    ============================================================ */
 
 const crypto = require('node:crypto');
@@ -21,20 +22,26 @@ const { users, refreshTokens } = require('../src/schema.js');
 const {
   getAuthUser,
   checkOrigin,
+  validatedOrigin,
   clientIp,
   checkAndIncrement,
+  hashRateLimitKey,
   getPlanForUserDetailed,
   VALID_PLANS,
+  setAuthCookies,
+  clearAuthCookies,
+  getRefreshToken,
   JWT_ISSUER,
   JWT_AUDIENCE,
-  audit,               // [FIX 10.3] auditoria centralizada
+  REFRESH_MAX_AGE,
+  audit,
 } = require('./_lib');
 
 // ─────────────────────────────────────────────────────────────
 // CONFIG
 // ─────────────────────────────────────────────────────────────
 const ACCESS_TTL = '15m';
-const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // ⚠️ CONTRATO: = _lib.REFRESH_MAX_AGE
+const REFRESH_TTL_MS = REFRESH_MAX_AGE * 1000; // [FIX 6] fonte única
 const MAX_SESSIONS = 5;
 const SCRYPT_KEYLEN = 64;
 const SCRYPT_SALT_BYTES = 16;
@@ -49,6 +56,11 @@ const MAX_USER_AGENT_LEN = 512;
 // ⚠️ CONTRATO: confirmar enum real de users.role ('CUSTOMER' vs 'user')
 const DEFAULT_ROLE = 'CUSTOMER';
 
+// [FIX 1] Limites de rate limit por operação
+const RL_SIGNUP = { max: 5, windowMs: 15 * 60 * 1000 };
+const RL_LOGIN = { max: 10, windowMs: 15 * 60 * 1000 };
+const RL_REFRESH = { max: 30, windowMs: 15 * 60 * 1000 };
+
 if (!JWT_ISSUER || !JWT_AUDIENCE) {
   throw new Error(
     '[auth] JWT_ISSUER/JWT_AUDIENCE ausentes em _lib.js — emissão abortada.'
@@ -58,7 +70,6 @@ const ISSUER = JWT_ISSUER;
 const AUDIENCE = JWT_AUDIENCE;
 
 // [FIX 8] Hash fictício pré-computado para equalizar timing em login
-// (gerado uma única vez no boot, com os mesmos parâmetros da app).
 const DUMMY_PASSWORD_HASH = (() => {
   const salt = crypto.randomBytes(SCRYPT_SALT_BYTES);
   const derived = crypto.scryptSync(
@@ -164,48 +175,6 @@ function trimUserAgent(ua) {
   return ua.slice(0, MAX_USER_AGENT_LEN);
 }
 
-// [FIX 10.2] Composição de Set-Cookie sem sobrescrever outros cookies
-function appendSetCookie(res, cookieStr) {
-  const existing = res.getHeader('Set-Cookie');
-  const list = existing
-    ? Array.isArray(existing) ? existing.slice() : [String(existing)]
-    : [];
-  list.push(cookieStr);
-  res.setHeader('Set-Cookie', list);
-}
-
-// ─────────────────────────────────────────────────────────────
-// COOKIES (⚠️ CONTRATO com _lib.js)
-// ─────────────────────────────────────────────────────────────
-function setRefreshCookie(res, raw) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  appendSetCookie(
-    res,
-    `rt=${raw}; HttpOnly; Path=/api/auth; SameSite=Strict; Max-Age=${Math.floor(
-      REFRESH_TTL_MS / 1000
-    )}${secure}`
-  );
-}
-
-function clearRefreshCookie(res) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  appendSetCookie(
-    res,
-    `rt=; HttpOnly; Path=/api/auth; SameSite=Strict; Max-Age=0${secure}`
-  );
-}
-
-function readRefreshCookie(req) {
-  const cookie = String(req.headers.cookie || '');
-  const m = cookie.match(/(?:^|;\s*)rt=([^;]+)/);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1]);
-  } catch {
-    return null;
-  }
-}
-
 // ─────────────────────────────────────────────────────────────
 // SENHAS
 // ─────────────────────────────────────────────────────────────
@@ -265,7 +234,7 @@ async function resolvePlan(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RATE LIMIT (⚠️ CONTRATO com checkAndIncrement)
+// RATE LIMIT (assinatura correta de _lib.js v7)  [FIX 1]
 // ─────────────────────────────────────────────────────────────
 function rateUnavailable(results) {
   return results.some(
@@ -287,16 +256,17 @@ function rateLimited(results) {
   );
 }
 
-async function applyRateLimit(res, keys) {
+async function applyRateLimit(res, buckets) {
   try {
     const results = await Promise.all(
-      keys.map((k) => checkAndIncrement(k, { failClosed: true }))
+      buckets.map(({ bucket, max, windowMs }) =>
+        checkAndIncrement(bucket, max, windowMs, { failClosed: true })
+      )
     );
     if (rateUnavailable(results)) {
       return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
     if (rateLimited(results)) {
-      // [FIX 7] Retry-After do limiter, não inventado
       const limited = results.find((r) => r && r.limited === true) || {};
       const retryAfterMs =
         typeof limited.retryAfterMs === 'number' && limited.retryAfterMs > 0
@@ -377,7 +347,6 @@ async function handleSignup(req, res) {
   const body = parseBody(req);
   if (!body) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  // [FIX 4] validação de tipos ANTES de normalizar
   if (
     typeof body.name !== 'string' ||
     typeof body.email !== 'string' ||
@@ -405,7 +374,10 @@ async function handleSignup(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
 
-  if (await applyRateLimit(res, [`signup:ip:${ip}`, `signup:email:${email}`])) return;
+  if (await applyRateLimit(res, [
+    { bucket: `signup:ip:${ip}`, ...RL_SIGNUP },
+    { bucket: `signup:email:${hashRateLimitKey(email)}`, ...RL_SIGNUP },
+  ])) return;
 
   try {
     assertJwtConfig();
@@ -442,8 +414,6 @@ async function handleSignup(req, res) {
           role: DEFAULT_ROLE,
           createdAt: new Date().toISOString(),
           // ⚠️ CONTRATO: confirmar se users.updatedAt é obrigatório.
-          // Se for e não tiver DEFAULT, descomentar a linha abaixo:
-          // updatedAt: new Date().toISOString(),
         })
         .returning();
 
@@ -458,7 +428,6 @@ async function handleSignup(req, res) {
       refreshRaw = created.raw;
     });
   } catch (err) {
-    // [FIX 3] só trata 23505 como e-mail duplicado se a constraint for a certa
     if (err.code === 'EMAIL_TAKEN') {
       return sendJson(res, 409, { ok: false, error: 'E-mail já cadastrado.' });
     }
@@ -474,11 +443,17 @@ async function handleSignup(req, res) {
     return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
+  if (!createdUserId) {
+    console.error('[auth][signup] createdUserId ausente após commit');
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
+  }
+
   const { plan, planDegraded } = await resolvePlan(createdUserId);
 
-  setRefreshCookie(res, refreshRaw);
-  // [FIX 10.3] auditoria (sem dados sensíveis)
-  audit?.('auth.signup', { userId: createdUserId, ip });
+  setAuthCookies(res, { access_token: accessToken, refresh_token: refreshRaw });
+
+  audit?.('auth.signup', { userId: createdUserId, ip, success: true });
+
   return sendJson(res, 201, { ok: true, accessToken, plan, planDegraded });
 }
 
@@ -486,7 +461,6 @@ async function handleLogin(req, res) {
   const body = parseBody(req);
   if (!body) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  // [FIX 4] tipos antes de normalizar
   if (typeof body.email !== 'string' || typeof body.password !== 'string') {
     return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
   }
@@ -503,7 +477,10 @@ async function handleLogin(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
 
-  if (await applyRateLimit(res, [`login:ip:${ip}`, `login:email:${email}`])) return;
+  if (await applyRateLimit(res, [
+    { bucket: `login:ip:${ip}`, ...RL_LOGIN },
+    { bucket: `login:email:${hashRateLimitKey(email)}`, ...RL_LOGIN },
+  ])) return;
 
   try {
     assertJwtConfig();
@@ -517,13 +494,12 @@ async function handleLogin(req, res) {
     .where(eq(users.email, email))
     .limit(1);
 
-  // [FIX 8] equaliza timing: verifica contra hash fictício se usuário não existe
   const passwordOk = user
     ? await verifyPassword(password, user.passwordHash)
     : (await verifyPassword(password, DUMMY_PASSWORD_HASH), false);
 
   if (!user || !passwordOk) {
-    audit?.('auth.login.failed', { email, ip }); // [FIX 10.3]
+    audit?.('auth.login.failed', { email, ip, success: false, reason: 'invalid_credentials' });
     return sendJson(res, 401, { ok: false, error: 'Credenciais inválidas.' });
   }
 
@@ -547,8 +523,10 @@ async function handleLogin(req, res) {
 
   const { plan, planDegraded } = await resolvePlan(user.id);
 
-  setRefreshCookie(res, refreshRaw);
-  audit?.('auth.login.success', { userId: user.id, ip });
+  setAuthCookies(res, { access_token: accessToken, refresh_token: refreshRaw });
+
+  audit?.('auth.login.success', { userId: user.id, ip, success: true });
+
   return sendJson(res, 200, {
     ok: true,
     accessToken,
@@ -559,9 +537,9 @@ async function handleLogin(req, res) {
 }
 
 async function handleRefresh(req, res) {
-  const raw = readRefreshCookie(req);
+  const raw = getRefreshToken(req);
   if (!isValidRefreshTokenFormat(raw)) {
-    clearRefreshCookie(res);
+    clearAuthCookies(res);
     return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
   }
 
@@ -570,7 +548,9 @@ async function handleRefresh(req, res) {
     return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
 
-  if (await applyRateLimit(res, [`refresh:ip:${ip}`])) return;
+  if (await applyRateLimit(res, [
+    { bucket: `refresh:ip:${ip}`, ...RL_REFRESH },
+  ])) return;
 
   try {
     assertJwtConfig();
@@ -592,16 +572,15 @@ async function handleRefresh(req, res) {
     .limit(1);
 
   if (!row) {
-    clearRefreshCookie(res);
-    audit?.('auth.refresh.rejected', { reason: 'not_found', ip });
+    clearAuthCookies(res);
+    audit?.('auth.refresh.rejected', { reason: 'not_found', ip, success: false });
     return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
   }
 
-  // Pré-checagem rápida (fora da transação) para evitar lock desnecessário
   const preExp = Date.parse(row.expiresAt);
   if (!Number.isFinite(preExp) || preExp <= Date.now()) {
-    clearRefreshCookie(res);
-    audit?.('auth.refresh.rejected', { reason: 'expired_pre', userId: row.userId, ip });
+    clearAuthCookies(res);
+    audit?.('auth.refresh.rejected', { reason: 'expired_pre', userId: row.userId, ip, success: false });
     return sendJson(res, 401, { ok: false, error: 'Sessão expirada.' });
   }
 
@@ -611,8 +590,8 @@ async function handleRefresh(req, res) {
     .where(eq(users.id, row.userId))
     .limit(1);
   if (!user) {
-    clearRefreshCookie(res);
-    audit?.('auth.refresh.rejected', { reason: 'no_user', userId: row.userId, ip });
+    clearAuthCookies(res);
+    audit?.('auth.refresh.rejected', { reason: 'no_user', userId: row.userId, ip, success: false });
     return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
   }
 
@@ -623,7 +602,6 @@ async function handleRefresh(req, res) {
     await db.transaction(async (tx) => {
       await acquireUserLock(tx, user.id);
 
-      // [FIX 5] revalidar expiração DENTRO da transação, após o lock
       const [fresh] = await tx
         .select({ id: refreshTokens.id, expiresAt: refreshTokens.expiresAt, revokedAt: refreshTokens.revokedAt })
         .from(refreshTokens)
@@ -670,8 +648,8 @@ async function handleRefresh(req, res) {
     });
   } catch (err) {
     if (err.code === 'REFRESH_RACE' || err.code === 'REFRESH_EXPIRED') {
-      clearRefreshCookie(res);
-      audit?.('auth.refresh.rejected', { reason: err.code, userId: user.id, ip });
+      clearAuthCookies(res);
+      audit?.('auth.refresh.rejected', { reason: err.code, userId: user.id, ip, success: false });
       return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
     }
     console.error('[auth][refresh] erro:', err.message);
@@ -680,7 +658,8 @@ async function handleRefresh(req, res) {
 
   const { plan, planDegraded } = await resolvePlan(user.id);
 
-  setRefreshCookie(res, newRaw);
+  setAuthCookies(res, { access_token: accessToken, refresh_token: newRaw });
+
   return sendJson(res, 200, {
     ok: true,
     accessToken,
@@ -691,11 +670,10 @@ async function handleRefresh(req, res) {
 }
 
 async function handleLogout(req, res) {
-  const raw = readRefreshCookie(req);
+  const raw = getRefreshToken(req);
   if (isValidRefreshTokenFormat(raw)) {
     const tokenHash = hashRefreshToken(raw);
 
-    // [FIX 1] localiza userId fora da transação para adquirir o lock correto
     let userId = null;
     try {
       const [row] = await db
@@ -713,7 +691,6 @@ async function handleLogout(req, res) {
       try {
         await db.transaction(async (tx) => {
           await acquireUserLock(tx, userId);
-          // Revogação condicional DENTRO do lock; estado pode ter mudado
           await tx
             .update(refreshTokens)
             .set({ revokedAt: new Date().toISOString() })
@@ -728,10 +705,10 @@ async function handleLogout(req, res) {
         console.error('[auth][logout] erro:', err.message);
         return sendJson(res, 500, { ok: false, error: 'Logout não confirmado pelo servidor.' });
       }
-      audit?.('auth.logout', { userId, ip: clientIp(req) });
+      audit?.('auth.logout', { userId, ip: clientIp(req), success: true });
     }
   }
-  clearRefreshCookie(res);
+  clearAuthCookies(res);
   return sendJson(res, 200, { ok: true });
 }
 
@@ -754,9 +731,8 @@ async function handleLogoutAll(req, res, authUser) {
     return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
-  clearRefreshCookie(res);
-  audit?.('auth.logout-all', { userId: authUser.id, ip: clientIp(req) });
-  // Observação: access tokens já emitidos permanecem válidos até expirar.
+  clearAuthCookies(res);
+  audit?.('auth.logout-all', { userId: authUser.id, ip: clientIp(req), success: true });
   return sendJson(res, 200, { ok: true });
 }
 
@@ -788,15 +764,15 @@ const KNOWN_ACTIONS = new Set(['signup', 'login', 'refresh', 'logout', 'logout-a
 module.exports = async (req, res) => {
   const action = parseAction(req);
 
-  // [FIX 2] CORS/CSRF aplicados ANTES do OPTIONS
-  const allowedOrigin = String(process.env.APP_URL || '').trim().replace(/\/+$/, '');
   const originOk = checkOrigin(req);
+  const origin = validatedOrigin(req);
 
   if (req.method === 'OPTIONS') {
     if (!originOk) return res.status(403).end();
-    if (allowedOrigin) {
-      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Vary', 'Origin');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
@@ -804,12 +780,12 @@ module.exports = async (req, res) => {
     return res.status(204).end();
   }
 
-  if (allowedOrigin) {
-    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
   }
 
-  // [FIX 2] CSRF em toda operação mutável
   if (req.method === 'POST' && MUTATING_ACTIONS.has(action) && !originOk) {
     return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
   }
