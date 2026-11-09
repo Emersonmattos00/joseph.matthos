@@ -4,8 +4,9 @@
    api/_db.js — Conexão Neon PostgreSQL + Drizzle ORM
    ------------------------------------------------------------
    - Driver: neon-serverless (WebSocket) para transações reais
-   - Pool + WebSocket configurado para Node.js
-   - Exporta `sql` (Neon HTTP) e `drizzleSql` (Drizzle)
+   - checkDatabase testa o pool (não o HTTP)
+   - Listener de erro no pool
+   - closeDatabase idempotente (SIGTERM + SIGINT)
    ============================================================ */
 
 const { Pool, neonConfig, neon } = require('@neondatabase/serverless');
@@ -21,7 +22,7 @@ const {
 
 const schema = require('../src/schema.js');
 
-// ─── WebSocket para Node.js ─────────────────────────────────
+// WebSocket para Node.js
 neonConfig.webSocketConstructor = ws;
 
 // ─── Validação da configuração ───────────────────────────────
@@ -51,35 +52,49 @@ function getDatabaseUrl() {
 // ─── Inicialização ───────────────────────────────────────────
 const databaseUrl = getDatabaseUrl();
 
-// Cliente HTTP para consultas simples (signup usa sql`...`)
 const sqlNeon = neon(databaseUrl);
-
-// Pool WebSocket para transações reais
 const pool = new Pool({ connectionString: databaseUrl });
+
+pool.on('error', (error) => {
+  console.error('[DATABASE] Erro no pool:', error.code || 'POOL_ERROR');
+});
+
 const db = drizzle({ client: pool, schema });
 
 // ─── Diagnóstico ─────────────────────────────────────────────
 async function checkDatabase() {
   try {
-    const result = await sqlNeon`SELECT 1 AS connected`;
-    return {
-      available: true,
-      connected: result?.[0]?.connected === 1 || result?.[0]?.connected === '1'
-    };
+    const result = await pool.query('SELECT 1 AS connected');
+    const connected = Number(result?.rows?.[0]?.connected) === 1;
+    return { available: connected, connected };
   } catch (error) {
-    console.error('[DATABASE] Falha na verificação:', error.code || error.message);
+    console.error('[DATABASE] Falha na verificação:', error.code || 'DATABASE_ERROR');
     return { available: false, connected: false };
   }
 }
 
+// ─── Encerramento controlado (idempotente) ─────────────────
+let closePromise = null;
+
+function closeDatabase() {
+  if (!closePromise) {
+    closePromise = pool.end().catch((error) => {
+      console.error('[DATABASE] Erro ao encerrar pool:', error.code || 'POOL_CLOSE_ERROR');
+      throw error;
+    });
+  }
+  return closePromise;
+}
+
 // ─── Exportações ─────────────────────────────────────────────
 module.exports = {
-  db,        // ← AGORA com transações reais
-  sql: sqlNeon, // ← HTTP para queries simples
+  db,
+  sql: sqlNeon,
   drizzleSql,
   schema,
   eq, and, or, asc, desc, inArray,
   gt, gte, lt, lte, ne,
   isNull, isNotNull, count,
-  checkDatabase
+  checkDatabase,
+  closeDatabase
 };
