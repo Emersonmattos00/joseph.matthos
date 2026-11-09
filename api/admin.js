@@ -18,7 +18,7 @@ const {
   signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-const { db, eq, and, asc, desc, sql, inArray } = require('./_db');
+const { db, eq, and, asc, desc, drizzleSql, inArray } = require('./_db');
 const schema = require('./_db').schema;
 const { tracks, albums, artists, orders, adminAudit } = schema;
 
@@ -428,7 +428,7 @@ async function handleUploadConfirm(req, res, session) {
 async function handleGetUsers(req, res) {
   const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
   let planRows = [];
-  try { planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`); } catch (e) { }
+  try { planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`); } catch (e) { }
   const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
 }
@@ -593,7 +593,7 @@ async function handleCreateTrack(req, res, session) {
       const [album] = await tx.select({ artistId: albums.artistId }).from(albums).where(eq(albums.id, albumId)).limit(1);
       if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
       
-      const rows = await tx.select({ n: sql`COALESCE(MAX(${tracks.trackNumber}), 0)` }).from(tracks).where(eq(tracks.albumId, albumId));
+      const rows = await tx.select({ n: drizzleSql`COALESCE(MAX(${tracks.trackNumber}), 0)` }).from(tracks).where(eq(tracks.albumId, albumId));
       const nextNumber = Number(rows[0]?.n || 0) + 1;
 
       const [row] = await tx.insert(tracks).values({ 

@@ -4,114 +4,81 @@
    api/_db.js — Conexão Neon PostgreSQL + Drizzle ORM
    ------------------------------------------------------------
    - Validação da DATABASE_URL
-   - Neon Serverless HTTP
-   - Drizzle ORM com schema centralizado
-   - Compatibilidade com consultas SQL diretas
-   - Exportações explícitas dos operadores Drizzle
+   - Exporta `sql` (Neon) e `drizzleSql` (Drizzle)
+   - Compatível com auth.js e admin.js
    ============================================================ */
 
 const { neon } = require('@neondatabase/serverless');
+const { drizzle } = require('drizzle-orm/neon-http');
 
 const {
-  drizzle
-} = require('drizzle-orm/neon-http');
-
-const {
-  eq,
-  and,
-  or,
-  asc,
-  desc,
-  sql: drizzleSql,
-  inArray,
-  gt,
-  gte,
-  lt,
-  lte,
-  ne,
-  isNull,
-  isNotNull
+  eq, and, or, asc, desc,
+  sql: drizzleSql, inArray,
+  gt, gte, lt, lte, ne,
+  isNull, isNotNull, count
 } = require('drizzle-orm');
 
 const schema = require('../src/schema.js');
 
-/* ============================================================
-   Validação da conexão
-   ============================================================ */
+// ─── Validação da configuração ───────────────────────────────
+function getDatabaseUrl() {
+  const value = process.env.DATABASE_URL;
+  if (!value || typeof value !== 'string') {
+    throw new Error('[DATABASE] DATABASE_URL não foi configurada.');
+  }
 
-const databaseUrl = String(
-  process.env.DATABASE_URL || ''
-).trim();
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('[DATABASE] DATABASE_URL possui formato inválido.');
+  }
 
-if (!databaseUrl) {
-  throw new Error(
-    '[database] DATABASE_URL não foi configurada.'
-  );
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+    throw new Error('[DATABASE] Protocolo de conexão PostgreSQL inválido.');
+  }
+  if (!parsed.hostname) {
+    throw new Error('[DATABASE] Host do PostgreSQL não informado.');
+  }
+
+  return value;
 }
 
-let parsedDatabaseUrl;
-
-try {
-  parsedDatabaseUrl = new URL(databaseUrl);
-} catch {
-  throw new Error(
-    '[database] DATABASE_URL possui formato inválido.'
-  );
-}
-
-if (
-  !['postgres:', 'postgresql:'].includes(
-    parsedDatabaseUrl.protocol
-  ) ||
-  !parsedDatabaseUrl.hostname
-) {
-  throw new Error(
-    '[database] DATABASE_URL deve apontar para um PostgreSQL válido.'
-  );
-}
-
-/* ============================================================
-   Inicialização Neon
-   ============================================================ */
-
+// ─── Inicialização ───────────────────────────────────────────
+const databaseUrl = getDatabaseUrl();
 const sqlNeon = neon(databaseUrl);
+const db = drizzle(sqlNeon, { schema });
 
-/* ============================================================
-   Inicialização Drizzle
-   ============================================================ */
+// ─── Diagnóstico ─────────────────────────────────────────────
+async function checkDatabase() {
+  try {
+    const result = await sqlNeon`SELECT 1 AS connected`;
+    return {
+      available: true,
+      connected: result?.[0]?.connected === 1 || result?.[0]?.connected === '1'
+    };
+  } catch (error) {
+    console.error('[DATABASE] Falha na verificação:', error.code || error.message);
+    return { available: false, connected: false };
+  }
+}
 
-const db = drizzle(sqlNeon, {
-  schema
-});
-
-/* ============================================================
-   Exportações
-   ============================================================ */
-
+// ─── Exportações ─────────────────────────────────────────────
 module.exports = {
   db,
-
-  // Compatibilidade com consultas diretas do Neon (auth.js, admin.js, etc.).
+  
+  // O Cliente Neon (usado em auth.js para `sql\`...\``)
   sql: sqlNeon,
-
-  // Expressões SQL do Drizzle (para casos que precisem de `sql\`...\``).
+  
+  // O Construtor do Drizzle (usado em admin.js para `db.execute(drizzleSql\`...\`)`)
   drizzleSql,
-
-  // Schema centralizado (essencial para admin.js).
+  
   schema,
-
-  // Operadores Drizzle.
-  eq,
-  and,
-  or,
-  asc,
-  desc,
-  inArray,
-  gt,
-  gte,
-  lt,
-  lte,
-  ne,
-  isNull,
-  isNotNull
+  
+  // Operadores
+  eq, and, or, asc, desc, inArray,
+  gt, gte, lt, lte, ne,
+  isNull, isNotNull, count,
+  
+  checkDatabase
 };
