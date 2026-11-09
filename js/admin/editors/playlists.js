@@ -1,12 +1,12 @@
 /* ============================================================
-   js/admin/editors/playlists.js — v3 (UUID-safe)
+   js/admin/editors/playlists.js — v4 (Versão Final Absoluta)
    ------------------------------------------------------------
-   - IDs como String em todo o fluxo
-   - Migração NÃO destrutiva (usa reportMigration antes de aplicar)
-   - Listener global do modal com AbortController
-   - Catálogo com tratamento de erro + refresh
-   - Validação de título/descrição/capa/faixas
-   - addPlaylist() usa UUID quando disponível
+   - IDs de faixas tratados estritamente como String (UUID)
+   - Integração com /api/public (albums com tracks aninhadas)
+   - Bloqueio de salvamento se o catálogo (siteContent) falhar
+   - Migração de referências antigas NÃO destrutiva
+   - Uso de AbortController para limpar listeners do modal
+   - Validação completa de campos (limites, duplicatas)
    ============================================================ */
 
 import { AdminState, markDirty } from '../state.js';
@@ -29,10 +29,11 @@ const MAX_COVER_LEN = 3;
 const MAX_TRACKS = 300;
 
 // ─────────────────────────────────────────────────────────────
-// Catálogo
+// Catálogo (Cache e Tratamento de Erros)
 // ─────────────────────────────────────────────────────────────
 let _catalog = null;
 let _catalogPromise = null;
+let _contentError = false; // Flag para bloquear salvamento se o siteContent falhar
 
 async function getCatalog({ force = false } = {}) {
   if (_catalog && !force) return _catalog;
@@ -47,13 +48,15 @@ async function getCatalog({ force = false } = {}) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
 
       const json = await r.json();
-      if (!Array.isArray(json?.albums)) throw new Error('Resposta inválida.');
+      if (!Array.isArray(json?.albums)) throw new Error('Resposta de catálogo inválida.');
 
+      // O novo /api/public sinaliza se houve erro ao ler o banco
+      _contentError = !!json.contentError;
+      
       _catalog = json.albums;
       return _catalog;
     } catch (err) {
       console.error('[playlists] catálogo indisponível:', err);
-      // NÃO sobrescreve _catalog com [] em caso de falha
       throw err;
     } finally {
       _catalogPromise = null;
@@ -65,10 +68,11 @@ async function getCatalog({ force = false } = {}) {
 
 export function invalidatePlaylistCatalog() {
   _catalog = null;
+  _contentError = false;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Render — lista
+// Render — Lista principal
 // ─────────────────────────────────────────────────────────────
 export async function renderPlaylistsEditor(content = AdminState.content) {
   const wrap = document.getElementById('playlistsEditor');
@@ -76,7 +80,6 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
 
   if (!Array.isArray(content.playlists)) content.playlists = [];
 
-  // ── Catálogo (com erro visível)
   let albums;
   try {
     albums = await getCatalog();
@@ -94,7 +97,7 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
     return;
   }
 
-  // ── Relatório de migração (NÃO aplica sozinho)
+  // Relatório de migração (NÃO aplica sozinho)
   const migration = reportMigration(content.playlists, albums);
   if (migration.pending > 0) {
     renderMigrationBanner(wrap, content, albums, migration);
@@ -106,28 +109,23 @@ export async function renderPlaylistsEditor(content = AdminState.content) {
 
 function renderMigrationBanner(wrap, content, albums, report) {
   wrap.innerHTML = `
-    <div class="admin-warning-box" style="padding:1rem;border:1px solid var(--warning,#f0a100);border-radius:8px;margin-bottom:1rem;">
-      <strong>Migração pendente.</strong>
+    <div class="admin-warning-box" style="padding:1rem;border:1px solid var(--warning,#f0a100);border-radius:8px;margin-bottom:1rem;background:rgba(240,161,0,0.05);">
+      <strong>Migração de playlists pendente.</strong>
       <p style="margin:0.5rem 0;font-size:0.9rem;">
-        ${report.pending} referência(s) de faixa ainda não foram resolvidas.
-        Referências não encontradas serão preservadas como <code>legacy:*</code> — nada será perdido.
+        ${report.pending} referência(s) de faixa precisam ser atualizadas para UUIDs.
+        Referências antigas serão preservadas como <code>legacy:*</code> — nada será apagado sem confirmação.
       </p>
       <details style="font-size:0.85rem;margin-bottom:0.5rem;">
-        <summary>Ver detalhes</summary>
+        <summary>Ver detalhes por playlist</summary>
         <ul style="margin:0.5rem 0 0 1rem;">
           ${report.playlists.map(p => `
-            <li><strong>${esc(p.title || '(sem título)')}</strong> —
-              ${p.resolvable} resolvível(eis), ${p.pending} pendente(s)</li>
+            <li><strong>${esc(p.title || '(sem título)')}</strong> — ${p.resolvable} resolvível(eis), ${p.pending} pendente(s)</li>
           `).join('')}
         </ul>
       </details>
       <div style="display:flex;gap:0.5rem;">
-        <button type="button" class="btn btn-primary btn-sm" id="playlistApplyMigration">
-          Aplicar migração (segura)
-        </button>
-        <button type="button" class="btn btn-outline btn-sm" id="playlistSkipMigration">
-          Ignorar por enquanto
-        </button>
+        <button type="button" class="btn btn-primary btn-sm" id="playlistApplyMigration">Aplicar migração (segura)</button>
+        <button type="button" class="btn btn-outline btn-sm" id="playlistSkipMigration">Ignorar por enquanto</button>
       </div>
     </div>
   `;
@@ -152,20 +150,18 @@ function paintList(wrap, content, albums) {
       <span class="playlists-editor__count">
         ${playlists.length} playlist${playlists.length === 1 ? '' : 's'}
       </span>
-      <button type="button" class="btn btn-outline btn-sm" id="playlistAddTop">
-        + Nova playlist
-      </button>
+      <button type="button" class="btn btn-outline btn-sm" id="playlistAddTop">+ Nova playlist</button>
     </div>
   `;
 
   if (!playlists.length) {
-    wrap.innerHTML = `${header}
-      <p class="admin-empty">Nenhuma playlist ainda. Clique em "Nova playlist" para começar.</p>`;
+    wrap.innerHTML = `${header}<p class="admin-empty">Nenhuma playlist ainda. Clique em "Nova playlist" para começar.</p>`;
     bindHeader(content, albums);
     return;
   }
 
-  wrap.innerHTML = `${header}
+  wrap.innerHTML = `
+    ${header}
     <div class="playlists-editor__list">
       ${playlists.map((pl, i) => renderPlaylistCard(pl, i, playlists.length, albums)).join('')}
     </div>`;
@@ -183,7 +179,6 @@ function renderPlaylistCard(pl, i, total, albums) {
   const preview = resolved.slice(0, 3).map((r) =>
     `<span class="playlist-preview__track">${esc(r.track.title)}</span>`
   ).join('');
-
   const moreCount = resolved.length > 3 ? resolved.length - 3 : 0;
 
   return `
@@ -218,7 +213,7 @@ function renderPlaylistCard(pl, i, total, albums) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind
+// Binds e Ações da Lista
 // ─────────────────────────────────────────────────────────────
 function bindHeader(content, albums) {
   const addTop = document.getElementById('playlistAddTop');
@@ -232,23 +227,18 @@ function bindCards(content, albums) {
     btn.addEventListener('click', () => openPlaylistModal(content, Number(btn.dataset.i), albums));
   });
   document.querySelectorAll('[data-action="remove"]').forEach((btn) => {
-    btn.addEventListener('click', () => removePlaylist(content, Number(btn.dataset.i)));
+    btn.addEventListener('click', () => removePlaylist(content, Number(btn.dataset.i), albums));
   });
   document.querySelectorAll('[data-action="move-up"]').forEach((btn) => {
-    btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), -1));
+    btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), -1, albums));
   });
   document.querySelectorAll('[data-action="move-down"]').forEach((btn) => {
-    btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), +1));
+    btn.addEventListener('click', () => movePlaylist(content, Number(btn.dataset.i), +1, albums));
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Ações da lista
-// ─────────────────────────────────────────────────────────────
 function makePlaylistId() {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return `pl_${crypto.randomUUID()}`;
-  }
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return `pl_${crypto.randomUUID()}`;
   return `pl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -266,7 +256,7 @@ function addPlaylist(content, albums) {
   toast('Playlist adicionada. Lembre de salvar.', '🎵');
 }
 
-function removePlaylist(content, i) {
+function removePlaylist(content, i, albums) {
   const pl = content.playlists[i];
   if (!pl) return;
 
@@ -275,21 +265,21 @@ function removePlaylist(content, i) {
 
   content.playlists.splice(i, 1);
   markDirty();
-  paintList(document.getElementById('playlistsEditor'), content, _catalog || []);
+  paintList(document.getElementById('playlistsEditor'), content, albums);
   toast('Playlist removida. Lembre de salvar.', '🗑');
 }
 
-function movePlaylist(content, i, delta) {
+function movePlaylist(content, i, delta, albums) {
   const arr = content.playlists;
   const target = i + delta;
   if (!Number.isInteger(i) || target < 0 || target >= arr.length) return;
   [arr[i], arr[target]] = [arr[target], arr[i]];
   markDirty();
-  paintList(document.getElementById('playlistsEditor'), content, _catalog || []);
+  paintList(document.getElementById('playlistsEditor'), content, albums);
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal
+// Modal de Edição
 // ─────────────────────────────────────────────────────────────
 function openPlaylistModal(content, i, albums) {
   const pl = content.playlists[i];
@@ -328,9 +318,7 @@ function openPlaylistModal(content, i, albums) {
 
     <div class="form-group">
       <label>Faixas (máx ${MAX_TRACKS})</label>
-      <input type="search" id="plTrackSearch" class="shop-search"
-             placeholder="Buscar faixa por título ou álbum..."
-             autocomplete="off">
+      <input type="search" id="plTrackSearch" class="shop-search" placeholder="Buscar faixa por título ou álbum..." autocomplete="off">
       <div id="plSearchResults" class="playlist-search-results" hidden></div>
     </div>
 
@@ -344,7 +332,7 @@ function openPlaylistModal(content, i, albums) {
     </div>
   `);
 
-  // Listener global controlado por AbortController
+  // AbortController para limpar listeners ao fechar o modal
   const ac = new AbortController();
   const { signal } = ac;
 
@@ -382,15 +370,10 @@ function openPlaylistModal(content, i, albums) {
     resultsWrap.innerHTML = results.map((r) => {
       const already = draft.tracks.includes(r.trackId);
       return `
-        <button type="button"
-                class="playlist-search-result"
-                data-track-id="${esc(r.trackId)}"
-                ${already ? 'disabled' : ''}>
+        <button type="button" class="playlist-search-result" data-track-id="${esc(r.trackId)}" ${already ? 'disabled' : ''}>
           <span class="playlist-search-result__title">${esc(r.title)}</span>
           <span class="playlist-search-result__album">${esc(r.albumTitle)} · ${esc(r.duration)}</span>
-          ${already
-            ? '<span class="playlist-search-result__added">já adicionada</span>'
-            : '<span class="playlist-search-result__add">+ Adicionar</span>'}
+          ${already ? '<span class="playlist-search-result__added">já adicionada</span>' : '<span class="playlist-search-result__add">+ Adicionar</span>'}
         </button>`;
     }).join('');
     resultsWrap.hidden = false;
@@ -483,6 +466,12 @@ function openPlaylistModal(content, i, albums) {
   document.getElementById('plSave').addEventListener('click', () => {
     const errEl = document.getElementById('plError');
     errEl.textContent = '';
+
+    // Proteção contra perda de dados se a API pública falhou ao ler o siteContent
+    if (_contentError) {
+      errEl.textContent = 'Conteúdo do site indisponível no servidor. Recarregue a página antes de salvar para não sobrescrever playlists.';
+      return;
+    }
 
     const title = document.getElementById('plTitle').value.trim();
     if (!title) return (errEl.textContent = 'Nome obrigatório.');
