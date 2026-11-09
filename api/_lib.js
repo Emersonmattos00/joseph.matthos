@@ -1,45 +1,17 @@
 /* ============================================================
    api/_lib.js — Módulos internos consolidados
    ------------------------------------------------------------
-      Substitui: módulos legados de auth, audit, rate-limit e plan.
-              _plan.js, _csrf-guard.js
-
-   ⚠️  NUNCA importar no cliente. Só serverless functions.
-
-   Dependências obrigatórias (produção):
-     - @neondatabase/serverless
-     - jsonwebtoken
-     - @upstash/redis (opcional, mas recomendado para rate limit)
-
-   Variáveis de ambiente esperadas:
-     - DATABASE_URL (Neon PostgreSQL)
-     - JWT_SECRET
-     - UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN  (opcional)
-       (ou KV_REST_API_URL / KV_REST_API_TOKEN para Vercel KV)
-     - ALLOWED_ORIGINS (CSV)
-     - NODE_ENV=production
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. getAuthUser() — algoritmo HS256 explícito, clock tolerance
-   2. clientIp() — prioridade correta dos headers de proxy
-   3. checkAndIncrement() — validação de parâmetros
-   4. ALLOWED_ORIGINS — normalizada na inicialização
-   5. checkOrigin() — exige Origin, compara base
-   6. verifyHmac() — valida partes, iat numérico, futuro e expiração
-   7. verifyScrypt() — valida formato, tamanho e senha
-   8. getPlanForUserDetailed() — reutiliza _db.js
-   9. invalidatePlanCache() — exportada para uso
+   Substitui: módulos legados de auth, audit, rate-limit e plan.
+   ⚠️ NUNCA importar no cliente. Só serverless functions.
    ============================================================ */
 
 'use strict';
 
 const crypto = require('crypto');
+const { isIP } = require('node:net');
 const jwt = require('jsonwebtoken');
 
-// ─────────────────────────────────────────────────────────────
 // Guard: impede importação no cliente
-// ─────────────────────────────────────────────────────────────
 if (typeof window !== 'undefined') {
   throw new Error('[_lib] Este módulo não pode ser importado no cliente.');
 }
@@ -78,7 +50,7 @@ const ALLOWED_ORIGINS = new Set(
 );
 
 // ═════════════════════════════════════════════════════════════
-// 2. HTTP — helpers
+// HTTP — helpers
 // ═════════════════════════════════════════════════════════════
 function sendJson(res, status, body) {
   if (res.headersSent) {
@@ -90,10 +62,7 @@ function sendJson(res, status, body) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
   if (!res.getHeader('Cache-Control')) {
-    res.setHeader(
-      'Cache-Control',
-      'no-store, no-cache, must-revalidate, proxy-revalidate'
-    );
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
   }
@@ -132,24 +101,38 @@ function parseCookies(header) {
   return out;
 }
 
+/* ─── IP confiável ───────────────────────────────────────────
+   - Em produção, confia apenas em x-real-ip (proxy da Vercel).
+   - x-forwarded-for é usado só em desenvolvimento.
+   - x-vercel-forwarded-for é aceito porque a Vercel o sobrescreve.
+   - Sempre valida com isIP() para evitar injection de string.
+*/
 function clientIp(req) {
-  const h = req.headers || {};
-  const fwd =
-    h['x-vercel-forwarded-for'] ||
-    h['x-real-ip'] ||
-    h['x-forwarded-for'];
+  const headers = req.headers || {};
 
-  const ip = String(
-    fwd ||
-    (req.socket && req.socket.remoteAddress) ||
-    ''
-  ).split(',')[0].trim();
+  const trustedProxyHeader =
+    headers['x-real-ip'] ||
+    headers['x-vercel-forwarded-for'];
 
-  return ip.slice(0, 128);
+  if (trustedProxyHeader) {
+    const candidate = String(trustedProxyHeader).split(',')[0].trim();
+    if (isIP(candidate)) return candidate.slice(0, 128);
+  }
+
+  if (!IS_PROD) {
+    const forwarded = headers['x-forwarded-for'];
+    if (forwarded) {
+      const candidate = String(forwarded).split(',')[0].trim();
+      if (isIP(candidate)) return candidate.slice(0, 128);
+    }
+  }
+
+  const remote = req.socket?.remoteAddress;
+  return remote && isIP(remote) ? remote.slice(0, 128) : '';
 }
 
 // ═════════════════════════════════════════════════════════════
-// 4. COOKIES — auth
+// COOKIES — auth
 // ═════════════════════════════════════════════════════════════
 function buildCookie(name, value, maxAge) {
   const safeMaxAge = Math.max(0, Number(maxAge) || 0);
@@ -177,20 +160,29 @@ function appendSetCookie(res, cookies) {
   else res.setHeader('Set-Cookie', [existing].concat(list));
 }
 
+/* ─── Compatibilidade com auth.js ────────────────────────────
+   O auth.js atual usa apenas { access_token: token }.
+   Aceitamos tanto um token único quanto o par access/refresh.
+*/
 function setAuthCookies(res, session) {
-  if (!res || !session) return;
+  if (!res || !session) {
+    throw new Error('Sessão inválida.');
+  }
 
   const accessToken = String(session.access_token || '');
   const refreshToken = String(session.refresh_token || '');
 
-  if (!accessToken || !refreshToken) {
-    throw new Error('Sessão inválida: tokens ausentes.');
+  if (!accessToken) {
+    throw new Error('Token de acesso ausente.');
   }
 
-  appendSetCookie(res, [
-    buildCookie(AUTH_COOKIE, accessToken, ACCESS_MAX_AGE),
-    buildCookie(REFRESH_COOKIE, refreshToken, REFRESH_MAX_AGE)
-  ]);
+  const list = [buildCookie(AUTH_COOKIE, accessToken, ACCESS_MAX_AGE)];
+
+  if (refreshToken) {
+    list.push(buildCookie(REFRESH_COOKIE, refreshToken, REFRESH_MAX_AGE));
+  }
+
+  appendSetCookie(res, list);
 }
 
 function clearAuthCookies(res) {
@@ -202,16 +194,12 @@ function clearAuthCookies(res) {
 }
 
 function getAccessToken(req) {
-  const cookies = parseCookies(
-    req && req.headers && (req.headers.cookie || req.headers.Cookie)
-  );
+  const cookies = parseCookies(req?.headers?.cookie || req?.headers?.Cookie);
   return cookies[AUTH_COOKIE] || '';
 }
 
 function getRefreshToken(req) {
-  const cookies = parseCookies(
-    req && req.headers && (req.headers.cookie || req.headers.Cookie)
-  );
+  const cookies = parseCookies(req?.headers?.cookie || req?.headers?.Cookie);
   return cookies[REFRESH_COOKIE] || '';
 }
 
@@ -220,8 +208,8 @@ async function getAuthUser(req) {
   if (!accessToken) return null;
 
   const secret = String(process.env.JWT_SECRET || '').trim();
-  if (!secret) {
-    console.error('[_lib] JWT_SECRET não configurado.');
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    console.error('[_lib] JWT_SECRET ausente ou muito curto.');
     return null;
   }
 
@@ -235,7 +223,7 @@ async function getAuthUser(req) {
       !payload ||
       typeof payload !== 'object' ||
       typeof payload.id !== 'string' ||
-      !payload.id.trim()
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.id)
     ) {
       return null;
     }
@@ -258,7 +246,7 @@ async function getAuthUser(req) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 5. RATE LIMIT — KV (Upstash / Vercel KV)
+// RATE LIMIT — KV (Upstash / Vercel KV)
 // ═════════════════════════════════════════════════════════════
 let _redis = null;
 let _redisInitFailed = false;
@@ -267,12 +255,8 @@ function getRedis() {
   if (_redis) return _redis;
   if (_redisInitFailed) return null;
 
-  const url =
-    process.env.UPSTASH_REDIS_REST_URL ||
-    process.env.KV_REST_API_URL;
-  const token =
-    process.env.UPSTASH_REDIS_REST_TOKEN ||
-    process.env.KV_REST_API_TOKEN;
+  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
   if (!url || !token) {
     _redisInitFailed = true;
@@ -284,10 +268,7 @@ function getRedis() {
     _redis = new Redis({ url, token });
     return _redis;
   } catch (err) {
-    console.warn(
-      '[_lib] @upstash/redis não instalado — rate limit desativado.',
-      'Execute: npm install @upstash/redis'
-    );
+    console.warn('[_lib] @upstash/redis não instalado — rate limit desativado.');
     _redisInitFailed = true;
     return null;
   }
@@ -296,18 +277,13 @@ function getRedis() {
 async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options = {}) {
   const { failClosed = false } = options;
 
-  if (
-    typeof bucket !== 'string' ||
-    !bucket.trim() ||
-    bucket.length > 200
-  ) {
+  // Validação estrita dos parâmetros
+  if (typeof bucket !== 'string' || !bucket.trim() || bucket.length > 200) {
     return { limited: true, retryAfter: 1, reason: 'INVALID_BUCKET' };
   }
-
   if (!Number.isInteger(max) || max < 1) {
     return { limited: true, retryAfter: 1, reason: 'INVALID_MAX' };
   }
-
   if (!Number.isFinite(windowMs) || windowMs < 1000) {
     return { limited: true, retryAfter: 1, reason: 'INVALID_WINDOW' };
   }
@@ -356,7 +332,6 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options
     return { limited: false, retryAfter: 0 };
   } catch (err) {
     console.warn('[_lib] rate limit falhou:', err.message);
-
     if (failClosed) {
       return {
         limited: true,
@@ -364,7 +339,6 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options
         reason: 'RATE_LIMIT_ERROR'
       };
     }
-
     return { limited: false, retryAfter: 0, reason: 'KV_ERROR' };
   }
 }
@@ -380,29 +354,27 @@ async function resetBucket(bucket) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 6. AUDITORIA
+// AUDITORIA
 // ═════════════════════════════════════════════════════════════
 function resolveAuditTable(event, override) {
   if (override === 'admin') return 'admin_audit';
   if (override === 'auth') return 'auth_audit_log';
 
   const e = String(event || '').toLowerCase();
-  if (e.startsWith('admin_')) return 'admin_audit';
-  if (
-    e.startsWith('content.') ||
-    e.startsWith('upload') ||
-    e.startsWith('user.plan')
-  ) return 'admin_audit';
+  const adminPrefixes = [
+    'admin_', 'admin.', 'content.', 'upload',
+    'user.plan', 'album.', 'track.', 'plan.', 'payment.', 'sales.'
+  ];
+
+  if (adminPrefixes.some(prefix => e.startsWith(prefix))) {
+    return 'admin_audit';
+  }
 
   return 'auth_audit_log';
 }
 
 function hashEmail(email) {
-  return crypto
-    .createHash('sha256')
-    .update(String(email).toLowerCase())
-    .digest('hex')
-    .slice(0, 32);
+  return crypto.createHash('sha256').update(String(email).toLowerCase()).digest('hex').slice(0, 32);
 }
 
 function buildAuthAuditPayload(event, opts) {
@@ -441,7 +413,6 @@ function buildAdminAuditPayload(event, opts) {
 
 async function audit(event, options = {}) {
   const table = resolveAuditTable(event, options.table);
-
   const payload = table === 'admin_audit'
     ? buildAdminAuditPayload(event, options)
     : buildAuthAuditPayload(event, options);
@@ -466,15 +437,15 @@ async function audit(event, options = {}) {
         target: payload.target || null,
         metadata: payload.metadata || null,
         ip: payload.ip || null,
-        userAgent: payload.user_agent || payload.userAgent || null
+        userAgent: payload.user_agent || null
       });
     } else {
       await db.insert(schema.authAuditLog).values({
         event: payload.event,
-        emailHash: payload.email_hash || payload.emailHash || null,
-        userId: payload.user_id || payload.userId || null,
+        emailHash: payload.email_hash || null,
+        userId: payload.user_id || null,
         ip: payload.ip || null,
-        userAgent: payload.user_agent || payload.userAgent || null,
+        userAgent: payload.user_agent || null,
         success: !!payload.success,
         reason: payload.reason || null
       });
@@ -485,7 +456,7 @@ async function audit(event, options = {}) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 7. PLANO EFETIVO — com cache KV
+// PLANO EFETIVO — com cache KV
 // ═════════════════════════════════════════════════════════════
 const PLAN_CACHE_TTL_SEC = 60;
 
@@ -511,13 +482,14 @@ async function getPlanForUserDetailed(userId) {
   let reason = null;
 
   try {
-    const { db, schema, sql } = require('./_db');
-    const rows = await db.execute(sql`
+    // Reutiliza o cliente Neon centralizado
+    const { sql } = require('./_db');
+    const rows = await sql`
       SELECT plan
       FROM effective_plan
       WHERE user_id = ${userId}
       LIMIT 1
-    `);
+    `;
 
     const list = Array.isArray(rows) ? rows : (rows.rows || []);
 
@@ -564,7 +536,7 @@ async function invalidatePlanCache(userId) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 8. CSRF — Origin check
+// CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
 function checkOrigin(req) {
   if (!ALLOWED_ORIGINS.size) {
@@ -582,7 +554,7 @@ function checkOrigin(req) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 9. HMAC — sessão admin
+// HMAC — sessão admin
 // ═════════════════════════════════════════════════════════════
 function signHmac(payload, secret) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -608,11 +580,7 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
   if (!body || !sig) return null;
 
   try {
-    const expected = crypto
-      .createHmac('sha256', secret)
-      .update(body)
-      .digest('base64url');
-
+    const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
     const actualBuffer = Buffer.from(sig);
     const expectedBuffer = Buffer.from(expected);
 
@@ -631,9 +599,9 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
     const now = Date.now();
 
-    if (payload.iat > now + 30_000 || now - payload.iat > maxAgeMs) {
-      return null;
-    }
+    // Rejeita iat futuro (com 30s de tolerância) e expirado
+    if (payload.iat > now + 30_000) return null;
+    if (now - payload.iat > maxAgeMs) return null;
 
     return payload;
   } catch {
@@ -642,7 +610,7 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 10. SENHA — scrypt (nativo do Node)
+// SENHA — scrypt
 // ═════════════════════════════════════════════════════════════
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
@@ -650,39 +618,36 @@ function verifyScrypt(password, storedHash) {
       if (typeof password !== 'string' || password.length < 1 || password.length > 200) {
         return resolve(false);
       }
+      if (typeof storedHash !== 'string') return resolve(false);
 
-      if (typeof storedHash !== 'string') {
-        return resolve(false);
-      }
+      const parts = storedHash.split('$');
+      if (parts.length !== 3 || parts[0] !== 'scrypt') return resolve(false);
 
-      const [algo, saltHex, hashHex] = storedHash.split('$');
-      if (algo !== 'scrypt') return resolve(false);
+      const [, saltHex, hashHex] = parts;
 
-      if (
-        !saltHex || saltHex.length < 16 ||
-        !hashHex || hashHex.length < 32
-      ) {
-        return resolve(false);
-      }
-
-      if (!/^[a-f0-9]+$/i.test(saltHex) || !/^[a-f0-9]+$/i.test(hashHex)) {
-        return resolve(false);
-      }
+      if (!/^[a-f0-9]{32,128}$/i.test(saltHex)) return resolve(false);
+      if (!/^[a-f0-9]{128}$/i.test(hashHex)) return resolve(false);
 
       const salt = Buffer.from(saltHex, 'hex');
       const expected = Buffer.from(hashHex, 'hex');
 
-      crypto.scrypt(password, salt, expected.length, (err, derived) => {
-        if (err) return resolve(false);
-        try {
-          resolve(
-            derived.length === expected.length &&
-            crypto.timingSafeEqual(derived, expected)
-          );
-        } catch {
-          resolve(false);
+      crypto.scrypt(
+        password,
+        salt,
+        expected.length,
+        { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
+        (err, derived) => {
+          if (err || !derived) return resolve(false);
+          try {
+            resolve(
+              derived.length === expected.length &&
+              crypto.timingSafeEqual(derived, expected)
+            );
+          } catch {
+            resolve(false);
+          }
         }
-      });
+      );
     } catch {
       resolve(false);
     }
@@ -700,45 +665,36 @@ function timingSafeEq(a, b) {
 // EXPORTS
 // ═════════════════════════════════════════════════════════════
 module.exports = {
-  // Constantes
   IS_PROD,
   VALID_PLANS,
   ALLOWED_ORIGINS,
 
-  // HTTP
   sendJson,
   methodNotAllowed,
   parseBody,
   parseCookies,
   clientIp,
 
-  // Cookies
   setAuthCookies,
   clearAuthCookies,
   getAccessToken,
   getRefreshToken,
   getAuthUser,
 
-  // Rate limit
   checkAndIncrement,
   resetBucket,
 
-  // Auditoria
   audit,
 
-  // Plano efetivo
   getPlanForUser,
   getPlanForUserDetailed,
   invalidatePlanCache,
 
-  // CSRF
   checkOrigin,
 
-  // HMAC (admin/session)
   signHmac,
   verifyHmac,
 
-  // Senha
   verifyScrypt,
   timingSafeEq
 };
