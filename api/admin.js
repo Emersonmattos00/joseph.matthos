@@ -1,5 +1,5 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (Versão Final)
+   api/admin.js — Painel administrativo (Versão Final Absoluta)
    ============================================================ */
 
 'use strict';
@@ -12,18 +12,20 @@ const {
   signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-const { db, eq, and, or, asc, desc, sql, inArray } = require('./_db');
+const { db, eq, and, asc, desc, sql, inArray } = require('./_db');
 const schema = require('./_db').schema;
-
 const { tracks, albums, artists, orders, adminAudit } = schema;
 
 const {
   uploadObject, createSignedUploadUrl: b2CreateSignedUploadUrl,
   createSignedDownloadUrl: b2CreateSignedDownloadUrl,
-  getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists
+  getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists,
+  getObjectMetadata: b2GetObjectMetadata, buildPathForKind
 } = require('./_storage');
 
-// Constantes
+// ─────────────────────────────────────────────────────────────
+// CONSTANTES
+// ─────────────────────────────────────────────────────────────
 const SESSION_COOKIE_PROD = '__Host-jm_admin';
 const SESSION_COOKIE_DEV = 'jm_admin';
 const SESSION_COOKIE = IS_PROD ? SESSION_COOKIE_PROD : SESSION_COOKIE_DEV;
@@ -35,11 +37,25 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const CONTENT_KEY = 'default';
 const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
+const UPLOAD_INTENT_TTL_MS = SIGNED_UPLOAD_TTL_SEC * 1000;
 
-const BUCKET_BY_KIND = {
-  'image': 'site-assets',
-  'audio-preview': 'audio-preview',
-  'audio-full': 'audio-premium'
+// Limites de tamanho
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;          // 10 MB
+const MAX_PREVIEW_BYTES = 15 * 1024 * 1024;        // 15 MB
+const MAX_AUDIO_FULL_BYTES = 200 * 1024 * 1024;    // 200 MB
+const MAX_LYRICS_BYTES = 200 * 1024;               // 200 KB
+
+// MIME permitido por kind
+const MIME_BY_KIND = {
+  'image': new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']),
+  'audio-preview': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm']),
+  'audio-full': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/wav', 'audio/x-wav'])
+};
+
+const MAX_BYTES_BY_KIND = {
+  'image': MAX_IMAGE_BYTES,
+  'audio-preview': MAX_PREVIEW_BYTES,
+  'audio-full': MAX_AUDIO_FULL_BYTES
 };
 
 const VALID_ACTIONS = new Set([
@@ -54,18 +70,35 @@ const VALID_ACTIONS = new Set([
 const DEV_NO_RATE_LIMIT = process.env.NODE_ENV !== 'production' && process.env.DISABLE_RATE_LIMIT === 'true';
 const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE_CSRF === 'true';
 
+let _sessionSecretCache = null;
 function getSessionSecret() {
+  if (_sessionSecretCache) return _sessionSecretCache;
   const secret = String(process.env.ADMIN_SESSION_SECRET || '').trim();
   if (!secret) throw new Error('ADMIN_SESSION_SECRET ausente.');
-  if (secret.length < MIN_SESSION_SECRET_LENGTH) throw new Error(`ADMIN_SESSION_SECRET muito curto.`);
+  if (secret.length < MIN_SESSION_SECRET_LENGTH) throw new Error('Segredo curto.');
+  _sessionSecretCache = secret;
   return secret;
 }
 
+function checkConfig() {
+  try {
+    getSessionSecret();
+    if (!process.env.ADMIN_USER || !process.env.ADMIN_PASSWORD_HASH) return { ok: false, error: 'Config ausente.' };
+    return { ok: true };
+  } catch (err) { return { ok: false, error: err.message }; }
+}
+
+// ─────────────────────────────────────────────────────────────
+// HANDLER PRINCIPAL
+// ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
   res.setHeader('Vary', 'Cookie');
   res.setHeader('Allow', 'GET, HEAD, POST, PUT, PATCH, DELETE');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'no-store');
+
+  const cfg = checkConfig();
+  if (!cfg.ok) return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
 
   const action = parseAction(req.query);
   if (!action) return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
@@ -81,49 +114,55 @@ module.exports = async function handler(req, res) {
     return handleLogin(req, res);
   }
 
-  const session = verifySession(req);
+  let session;
+  try { session = verifySession(req); } catch (err) { return sendJson(res, 503, { ok: false, error: 'Erro de sessão.' }); }
   if (!session) return sendJson(res, 401, { ok: false, error: 'Não autorizado.' });
 
-  switch (action) {
-    case 'session': return handleSession(req, res, session);
-    case 'logout': if (method === 'POST') return handleLogout(req, res, session); break;
-    case 'content':
-      if (method === 'GET') return handleGetContent(req, res);
-      if (method === 'PUT') return handlePutContent(req, res, session);
-      break;
-    case 'upload': if (method === 'POST') return handleUpload(req, res, session); break;
-    case 'upload-sign': if (method === 'POST') return handleUploadSign(req, res, session); break;
-    case 'upload-confirm': if (method === 'POST') return handleUploadConfirm(req, res, session); break;
-    case 'users':
-      if (method === 'GET') return handleGetUsers(req, res);
-      if (method === 'PATCH') return handlePatchUser(req, res, session);
-      if (method === 'DELETE') return handleDeleteUser(req, res, session);
-      break;
-    case 'sales': if (method === 'GET') return handleGetSales(req, res); break;
-    case 'audit': if (method === 'GET') return handleGetAudit(req, res); break;
-    case 'gen-hash': if (method === 'GET') return handleGenHash(req, res, session); break;
-    case 'albums':
-      if (method === 'GET') return handleListAlbums(req, res);
-      if (method === 'POST') return handleCreateAlbum(req, res, session);
-      break;
-    case 'album':
-      if (method === 'GET') return handleGetAlbum(req, res);
-      if (method === 'PATCH') return handleUpdateAlbum(req, res, session);
-      if (method === 'DELETE') return handleDeleteAlbum(req, res, session);
-      break;
-    case 'tracks':
-      if (method === 'GET') return handleListTracks(req, res);
-      if (method === 'POST') return handleCreateTrack(req, res, session);
-      break;
-    case 'track':
-      if (method === 'PATCH') return handleUpdateTrack(req, res, session);
-      if (method === 'DELETE') return handleDeleteTrack(req, res, session);
-      break;
-    case 'track-order': if (method === 'PATCH') return handleReorderTracks(req, res, session); break;
-    case 'download-url': if (method === 'GET') return handleDownloadUrl(req, res, session); break;
-    case 'download-album': if (method === 'GET') return handleDownloadAlbum(req, res, session); break;
-    case 'update-lyrics': if (method === 'PATCH') return handleUpdateLyrics(req, res, session); break;
-    default: return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
+  try {
+    switch (action) {
+      case 'session': return handleSession(req, res, session);
+      case 'logout': if (method === 'POST') return handleLogout(req, res, session); break;
+      case 'content':
+        if (method === 'GET') return handleGetContent(req, res);
+        if (method === 'PUT') return handlePutContent(req, res, session);
+        break;
+      case 'upload': if (method === 'POST') return handleUpload(req, res, session); break;
+      case 'upload-sign': if (method === 'POST') return handleUploadSign(req, res, session); break;
+      case 'upload-confirm': if (method === 'POST') return handleUploadConfirm(req, res, session); break;
+      case 'users':
+        if (method === 'GET') return handleGetUsers(req, res);
+        if (method === 'PATCH') return handlePatchUser(req, res, session);
+        if (method === 'DELETE') return handleDeleteUser(req, res, session);
+        break;
+      case 'sales': if (method === 'GET') return handleGetSales(req, res); break;
+      case 'audit': if (method === 'GET') return handleGetAudit(req, res); break;
+      case 'gen-hash': if (method === 'GET') return handleGenHash(req, res, session); break;
+      case 'albums':
+        if (method === 'GET') return handleListAlbums(req, res);
+        if (method === 'POST') return handleCreateAlbum(req, res, session);
+        break;
+      case 'album':
+        if (method === 'GET') return handleGetAlbum(req, res);
+        if (method === 'PATCH') return handleUpdateAlbum(req, res, session);
+        if (method === 'DELETE') return handleDeleteAlbum(req, res, session);
+        break;
+      case 'tracks':
+        if (method === 'GET') return handleListTracks(req, res);
+        if (method === 'POST') return handleCreateTrack(req, res, session);
+        break;
+      case 'track':
+        if (method === 'PATCH') return handleUpdateTrack(req, res, session);
+        if (method === 'DELETE') return handleDeleteTrack(req, res, session);
+        break;
+      case 'track-order': if (method === 'PATCH') return handleReorderTracks(req, res, session); break;
+      case 'download-url': if (method === 'GET') return handleDownloadUrl(req, res, session); break;
+      case 'download-album': if (method === 'GET') return handleDownloadAlbum(req, res, session); break;
+      case 'update-lyrics': if (method === 'PATCH') return handleUpdateLyrics(req, res, session); break;
+      default: return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
+    }
+  } catch (err) {
+    console.error('[admin] erro não tratado:', err);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   return methodNotAllowed(res, 'GET, POST, PUT, PATCH, DELETE');
@@ -154,18 +193,17 @@ async function handleLogin(req, res) {
   }
 
   await resetBucket(`admin-login:${ip}`);
-  const token = signHmac({ user: expectedUser, iat: Date.now() }, getSessionSecret());
+  const token = signHmac({ user: expectedUser, iat: Date.now(), jti: crypto.randomUUID() }, getSessionSecret());
   const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE}`, IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; ${attrs}`);
   await audit('admin_login', { actor: expectedUser, ip, success: true });
   return sendJson(res, 200, { ok: true, user: expectedUser });
 }
 
-async function handleSession(req, res, session) {
-  return sendJson(res, 200, { ok: true, user: session.user });
-}
+async function handleSession(req, res, session) { return sendJson(res, 200, { ok: true, user: session.user }); }
 
 async function handleLogout(req, res, session) {
+  await audit('admin_logout', { actor: session.user, ip: clientIp(req) });
   const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; ${attrs}`);
   return sendJson(res, 200, { ok: true });
@@ -182,38 +220,86 @@ async function handleGetContent(req, res) {
 async function handlePutContent(req, res, session) {
   const body = parseBody(req);
   const data = body.data;
-  if (!data || typeof data !== 'object') return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
-  
-  const [currentRow] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
-  const currentVersion = currentRow?.version || 0;
-  const newVersion = currentVersion + 1;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  await db.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: newVersion, updatedAt: new Date().toISOString() })
-    .onConflictDoUpdate({ target: schema.siteContent.key, set: { data, version: newVersion, updatedAt: new Date().toISOString() } });
+  const expectedVersion = Number(body.version);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return sendJson(res, 400, { ok: false, error: 'Versão inválida.' });
 
-  await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
-  return sendJson(res, 200, { ok: true, version: newVersion });
+  try {
+    const newVersion = await db.transaction(async (tx) => {
+      const [currentRow] = await tx.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
+      const currentVersion = currentRow?.version || 0;
+      if (currentVersion !== expectedVersion) { const err = new Error('VERSION_CONFLICT'); err.code = 'VERSION_CONFLICT'; throw err; }
+
+      const next = currentVersion + 1;
+      await tx.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: next, updatedAt: new Date().toISOString() })
+        .onConflictDoUpdate({ target: schema.siteContent.key, set: { data, version: next, updatedAt: new Date().toISOString() } });
+      return next;
+    });
+    await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
+    return sendJson(res, 200, { ok: true, version: newVersion });
+  } catch (err) {
+    if (err.code === 'VERSION_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Recarregue a página.' });
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
 // UPLOADS
 // ─────────────────────────────────────────────────────────────
+function validateFilePayload({ kind, filename, contentType, base64 }) {
+  if (!kind || !MIME_BY_KIND[kind]) return { ok: false, error: 'Tipo inválido.' };
+  const name = String(filename || '').trim();
+  if (!name || !name.includes('.')) return { ok: false, error: 'Nome inválido.' };
+  const ext = name.split('.').pop().toLowerCase();
+  if (!/^[a-z0-9]{1,8}$/.test(ext)) return { ok: false, error: 'Extensão inválida.' };
+  
+  const mime = String(contentType || '').trim().toLowerCase();
+  if (!/^[\w.+-]+\/[\w.+-]+$/.test(mime) || mime.length > 150) return { ok: false, error: 'MIME inválido.' };
+  if (!MIME_BY_KIND[kind].has(mime)) return { ok: false, error: `Tipo de arquivo não permitido para ${kind}.` };
+
+  let buffer = null;
+  if (base64 !== undefined) {
+    const raw = String(base64 || '').trim();
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || raw.length % 4 !== 0) return { ok: false, error: 'Base64 inválido.' };
+    buffer = Buffer.from(raw, 'base64');
+    if (buffer.length === 0) return { ok: false, error: 'Arquivo vazio.' };
+    if (buffer.length > MAX_BYTES_BY_KIND[kind]) return { ok: false, error: 'Arquivo muito grande.' };
+    if (kind === 'image' && !looksLikeImage(buffer, mime)) return { ok: false, error: 'Conteúdo não bate com o tipo.' };
+  }
+  return { ok: true, ext, mime, buffer };
+}
+
+function looksLikeImage(buf, mime) {
+  if (buf.length < 12) return false;
+  switch (mime) {
+    case 'image/jpeg': return buf[0] === 0xFF && buf[1] === 0xD8;
+    case 'image/png':  return buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+    case 'image/gif':  return buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46;
+    case 'image/webp': return buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+    case 'image/avif': return buf.toString('ascii', 4, 8) === 'ftyp';
+    default: return false;
+  }
+}
+
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
-  const buffer = Buffer.from(String(body.base64 || ''), 'base64');
-  const bucket = BUCKET_BY_KIND[kind];
-  
-  if (!bucket) return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
-  
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${body.filename.split('.').pop()}`;
-  const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
+  const validation = validateFilePayload({ kind, filename: body.filename, contentType: body.contentType, base64: body.base64 });
+  if (!validation.ok) return sendJson(res, 400, { ok: false, error: validation.error });
+
+  // Usa o helper do storage para resolver o prefixo do .env
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
+  const path = buildPathForKind(kind, uniqueName); 
 
   try {
-    await uploadObject(bucket, path, buffer, body.contentType);
-    const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-    return sendJson(res, 200, { ok: true, url: publicUrl, path, bucket });
+    await uploadObject(path, validation.buffer, validation.mime);
+    const publicUrl = b2GetPublicUrl(path);
+    await audit('upload.direct', { actor: session.user, metadata: { kind, path, size: validation.buffer.length } });
+    return sendJson(res, 200, { ok: true, url: publicUrl, path });
   } catch (err) {
+    if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
+    console.error('[admin] falha upload:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
   }
 }
@@ -221,41 +307,28 @@ async function handleUpload(req, res, session) {
 async function handleUploadSign(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
-  const bucket = BUCKET_BY_KIND[kind];
-  if (!bucket) return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
+  const validation = validateFilePayload({ kind, filename: body.filename, contentType: body.contentType });
+  if (!validation.ok) return sendJson(res, 400, { ok: false, error: validation.error });
 
-  const filename = String(body.filename || '').trim();
-  if (!filename || !filename.includes('.')) {
-    return sendJson(res, 400, { ok: false, error: 'Nome de arquivo inválido.' });
-  }
-
-  const contentType = String(body.contentType || '').trim();
-  if (!contentType || !/^[\w.+-]+\/[\w.+-]+$/.test(contentType) || contentType.length > 150) {
-    return sendJson(res, 400, { ok: false, error: 'Content-Type inválido.' });
-  }
-
-  const ext = filename.split('.').pop().toLowerCase();
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
-  const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
+  const path = buildPathForKind(kind, uniqueName);
 
   try {
-    const signed = await b2CreateSignedUploadUrl(
-      bucket,
-      path,
-      contentType,
-      SIGNED_UPLOAD_TTL_SEC
-    );
+    const signed = await b2CreateSignedUploadUrl(path, validation.mime, SIGNED_UPLOAD_TTL_SEC);
 
-    return sendJson(res, 200, {
-      ok: true,
-      uploadUrl: signed.uploadUrl,
-      path,
-      bucket,
-      contentType,
-      expiresIn: SIGNED_UPLOAD_TTL_SEC
-    });
+    if (schema.uploadIntents) {
+      const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MS).toISOString();
+      await db.insert(schema.uploadIntents).values({
+        id: crypto.randomUUID(), adminUser: session.user, kind, path, contentType: validation.mime,
+        sizeLimit: MAX_BYTES_BY_KIND[kind], expiresAt, consumedAt: null, createdAt: new Date().toISOString()
+      });
+    }
+
+    await audit('upload.sign', { actor: session.user, metadata: { kind, path, mime: validation.mime } });
+    return sendJson(res, 200, { ok: true, uploadUrl: signed.uploadUrl, path, expiresIn: SIGNED_UPLOAD_TTL_SEC });
   } catch (err) {
-    console.error('[admin] Falha ao assinar upload:', err.message);
+    if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
+    console.error('[admin] falha sign:', err.message);
     return sendJson(res, 502, { ok: false, error: 'Falha ao preparar upload.' });
   }
 }
@@ -264,30 +337,48 @@ async function handleUploadConfirm(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
   const path = String(body.path || '').trim();
+  if (!kind || !path) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
+
+  const hasTrackIndex = body.trackIndex !== undefined && body.trackIndex !== null && body.trackIndex !== '';
+  const trackIndex = hasTrackIndex ? Number(body.trackIndex) : null;
   const albumId = body.albumId ? String(body.albumId).trim() : null;
-  const trackIndex = Number(body.trackIndex);
 
-  const bucket = BUCKET_BY_KIND[kind];
-  if (!bucket || !path) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
+  if (hasTrackIndex && (!Number.isInteger(trackIndex) || trackIndex < 1)) return sendJson(res, 400, { ok: false, error: 'Número da faixa inválido.' });
+  if (albumId && !isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'Álbum inválido.' });
 
-  const exists = await b2ObjectExists(bucket, path);
-  if (!exists) return sendJson(res, 400, { ok: false, error: 'Arquivo não encontrado no Storage.' });
+  let intent = null;
+  if (schema.uploadIntents) {
+    const [row] = await db.select().from(schema.uploadIntents).where(and(eq(schema.uploadIntents.path, path), eq(schema.uploadIntents.adminUser, session.user), eq(schema.uploadIntents.kind, kind))).limit(1);
+    intent = row || null;
+    if (!intent) return sendJson(res, 400, { ok: false, error: 'Upload não reconhecido.' });
+    if (intent.consumedAt) return sendJson(res, 400, { ok: false, error: 'Upload já utilizado.' });
+    if (new Date(intent.expiresAt).getTime() < Date.now()) return sendJson(res, 400, { ok: false, error: 'Upload expirado.' });
+  }
+
+  try {
+    const exists = await b2ObjectExists(path);
+    if (!exists) return sendJson(res, 400, { ok: false, error: 'Arquivo não encontrado no Storage.' });
+
+    const meta = await b2GetObjectMetadata(path);
+    if (meta && meta.contentLength > MAX_BYTES_BY_KIND[kind]) return sendJson(res, 413, { ok: false, error: 'Arquivo excede o limite.' });
+  } catch (err) {
+    return sendJson(res, 502, { ok: false, error: 'Falha ao validar no Storage.' });
+  }
 
   if (albumId && trackIndex !== null) {
     const isFull = kind === 'audio-full';
-    const patch = isFull
-      ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() }
-      : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
-
+    const patch = isFull ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() } : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
     const updated = await db.update(tracks).set(patch).where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex))).returning();
-    if (!updated.length) return sendJson(res, 502, { ok: false, error: 'Faixa não encontrada.' });
+    if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 
-    const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-    return sendJson(res, 200, { ok: true, url: publicUrl, path, bucket, track: updated[0] });
+    if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
+    await audit('upload.confirm', { actor: session.user, metadata: { kind, path, albumId, trackIndex } });
+    return sendJson(res, 200, { ok: true, url: b2GetPublicUrl(path), path, track: updated[0] });
   }
 
-  const publicUrl = bucket !== 'audio-premium' ? b2GetPublicUrl(bucket, path) : null;
-  return sendJson(res, 200, { ok: true, path, bucket, url: publicUrl });
+  if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
+  await audit('upload.confirm', { actor: session.user, metadata: { kind, path } });
+  return sendJson(res, 200, { ok: true, path, url: b2GetPublicUrl(path) });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -295,15 +386,8 @@ async function handleUploadConfirm(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
   const rows = await db.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, createdAt: schema.users.createdAt }).from(schema.users).orderBy(desc(schema.users.createdAt));
-  
-  // Tentativa de ler a view effective_plan, mas à prova de falhas
   let planRows = [];
-  try {
-    planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`);
-  } catch (e) {
-    console.warn('[admin] View effective_plan não encontrada.');
-  }
-  
+  try { planRows = await db.execute(sql`SELECT user_id, plan FROM effective_plan`); } catch (e) { }
   const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
 }
@@ -312,19 +396,33 @@ async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
-
   if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
-  await db.update(schema.subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
+  try {
+    await db.transaction(async (tx) => {
+      const [user] = await tx.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+      if (!user) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
 
-  if (plan !== 'free') {
-    const [planRow] = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
-    if (planRow) {
-      await db.insert(schema.subscriptions).values({
-        id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${userId}_${Date.now()}`,
-        status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), updatedAt: new Date().toISOString()
-      });
-    }
+      let planRow = null;
+      if (plan !== 'free') {
+        const rows = await tx.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
+        planRow = rows[0] || null;
+        if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
+      }
+
+      await tx.update(schema.subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
+
+      if (planRow) {
+        await tx.insert(schema.subscriptions).values({
+          id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), currentPeriodEnd: addDaysIso(30), updatedAt: new Date().toISOString()
+        });
+      }
+    });
+  } catch (err) {
+    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Plano inexistente.' });
+    throw err;
   }
 
   await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } });
@@ -333,12 +431,16 @@ async function handlePatchUser(req, res, session) {
 
 async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
-  if (!userId || userId === session.user) return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
+  if (!isUuid(userId) || userId === session.user) return sendJson(res, 400, { ok: false, error: 'Ação não permitida.' });
 
-  await audit('user.delete', { actor: session.user, target: userId });
-  const deleted = await db.delete(schema.users).where(eq(schema.users.id, userId)).returning();
-  
-  return deleted.length ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+  try {
+    const deleted = await db.delete(schema.users).where(eq(schema.users.id, userId)).returning();
+    if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    await audit('user.delete', { actor: session.user, target: userId });
+    return sendJson(res, 200, { ok: true });
+  } catch (err) {
+    return sendJson(res, 409, { ok: false, error: 'Usuário possui dependências.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -350,109 +452,251 @@ async function handleListAlbums(req, res) {
 }
 
 async function handleGetAlbum(req, res) {
+  if (!isUuid(String(req.query.id || ''))) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
   const [row] = await db.select().from(albums).where(eq(albums.id, req.query.id)).limit(1);
   return row ? sendJson(res, 200, { ok: true, album: row }) : sendJson(res, 404, { ok: false, error: 'Não encontrado.' });
 }
 
 async function handleCreateAlbum(req, res, session) {
   const body = parseBody(req);
-  const [artist] = await db.select({ id: artists.id }).from(artists).limit(1);
-  const [created] = await db.insert(albums).values({
-    id: crypto.randomUUID(), title: body.title, slug: createSlug(body.title), artistId: artist.id, published: !!body.published
-  }).returning();
-  return sendJson(res, 200, { ok: true, album: created });
+  const title = String(body.title || '').trim();
+  if (!title || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
+
+  const slug = createSlug(title);
+  if (!slug) return sendJson(res, 400, { ok: false, error: 'Slug inválido.' });
+
+  try {
+    const created = await db.transaction(async (tx) => {
+      const [artist] = await tx.select({ id: artists.id }).from(artists).limit(1);
+      if (!artist) { const err = new Error('ARTIST_NOT_FOUND'); err.code = 'ARTIST_NOT_FOUND'; throw err; }
+      const [dup] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.slug, slug)).limit(1);
+      if (dup) { const err = new Error('SLUG_CONFLICT'); err.code = 'SLUG_CONFLICT'; throw err; }
+
+      const [row] = await tx.insert(albums).values({ id: crypto.randomUUID(), title, slug, artistId: artist.id, published: !!body.published }).returning();
+      return row;
+    });
+    await audit('album.create', { actor: session.user, target: created.id, metadata: { title, slug } });
+    return sendJson(res, 200, { ok: true, album: created });
+  } catch (err) {
+    if (err.code === 'ARTIST_NOT_FOUND') return sendJson(res, 409, { ok: false, error: 'Nenhum artista cadastrado.' });
+    if (err.code === 'SLUG_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Slug já existe.' });
+    throw err;
+  }
 }
 
 async function handleUpdateAlbum(req, res, session) {
+  const albumId = String(req.query.id || '');
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
   const body = parseBody(req);
-  const [updated] = await db.update(albums).set({ title: body.title, published: body.published }).where(eq(albums.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, album: updated });
+  const patch = {};
+  if (body.title !== undefined) {
+    const t = String(body.title).trim();
+    if (!t || t.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
+    patch.title = t; patch.slug = createSlug(t);
+  }
+  if (body.published !== undefined) patch.published = !!body.published;
+  if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
+
+  const updated = await db.update(albums).set(patch).where(eq(albums.id, albumId)).returning();
+  if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+
+  await audit('album.update', { actor: session.user, target: albumId, metadata: patch });
+  return sendJson(res, 200, { ok: true, album: updated[0] });
 }
 
 async function handleDeleteAlbum(req, res, session) {
-  await db.delete(tracks).where(eq(tracks.albumId, req.query.id));
-  await db.delete(albums).where(eq(albums.id, req.query.id));
+  const albumId = String(req.query.id || '');
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  try {
+    await db.transaction(async (tx) => {
+      const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
+      if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
+      await tx.delete(tracks).where(eq(tracks.albumId, albumId));
+      await tx.delete(albums).where(eq(albums.id, albumId));
+    });
+  } catch (err) {
+    if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+    throw err;
+  }
+  await audit('album.delete', { actor: session.user, target: albumId });
   return sendJson(res, 200, { ok: true });
 }
 
 async function handleListTracks(req, res) {
-  const rows = await db.select().from(tracks).where(eq(tracks.albumId, req.query.albumId)).orderBy(asc(tracks.trackNumber));
+  const albumId = String(req.query.albumId || '');
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
+  const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
   return sendJson(res, 200, { ok: true, tracks: rows });
 }
 
 async function handleCreateTrack(req, res, session) {
   const body = parseBody(req);
-  const [album] = await db.select({ artistId: albums.artistId }).from(albums).where(eq(albums.id, body.album_id)).limit(1);
-  const [created] = await db.insert(tracks).values({
-    id: crypto.randomUUID(), albumId: body.album_id, artistId: album.artistId, title: body.title, slug: createSlug(body.title),
-    trackNumber: 1, status: 'DRAFT'
-  }).returning();
-  return sendJson(res, 200, { ok: true, track: created });
+  const albumId = String(body.album_id || '');
+  const title = String(body.title || '').trim();
+  if (!isUuid(albumId) || !title || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+
+  try {
+    const created = await db.transaction(async (tx) => {
+      const [album] = await tx.select({ artistId: albums.artistId }).from(albums).where(eq(albums.id, albumId)).limit(1);
+      if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
+      const rows = await tx.select({ n: sql`COALESCE(MAX(${tracks.trackNumber}), 0)` }).from(tracks).where(eq(tracks.albumId, albumId));
+      const nextNumber = Number(rows[0]?.n || 0) + 1;
+      const [row] = await tx.insert(tracks).values({ id: crypto.randomUUID(), albumId, artistId: album.artistId, title, slug: createSlug(title), trackNumber: nextNumber, status: 'DRAFT' }).returning();
+      return row;
+    });
+    await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, title } });
+    return sendJson(res, 200, { ok: true, track: created });
+  } catch (err) {
+    if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+    throw err;
+  }
 }
 
 async function handleUpdateTrack(req, res, session) {
+  const trackId = String(req.query.id || '');
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
   const body = parseBody(req);
   const patch = {};
-  if (body.title) patch.title = body.title;
+  if (body.title !== undefined) {
+    const t = String(body.title).trim();
+    if (!t || t.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
+    patch.title = t; patch.slug = createSlug(t);
+  }
   if (body.published !== undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
-  if (body.full_path) { patch.fullPath = body.full_path; patch.streamKey = body.full_path; }
-  if (body.preview_path) { patch.previewPath = body.preview_path; patch.previewKey = body.preview_path; }
 
-  const [updated] = await db.update(tracks).set(patch).where(eq(tracks.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, track: updated });
+  try {
+    if (body.full_path !== undefined) {
+      const p = String(body.full_path || '').trim();
+      if (!p || !(await b2ObjectExists(p))) return sendJson(res, 400, { ok: false, error: 'full_path inválido no Storage.' });
+      patch.fullPath = p; patch.streamKey = p;
+    }
+    if (body.preview_path !== undefined) {
+      const p = String(body.preview_path || '').trim();
+      if (!p || !(await b2ObjectExists(p))) return sendJson(res, 400, { ok: false, error: 'preview_path inválido no Storage.' });
+      patch.previewPath = p; patch.previewKey = p;
+    }
+  } catch(e) { return sendJson(res, 502, { ok: false, error: 'Erro ao validar Storage.' }); }
+
+  if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
+
+  const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
+  if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+  await audit('track.update', { actor: session.user, target: trackId, metadata: patch });
+  return sendJson(res, 200, { ok: true, track: updated[0] });
 }
 
 async function handleDeleteTrack(req, res, session) {
-  await db.delete(tracks).where(eq(tracks.id, req.query.id));
+  const trackId = String(req.query.id || '');
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const deleted = await db.delete(tracks).where(eq(tracks.id, trackId)).returning();
+  if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+  await audit('track.delete', { actor: session.user, target: trackId });
   return sendJson(res, 200, { ok: true });
 }
 
 async function handleReorderTracks(req, res, session) {
   const body = parseBody(req);
-  for (const item of body.order) {
-    await db.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
+  const order = body.order;
+  if (!Array.isArray(order) || order.length === 0) return sendJson(res, 400, { ok: false, error: 'Ordem inválida.' });
+
+  const ids = new Set();
+  const numbers = new Set();
+  for (const item of order) {
+    const id = String(item?.id || '');
+    const n = Number(item?.track_number);
+    if (!isUuid(id) || !Number.isInteger(n) || n < 1) return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
+    if (ids.has(id) || numbers.has(n)) return sendJson(res, 400, { ok: false, error: 'Itens duplicados na ordem.' });
+    ids.add(id); numbers.add(n);
   }
+
+  const albumId = String(body.albumId || req.query.albumId || '');
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
+
+  try {
+    await db.transaction(async (tx) => {
+      const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
+      if (rows.length !== ids.size) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
+      for (const r of rows) {
+        if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
+      }
+      for (const item of order) {
+        await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
+      }
+    });
+  } catch (err) {
+    if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
+    throw err;
+  }
+
+  await audit('track.reorder', { actor: session.user, metadata: { albumId, count: order.length } });
   return sendJson(res, 200, { ok: true });
 }
 
 async function handleUpdateLyrics(req, res, session) {
-  const [updated] = await db.update(tracks).set({ lyrics: parseBody(req).lyrics }).where(eq(tracks.id, req.query.id)).returning();
-  return sendJson(res, 200, { ok: true, track: updated });
+  const trackId = String(req.query.id || '');
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const lyrics = parseBody(req).lyrics;
+  if (lyrics !== null && typeof lyrics !== 'string') return sendJson(res, 400, { ok: false, error: 'Letra inválida.' });
+  if (typeof lyrics === 'string' && Buffer.byteLength(lyrics, 'utf8') > MAX_LYRICS_BYTES) return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
+
+  const updated = await db.update(tracks).set({ lyrics }).where(eq(tracks.id, trackId)).returning();
+  if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+  await audit('track.lyrics.update', { actor: session.user, target: trackId });
+  return sendJson(res, 200, { ok: true, track: updated[0] });
 }
 
 // ─────────────────────────────────────────────────────────────
 // DOWNLOADS
 // ─────────────────────────────────────────────────────────────
 async function handleDownloadUrl(req, res, session) {
-  const [track] = await db.select().from(tracks).where(eq(tracks.id, req.query.id)).limit(1);
+  const trackId = String(req.query.id || '');
+  if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
-  const url = await b2CreateSignedDownloadUrl('audio-premium', track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
-  return sendJson(res, 200, { ok: true, url });
+
+  try {
+    const url = await b2CreateSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
+    await audit('download.single', { actor: session.user, target: trackId });
+    return sendJson(res, 200, { ok: true, url });
+  } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar link.' }); }
 }
 
 async function handleDownloadAlbum(req, res, session) {
-  const rows = await db.select().from(tracks).where(eq(tracks.albumId, req.query.id)).orderBy(asc(tracks.trackNumber));
-  const urls = await Promise.all(rows.map(async t => {
-    if (!t.fullPath) return { id: t.id, url: null };
-    const url = await b2CreateSignedDownloadUrl('audio-premium', t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
-    return { id: t.id, title: t.title, url };
-  }));
-  return sendJson(res, 200, { ok: true, tracks: urls });
+  const albumId = String(req.query.id || '');
+  if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+
+  const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
+  try {
+    const urls = await Promise.all(rows.map(async t => {
+      if (!t.fullPath) return { id: t.id, title: t.title, url: null };
+      const url = await b2CreateSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
+      return { id: t.id, title: t.title, url };
+    }));
+    await audit('download.album', { actor: session.user, target: albumId, metadata: { count: urls.length } });
+    return sendJson(res, 200, { ok: true, tracks: urls });
+  } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar links.' }); }
 }
 
 // ─────────────────────────────────────────────────────────────
-// VENDAS E AUDITORIA (Funções que estavam faltando)
+// VENDAS E AUDITORIA
 // ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   try {
     const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
-    const sales = rows.map(o => ({
-      id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId
-    }));
-    return sendJson(res, 200, { ok: true, sales });
+    return sendJson(res, 200, { ok: true, sales: rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId })) });
   } catch (err) {
-    console.error('[admin] erro ao buscar vendas:', err);
-    return sendJson(res, 200, { ok: true, sales: [] }); 
+    console.error('[admin] erro vendas:', err);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível carregar as vendas.' });
   }
 }
 
@@ -461,7 +705,8 @@ async function handleGetAudit(req, res) {
     const rows = await db.select().from(adminAudit).orderBy(desc(adminAudit.createdAt)).limit(100);
     return sendJson(res, 200, { ok: true, audit: rows });
   } catch (err) {
-    return sendJson(res, 200, { ok: true, audit: [] });
+    console.error('[admin] erro auditoria:', err);
+    return sendJson(res, 500, { ok: false, error: 'Não foi possível carregar a auditoria.' });
   }
 }
 
@@ -474,7 +719,12 @@ async function handleGenHash(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 function verifySession(req) {
   const token = parseCookies(req.headers.cookie || '')[SESSION_COOKIE];
-  return token ? verifyHmac(token, getSessionSecret(), SESSION_MAX_AGE * 1000) : null;
+  if (!token) return null;
+  const payload = verifyHmac(token, getSessionSecret(), SESSION_MAX_AGE * 1000);
+  if (!payload) return null;
+  const expectedUser = String(process.env.ADMIN_USER || '').trim();
+  if (!expectedUser || payload.user !== expectedUser) return null;
+  return payload;
 }
 
 function parseAction(query) {
@@ -492,4 +742,8 @@ function sanitizeFilename(s) {
 
 function isUuid(s) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+function addDaysIso(days) {
+  return new Date(Date.now() + days * 86400000).toISOString();
 }
