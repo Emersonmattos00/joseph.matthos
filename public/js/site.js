@@ -106,7 +106,7 @@ async function boot() {
     renderDiscography();
     renderPlaylists();
     renderArtistHero();
-    renderArtistStats(); // <-- NOVA FUNÇÃO AQUI
+    renderArtistStats();
     renderSpotifySections();
     initCarousels();
     bindArtistTabs();
@@ -309,7 +309,7 @@ async function loadUser() {
     return;
   }
   try {
-    const r = await fetch('/api/auth?action=me', { credentials: 'same-origin' });
+    const r = await fetch('/api/auth?action=me', { credentials: 'include' });
     if (r.status === 401) {
       SITE.user = null;
       SITE.rentals = [];
@@ -588,13 +588,12 @@ function renderArtistHero() {
         followBtn.textContent = newState ? 'SEGUINDO' : 'SIGA';
         followBtn.classList.toggle('following', newState);
 
-        renderArtistStats(); // Atualiza os números na tela
+        renderArtistStats();
         toast(newState ? 'Seguindo Joseph Matthos' : 'Deixou de seguir', '✦');
       });
     }
   }
 
-  // Bind do botão de coração (curtir artista)
   const settingsBtn = document.getElementById('settingsBtn');
   if (settingsBtn && settingsBtn.dataset.bound !== '1') {
     settingsBtn.dataset.bound = '1';
@@ -606,11 +605,10 @@ function renderArtistHero() {
       settingsBtn.classList.toggle('liked', newState);
       settingsBtn.style.color = newState ? '#e63946' : '';
       
-      renderArtistStats(); // Atualiza os números na tela
+      renderArtistStats();
       toast(newState ? 'Você curtiu Joseph Matthos!' : 'Curtida removida.', '❤️');
     });
     
-    // Inicializa o estado visual do coração
     if (localStorage.getItem('jm_liked_artist') === '1') {
       settingsBtn.classList.add('liked');
       settingsBtn.style.color = '#e63946';
@@ -622,19 +620,15 @@ function renderArtistHero() {
 // ESTATÍSTICAS (SEGUIDORES E CURTIDAS)
 // ─────────────────────────────────────────────────────────────
 function renderArtistStats() {
-  // Valores base do banco (simulação)
   const BASE_FOLLOWERS = 1250;
   const BASE_LIKES = 3400;
 
-  // Verifica se o usuário já interagiu (salvo no localStorage)
   const isFollowing = localStorage.getItem('jm_following') === '1';
   const isLiked = localStorage.getItem('jm_liked_artist') === '1';
 
-  // Calcula o total
   const totalFollowers = BASE_FOLLOWERS + (isFollowing ? 1 : 0);
   const totalLikes = BASE_LIKES + (isLiked ? 1 : 0);
 
-  // Atualiza os elementos na tela
   const elFollowers = document.getElementById('statFollowers');
   const elLikes = document.getElementById('statPlays');
 
@@ -1222,7 +1216,8 @@ function renderRentOptions(kind) {
   });
 }
 
-async function confirmRent() {
+async function confirmRent(e) {
+  if (e) e.preventDefault();
   const errEl = document.getElementById('rentError');
   if (!SITE.user) { closeModal('rentModal'); toast('Entre na sua conta para alugar.', 'ℹ'); openModal('loginModal'); return; }
   if (!_rentContext.albumId || !_rentContext.planId) { if (errEl) errEl.textContent = 'Escolha um período.'; return; }
@@ -1232,7 +1227,7 @@ async function confirmRent() {
   try {
     if (errEl) errEl.textContent = 'Abrindo checkout...';
     const r = await fetch('/api/payments?type=rental', {
-      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ albumId: _rentContext.albumId, trackIndex: _rentContext.kind === 'track' ? _rentContext.trackIndex : null, planId: _rentContext.planId, kind: _rentContext.kind })
     });
     const json = await r.json();
@@ -1259,7 +1254,7 @@ async function subscribe(planId) {
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=subscription', {
-      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plan: backendPlanId })
     });
     const json = await r.json();
@@ -1318,11 +1313,22 @@ async function openManageModal() {
 }
 
 function bindGlobalEvents() {
+  // Corrigido para não engolir cliques em botões
   document.addEventListener('click', (e) => {
     const card = e.target.closest('[data-action="open-album"]');
     if (!card) return;
+    
+    if (e.target.closest('button')) return; 
+    if (e.target.closest('a')) return;
     if (e.target.closest('[data-action="play-album"]')) return;
-    e.preventDefault(); e.stopPropagation();
+    if (e.target.closest('[data-action="open-rent"]')) return;
+    if (e.target.closest('[data-action="open-plans"]')) return;
+    if (e.target.closest('[data-action="like-track"]')) return;
+    if (e.target.closest('[data-action="share-track"]')) return;
+    if (e.target.closest('[data-action="track-more"]')) return;
+
+    e.preventDefault(); 
+    e.stopPropagation();
     openAlbumModal(card.dataset.album);
   }, true);
 
@@ -1400,7 +1406,7 @@ function bindGlobalEvents() {
   document.getElementById('loginForm')?.addEventListener('submit', onLoginSubmit);
   document.getElementById('signupForm')?.addEventListener('submit', onSignupSubmit);
   document.getElementById('newsletterForm')?.addEventListener('submit', (e) => { e.preventDefault(); toast('Obrigado! Em breve novidades.', '✦'); e.target.reset(); });
-  document.getElementById('rentConfirmBtn')?.addEventListener('click', confirmRent);
+  document.getElementById('rentConfirmBtn')?.addEventListener('click', (e) => confirmRent(e));
 
   document.querySelectorAll('[data-close]').forEach((el) => {
     if (el.dataset.bound === '1') return;
@@ -2225,5 +2231,15 @@ window.__site = {
   get albumRentalPlans() { return SITE.albumRentalPlans.slice(); },
   get currentStream() { return currentStream ? { ...currentStream } : null; },
   async reload() { await loadUser(); applyContentToSite(); renderDiscography(); renderSpotifySections(); renderArtistHero(); renderArtistStats(); initCarousels(); applyArtistTabFilter(SITE.artistTab || 'todos'); },
-  openManageModal
+  openManageModal,
+  openRentModal, // Já estava aqui
+  // ADICIONE ESTA NOVA FUNÇÃO:
+  async rent(albumId, trackIndex, planId) {
+    // Abre o modal
+    openRentModal(albumId, trackIndex);
+    // Define o plano
+    _rentContext.planId = planId;
+    // Dispara a confirmação
+    await confirmRent();
+  }
 };

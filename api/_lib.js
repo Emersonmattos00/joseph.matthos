@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
-   api/_lib.js — Módulos internos consolidados (v7 — final)
+   api/_lib.js — Módulos internos consolidados (v8 — final)
    ------------------------------------------------------------
    Decisões documentadas:
    - Rate limit usa MULTI/EXEC. Migração para Lua planejada.
@@ -9,6 +9,7 @@
    - JWT com issuer/audience fixos, exportados e validados.
    - Cookies: access = __Host- (Path=/), refresh = __Secure- (Path=/api/auth).
    - Hash de e-mail em rate limit exige segredo em produção.
+   - checkOrigin aceita Referer quando Origin está ausente (mesma origem).
    ============================================================ */
 
 const crypto = require('crypto');
@@ -29,13 +30,15 @@ const ACCESS_TTL = '15m';
 const CLOCK_TOLERANCE_SEC = 5;
 
 // ─── Cookies ────────────────────────────────────────────────
-const AUTH_COOKIE_PROD = '__Host-jm_auth_access';
-const REFRESH_COOKIE_PROD = '__Secure-jm_auth_refresh';
-const AUTH_COOKIE_DEV = 'jm_auth_access';
-const REFRESH_COOKIE_DEV = 'jm_auth_refresh';
+// Em produção (Vercel) usa os prefixos seguros.
+// No Codespace (dev), usa os nomes simples para evitar bloqueios.
+const AUTH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true' 
+  ? '__Host-jm_auth_access' 
+  : 'jm_auth_access';
 
-const AUTH_COOKIE = IS_PROD ? AUTH_COOKIE_PROD : AUTH_COOKIE_DEV;
-const REFRESH_COOKIE = IS_PROD ? REFRESH_COOKIE_PROD : REFRESH_COOKIE_DEV;
+const REFRESH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true' 
+  ? '__Secure-jm_auth_refresh' 
+  : 'jm_auth_refresh';
 
 const AUTH_COOKIE_PATH = '/';
 const REFRESH_COOKIE_PATH = '/api/auth';
@@ -214,7 +217,12 @@ function buildCookie(name, value, maxAge, opts = {}) {
     'HttpOnly',
     'SameSite=' + sameSite,
   ];
-  if (IS_PROD) parts.push('Secure');
+
+  // Só adiciona Secure em produção REAL (Vercel), nunca no Codespace
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_INSECURE_COOKIE !== 'true') {
+    parts.push('Secure');
+  }
+  
   return parts.join('; ');
 }
 
@@ -668,17 +676,36 @@ async function invalidatePlanCache(userId) {
 }
 
 // ─── CSRF ─────────────────────────────────────────────────
+// [FIX] Aceita Referer quando Origin está ausente (navegador mesma origem)
 function checkOrigin(req) {
   if (!req || typeof req !== 'object') return false;
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
     return false;
   }
+
   const rawOrigin = req.headers?.origin;
-  if (!rawOrigin) return false;
-  const origin = normalizeOrigin(rawOrigin);
-  if (!origin) return false;
-  return ALLOWED_ORIGINS.has(origin);
+  const referer = req.headers?.referer;
+
+  // 1) Se há Origin, valida ele
+  if (rawOrigin) {
+    const origin = normalizeOrigin(rawOrigin);
+    if (!origin) return false;
+    return ALLOWED_ORIGINS.has(origin);
+  }
+
+  // 2) Se não há Origin, tenta o Referer (mesma origem)
+  if (referer) {
+    try {
+      const refOrigin = new URL(String(referer).trim()).origin;
+      if (ALLOWED_ORIGINS.has(refOrigin)) return true;
+    } catch {}
+  }
+
+  // 3) Em desenvolvimento, permite (Codespace não envia Origin em mesma origem)
+  if (!IS_PROD) return true;
+
+  return false;
 }
 
 function validatedOrigin(req) {
