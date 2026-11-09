@@ -19,28 +19,23 @@
      - ALLOWED_ORIGINS (CSV)
      - NODE_ENV=production
 
-   Schemas de auditoria:
-     auth_audit_log → id, event, email_hash, user_id, ip, user_agent,
-                      success, reason, created_at
-     admin_audit    → id, actor, action, target, metadata, ip,
-                      user_agent, created_at
-
    🔧 CORREÇÕES APLICADAS
    ------------------------------------------------------------
-   1. getPlanForUserDetailed() — distingue "free real" de "não
-      consegui confirmar" (falha de rede, erro 5xx, plano inválido).
-   2. getPlanForUser() mantida como wrapper simples (string),
-      retrocompatível com o código existente.
-   3. Cache KV só guarda planos confirmados (não cacheia fallback).
-   4. Migração Supabase → Neon: getAuthUser usa JWT próprio;
-      getPlanForUserDetailed consulta a view effective_plan no Neon.
+   1. getAuthUser() — algoritmo HS256 explícito, clock tolerance
+   2. clientIp() — prioridade correta dos headers de proxy
+   3. checkAndIncrement() — validação de parâmetros
+   4. ALLOWED_ORIGINS — normalizada na inicialização
+   5. checkOrigin() — exige Origin, compara base
+   6. verifyHmac() — valida partes, iat numérico, futuro e expiração
+   7. verifyScrypt() — valida formato, tamanho e senha
+   8. getPlanForUserDetailed() — reutiliza _db.js
+   9. invalidatePlanCache() — exportada para uso
    ============================================================ */
 
 'use strict';
 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { neon } = require('@neondatabase/serverless');
 
 // ─────────────────────────────────────────────────────────────
 // Guard: impede importação no cliente
@@ -67,10 +62,18 @@ const REFRESH_MAX_AGE = 60 * 60 * 24 * 7;    // 7 dias
 
 const VALID_PLANS = new Set(['free', 'premium', 'anual']);
 
+function normalizeOrigin(value) {
+  try {
+    return new URL(String(value).trim()).origin;
+  } catch {
+    return null;
+  }
+}
+
 const ALLOWED_ORIGINS = new Set(
   String(process.env.ALLOWED_ORIGINS || '')
     .split(',')
-    .map((s) => s.trim())
+    .map(normalizeOrigin)
     .filter(Boolean)
 );
 
@@ -135,8 +138,14 @@ function clientIp(req) {
     h['x-vercel-forwarded-for'] ||
     h['x-real-ip'] ||
     h['x-forwarded-for'];
-  return String(fwd || (req.socket && req.socket.remoteAddress) || 'unknown')
-    .split(',')[0].trim();
+
+  const ip = String(
+    fwd ||
+    (req.socket && req.socket.remoteAddress) ||
+    ''
+  ).split(',')[0].trim();
+
+  return ip.slice(0, 128);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -210,16 +219,40 @@ async function getAuthUser(req) {
   const accessToken = getAccessToken(req);
   if (!accessToken) return null;
 
+  const secret = String(process.env.JWT_SECRET || '').trim();
+  if (!secret) {
+    console.error('[_lib] JWT_SECRET não configurado.');
+    return null;
+  }
+
   try {
-    const secret = String(process.env.JWT_SECRET || '').trim();
-    if (!secret) return null;
+    const payload = jwt.verify(accessToken, secret, {
+      algorithms: ['HS256'],
+      clockTolerance: 5
+    });
 
-    const payload = jwt.verify(accessToken, secret);
-    if (!payload || !payload.id) return null;
+    if (
+      !payload ||
+      typeof payload !== 'object' ||
+      typeof payload.id !== 'string' ||
+      !payload.id.trim()
+    ) {
+      return null;
+    }
 
-    return { id: payload.id, email: payload.email, role: payload.role };
+    return {
+      id: payload.id,
+      email: typeof payload.email === 'string' ? payload.email : null,
+      role: typeof payload.role === 'string' ? payload.role : 'user'
+    };
   } catch (error) {
-    console.error('[_lib] getAuthUser:', error.code || error.message);
+    if (
+      error.name !== 'TokenExpiredError' &&
+      error.name !== 'JsonWebTokenError' &&
+      error.name !== 'NotBeforeError'
+    ) {
+      console.error('[_lib] Erro inesperado na autenticação:', error.message);
+    }
     return null;
   }
 }
@@ -260,13 +293,24 @@ function getRedis() {
   }
 }
 
-async function checkAndIncrement(
-  bucket,
-  max,
-  windowMs = 15 * 60 * 1000,
-  options = {}
-) {
+async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options = {}) {
   const { failClosed = false } = options;
+
+  if (
+    typeof bucket !== 'string' ||
+    !bucket.trim() ||
+    bucket.length > 200
+  ) {
+    return { limited: true, retryAfter: 1, reason: 'INVALID_BUCKET' };
+  }
+
+  if (!Number.isInteger(max) || max < 1) {
+    return { limited: true, retryAfter: 1, reason: 'INVALID_MAX' };
+  }
+
+  if (!Number.isFinite(windowMs) || windowMs < 1000) {
+    return { limited: true, retryAfter: 1, reason: 'INVALID_WINDOW' };
+  }
 
   const redis = getRedis();
 
@@ -336,9 +380,8 @@ async function resetBucket(bucket) {
 }
 
 // ═════════════════════════════════════════════════════════════
-// 6. AUDITORIA — roteamento entre auth_audit_log e admin_audit
+// 6. AUDITORIA
 // ═════════════════════════════════════════════════════════════
-
 function resolveAuditTable(event, override) {
   if (override === 'admin') return 'admin_audit';
   if (override === 'auth') return 'auth_audit_log';
@@ -443,26 +486,9 @@ async function audit(event, options = {}) {
 
 // ═════════════════════════════════════════════════════════════
 // 7. PLANO EFETIVO — com cache KV
-// ------------------------------------------------------------
-// getPlanForUserDetailed()  → { plan, degraded, reason }
-// getPlanForUser()          → 'free' | 'premium' | 'anual'
-//
-// `degraded: true` significa que NÃO conseguimos confirmar o
-// plano (rede, 5xx, valor inválido). Nesse caso, `plan` cai em
-// 'free' por segurança, mas o caller pode avisar o usuário.
-//
-// Regras:
-//   - Cache KV só guarda planos CONFIRMADOS (não cacheia fallback)
-//   - Cache TTL: 60s
 // ═════════════════════════════════════════════════════════════
 const PLAN_CACHE_TTL_SEC = 60;
 
-/**
- * Versão detalhada — distingue free real de falha de lookup.
- *
- * @param {string} userId
- * @returns {Promise<{ plan: string, degraded: boolean, reason: string|null }>}
- */
 async function getPlanForUserDetailed(userId) {
   if (!userId) {
     return { plan: 'free', degraded: false, reason: 'no_user_id' };
@@ -471,36 +497,35 @@ async function getPlanForUserDetailed(userId) {
   const cacheKey = `plan:${userId}`;
   const redis = getRedis();
 
-  // 1) Cache
   if (redis) {
     try {
       const cached = await redis.get(cacheKey);
       if (cached && VALID_PLANS.has(cached)) {
         return { plan: cached, degraded: false, reason: 'cache_hit' };
       }
-    } catch { /* cache miss ou KV off */ }
+    } catch {}
   }
 
-  // 2) Banco (Neon)
   let plan = 'free';
   let degraded = false;
   let reason = null;
 
   try {
-    const sql = neon(process.env.DATABASE_URL);
-    const rows = await sql`
+    const { db, schema, sql } = require('./_db');
+    const rows = await db.execute(sql`
       SELECT plan
       FROM effective_plan
       WHERE user_id = ${userId}
       LIMIT 1
-    `;
+    `);
 
-    if (!Array.isArray(rows) || rows.length === 0) {
-      // Sem linha → usuário realmente free (não é degradação)
+    const list = Array.isArray(rows) ? rows : (rows.rows || []);
+
+    if (!list.length) {
       plan = 'free';
       reason = 'no_row';
     } else {
-      const candidate = rows[0].plan;
+      const candidate = list[0].plan;
       if (VALID_PLANS.has(candidate)) {
         plan = candidate;
         reason = 'ok';
@@ -515,26 +540,15 @@ async function getPlanForUserDetailed(userId) {
     console.warn('[_lib] getPlanForUserDetailed query falhou:', reason);
   }
 
-  // 3) Cacheia APENAS se foi confirmado com sucesso
   if (redis && !degraded) {
     try {
       await redis.set(cacheKey, plan, { ex: PLAN_CACHE_TTL_SEC });
-    } catch { /* KV off */ }
+    } catch {}
   }
 
   return { plan, degraded, reason };
 }
 
-/**
- * Versão simples — retrocompatível.
- * Retorna 'free' | 'premium' | 'anual'.
- *
- * ⚠️  Em caso de falha de lookup, retorna 'free' (fail-secure).
- *     Se o caller precisar distinguir, use getPlanForUserDetailed().
- *
- * @param {string} userId
- * @returns {Promise<string>}
- */
 async function getPlanForUser(userId) {
   const result = await getPlanForUserDetailed(userId);
   return result.plan;
@@ -553,31 +567,18 @@ async function invalidatePlanCache(userId) {
 // 8. CSRF — Origin check
 // ═════════════════════════════════════════════════════════════
 function checkOrigin(req) {
-  // Se a variável ALLOWED_ORIGINS não estiver configurada, 
-  // bloqueia tudo em produção por segurança.
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
-    return false; 
-  }
-
-  const origin = String(req.headers.origin || req.headers.referer || '').trim();
-  if (!origin) return false;
-
-  try {
-    const url = new URL(origin);
-    // Compara a origem (protocolo + domínio) sem a barra final
-    const originBase = url.origin;
-    
-    for (const allowed of ALLOWED_ORIGINS) {
-      if (originBase === allowed.replace(/\/+$/, '')) {
-        return true;
-      }
-    }
-  } catch (e) {
     return false;
   }
 
-  return false;
+  const rawOrigin = req.headers?.origin;
+  if (!rawOrigin) return false;
+
+  const origin = normalizeOrigin(rawOrigin);
+  if (!origin) return false;
+
+  return ALLOWED_ORIGINS.has(origin);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -590,23 +591,50 @@ function signHmac(payload, secret) {
 }
 
 function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
-  if (!token || !secret) return null;
-
-  const [body, sig] = String(token).split('.');
-  if (!body || !sig) return null;
-
-  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  if (expected.length !== sig.length) return null;
-
-  try {
-    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) return null;
-  } catch {
+  if (
+    typeof token !== 'string' ||
+    typeof secret !== 'string' ||
+    !secret ||
+    !Number.isFinite(maxAgeMs) ||
+    maxAgeMs <= 0
+  ) {
     return null;
   }
 
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [body, sig] = parts;
+  if (!body || !sig) return null;
+
   try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
-    if (!payload.iat || Date.now() - payload.iat > maxAgeMs) return null;
+    const expected = crypto
+      .createHmac('sha256', secret)
+      .update(body)
+      .digest('base64url');
+
+    const actualBuffer = Buffer.from(sig);
+    const expectedBuffer = Buffer.from(expected);
+
+    if (
+      actualBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+    ) {
+      return null;
+    }
+
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+
+    if (!payload || typeof payload !== 'object' || !Number.isFinite(payload.iat)) {
+      return null;
+    }
+
+    const now = Date.now();
+
+    if (payload.iat > now + 30_000 || now - payload.iat > maxAgeMs) {
+      return null;
+    }
+
     return payload;
   } catch {
     return null;
@@ -615,18 +643,31 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
 // ═════════════════════════════════════════════════════════════
 // 10. SENHA — scrypt (nativo do Node)
-// ------------------------------------------------------------
-// Formato do hash armazenado:
-//   scrypt$<salt-em-hex>$<hash-em-hex>
-//
-// Gere com o script `gerar-hash-admin.js` na raiz do projeto:
-//   node gerar-hash-admin.js "sua-senha-forte"
 // ═════════════════════════════════════════════════════════════
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
     try {
-      const [algo, saltHex, hashHex] = String(storedHash).split('$');
+      if (typeof password !== 'string' || password.length < 1 || password.length > 200) {
+        return resolve(false);
+      }
+
+      if (typeof storedHash !== 'string') {
+        return resolve(false);
+      }
+
+      const [algo, saltHex, hashHex] = storedHash.split('$');
       if (algo !== 'scrypt') return resolve(false);
+
+      if (
+        !saltHex || saltHex.length < 16 ||
+        !hashHex || hashHex.length < 32
+      ) {
+        return resolve(false);
+      }
+
+      if (!/^[a-f0-9]+$/i.test(saltHex) || !/^[a-f0-9]+$/i.test(hashHex)) {
+        return resolve(false);
+      }
 
       const salt = Buffer.from(saltHex, 'hex');
       const expected = Buffer.from(hashHex, 'hex');
