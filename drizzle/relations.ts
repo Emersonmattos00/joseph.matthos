@@ -1,22 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, refreshTokens, orders, playbackEvents, tracks, orderItems, albums, artists, emailVerificationTokens, subscriptions, plans, rentalProducts, passwordResetTokens, rentals } from "./schema";
-
-export const refreshTokensRelations = relations(refreshTokens, ({one}) => ({
-	user: one(users, {
-		fields: [refreshTokens.userId],
-		references: [users.id]
-	}),
-}));
-
-export const usersRelations = relations(users, ({many}) => ({
-	refreshTokens: many(refreshTokens),
-	orders: many(orders),
-	playbackEvents: many(playbackEvents),
-	emailVerificationTokens: many(emailVerificationTokens),
-	subscriptions: many(subscriptions),
-	passwordResetTokens: many(passwordResetTokens),
-	rentals: many(rentals),
-}));
+import { users, orders, tracks, playbackEvents, orderItems, albums, artists, refreshTokens, emailVerificationTokens, passwordResetTokens, plans, subscriptions, rentalProducts, rentals } from "./schema";
 
 export const ordersRelations = relations(orders, ({one, many}) => ({
 	user: one(users, {
@@ -27,14 +10,24 @@ export const ordersRelations = relations(orders, ({one, many}) => ({
 	rentals: many(rentals),
 }));
 
+export const usersRelations = relations(users, ({many}) => ({
+	orders: many(orders),
+	playbackEvents: many(playbackEvents),
+	refreshTokens: many(refreshTokens),
+	emailVerificationTokens: many(emailVerificationTokens),
+	passwordResetTokens: many(passwordResetTokens),
+	subscriptions: many(subscriptions),
+	rentals: many(rentals),
+}));
+
 export const playbackEventsRelations = relations(playbackEvents, ({one}) => ({
-	user: one(users, {
-		fields: [playbackEvents.userId],
-		references: [users.id]
-	}),
 	track: one(tracks, {
 		fields: [playbackEvents.trackId],
 		references: [tracks.id]
+	}),
+	user: one(users, {
+		fields: [playbackEvents.userId],
+		references: [users.id]
 	}),
 }));
 
@@ -61,17 +54,24 @@ export const orderItemsRelations = relations(orderItems, ({one}) => ({
 
 export const albumsRelations = relations(albums, ({one, many}) => ({
 	tracks: many(tracks),
-	rentalProducts: many(rentalProducts),
-	rentals: many(rentals),
 	artist: one(artists, {
 		fields: [albums.artistId],
 		references: [artists.id]
 	}),
+	rentalProducts: many(rentalProducts),
+	rentals: many(rentals),
 }));
 
 export const artistsRelations = relations(artists, ({many}) => ({
 	tracks: many(tracks),
 	albums: many(albums),
+}));
+
+export const refreshTokensRelations = relations(refreshTokens, ({one}) => ({
+	user: one(users, {
+		fields: [refreshTokens.userId],
+		references: [users.id]
+	}),
 }));
 
 export const emailVerificationTokensRelations = relations(emailVerificationTokens, ({one}) => ({
@@ -81,14 +81,21 @@ export const emailVerificationTokensRelations = relations(emailVerificationToken
 	}),
 }));
 
-export const subscriptionsRelations = relations(subscriptions, ({one}) => ({
+export const passwordResetTokensRelations = relations(passwordResetTokens, ({one}) => ({
 	user: one(users, {
-		fields: [subscriptions.userId],
+		fields: [passwordResetTokens.userId],
 		references: [users.id]
 	}),
+}));
+
+export const subscriptionsRelations = relations(subscriptions, ({one}) => ({
 	plan: one(plans, {
 		fields: [subscriptions.planId],
 		references: [plans.id]
+	}),
+	user: one(users, {
+		fields: [subscriptions.userId],
+		references: [users.id]
 	}),
 }));
 
@@ -107,18 +114,7 @@ export const rentalProductsRelations = relations(rentalProducts, ({one}) => ({
 	}),
 }));
 
-export const passwordResetTokensRelations = relations(passwordResetTokens, ({one}) => ({
-	user: one(users, {
-		fields: [passwordResetTokens.userId],
-		references: [users.id]
-	}),
-}));
-
 export const rentalsRelations = relations(rentals, ({one}) => ({
-	user: one(users, {
-		fields: [rentals.userId],
-		references: [users.id]
-	}),
 	track: one(tracks, {
 		fields: [rentals.trackId],
 		references: [tracks.id]
@@ -130,5 +126,9 @@ export const rentalsRelations = relations(rentals, ({one}) => ({
 	order: one(orders, {
 		fields: [rentals.orderId],
 		references: [orders.id]
+	}),
+	user: one(users, {
+		fields: [rentals.userId],
+		references: [users.id]
 	}),
 }));

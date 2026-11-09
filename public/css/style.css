@@ -6464,3 +6464,103 @@ body:has(.player-modal-overlay.open) {
 .artist-tab {
   font-size: 0.85rem; /* Ajuste o tamanho da fonte se necessário */
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   PAINEL DE PLAYLISTS — BUSCA E LISTA DE MÚSICAS
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Container dos resultados da busca */
+.playlist-search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  margin-top: 4px;
+  max-height: 250px;
+  overflow-y: auto;
+  z-index: 1000;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+}
+
+/* Cada item da busca */
+.playlist-search-result {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 10px 15px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #2a2a2a;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.playlist-search-result:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.playlist-search-result:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.playlist-search-result__title {
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.playlist-search-result__album {
+  color: #888;
+  font-size: 0.75rem;
+}
+
+.playlist-search-result__add {
+  color: #1DB954;
+  font-size: 0.75rem;
+  margin-top: 4px;
+  font-weight: bold;
+}
+
+/* Lista de músicas já adicionadas no modal */
+.playlist-tracks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 1rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.playlist-track-item {
+  display: flex;
+  align-items: center;
+  background: #222;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.playlist-track-item__order {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: 12px;
+}
+
+.playlist-order-btn {
+  background: transparent;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  padding: 2px;
+}
+.playlist-order-btn:hover { color: #fff; }
+
+.playlist-track-item__info { flex: 1; }
+.playlist-track-item__title { color: #fff; font-size: 0.9rem; }
+.playlist-track-item__meta { color: #888; font-size: 0.75rem; }

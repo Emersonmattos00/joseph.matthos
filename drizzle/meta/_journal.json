@@ -29,6 +29,27 @@
       "when": 1793016073979,
       "tag": "0003_effective_plan_view",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794234399944,
+      "tag": "0004_curious_microchip",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794234783775,
+      "tag": "0005_white_devos",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794234867933,
+      "tag": "0006_baseline",
+      "breakpoints": true
     }
   ]
 }
