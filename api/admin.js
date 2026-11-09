@@ -224,11 +224,40 @@ async function handleUploadSign(req, res, session) {
   const bucket = BUCKET_BY_KIND[kind];
   if (!bucket) return sendJson(res, 400, { ok: false, error: 'Tipo inválido.' });
 
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${body.filename.split('.').pop()}`;
+  const filename = String(body.filename || '').trim();
+  if (!filename || !filename.includes('.')) {
+    return sendJson(res, 400, { ok: false, error: 'Nome de arquivo inválido.' });
+  }
+
+  const contentType = String(body.contentType || '').trim();
+  if (!contentType || !/^[\w.+-]+\/[\w.+-]+$/.test(contentType) || contentType.length > 150) {
+    return sendJson(res, 400, { ok: false, error: 'Content-Type inválido.' });
+  }
+
+  const ext = filename.split('.').pop().toLowerCase();
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${ext}`;
   const path = kind === 'image' ? `images/${uniqueName}` : uniqueName;
 
-  const signed = await b2CreateSignedUploadUrl(bucket, path, SIGNED_UPLOAD_TTL_SEC);
-  return sendJson(res, 200, { ok: true, uploadUrl: signed.uploadUrl, token: signed.token, path, bucket });
+  try {
+    const signed = await b2CreateSignedUploadUrl(
+      bucket,
+      path,
+      contentType,
+      SIGNED_UPLOAD_TTL_SEC
+    );
+
+    return sendJson(res, 200, {
+      ok: true,
+      uploadUrl: signed.uploadUrl,
+      path,
+      bucket,
+      contentType,
+      expiresIn: SIGNED_UPLOAD_TTL_SEC
+    });
+  } catch (err) {
+    console.error('[admin] Falha ao assinar upload:', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Falha ao preparar upload.' });
+  }
 }
 
 async function handleUploadConfirm(req, res, session) {
