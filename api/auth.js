@@ -1,788 +1,860 @@
 'use strict';
 
 /* ============================================================
-   api/auth.js — Autenticação (Neon + JWT + Refresh)
-   ------------------------------------------------------------
-   - Rotação de refresh atômica (transação com isNull(revokedAt))
-   - Limite de 5 sessões atômico (transação)
-   - Logout retorna 503 se revogação falhar
-   - Signup transacional (user + refresh)
-   - inArray em vez de ANY()
-   - Revogação não sobrescreve revokedAt
+   API: /api/auth — Autenticação (Versão Final Corrigida)
+   Contrato:
+     POST ?action=signup   { name, email, password }
+     POST ?action=login    { email, password }
+     POST ?action=refresh  (cookie rt)
+     POST ?action=logout   (cookie rt)
+     POST ?action=logout-all (auth)
+     GET  ?action=me       (auth)
+   ⚠️  Toda operação mutável exige checkOrigin (CSRF), inclusive OPTIONS.
+   ⚠️  Todo fluxo que cria/revoga sessão usa acquireUserLock().
    ============================================================ */
 
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
-const { eq, and, gt, lte, isNull, inArray, sql } = require('drizzle-orm');
-
-const { users, rentals, tracks, refreshTokens } = require('../src/schema.js');
-
+const { eq, and, isNull, gt, inArray, sql } = require('drizzle-orm');
+const { db } = require('./_db');
+const { users, refreshTokens } = require('../src/schema.js');
 const {
-  sendJson,
-  setAuthCookies,
-  clearAuthCookies,
-  getAccessToken,
-  getRefreshToken,
-  getPlanForUserDetailed,
-  VALID_PLANS,
-  checkAndIncrement,
-  resetBucket,
-  audit,
+  getAuthUser,
   checkOrigin,
   clientIp,
-  IS_PROD
+  checkAndIncrement,
+  getPlanForUserDetailed,
+  VALID_PLANS,
+  JWT_ISSUER,
+  JWT_AUDIENCE,
+  audit,               // [FIX 10.3] auditoria centralizada
 } = require('./_lib');
 
-const { db } = require('./_db');
-
 // ─────────────────────────────────────────────────────────────
-// CONSTANTES
+// CONFIG
 // ─────────────────────────────────────────────────────────────
-const MAX_NAME_LENGTH = 120;
-const MIN_NAME_LENGTH = 2;
-const MAX_EMAIL_LENGTH = 254;
-const MAX_PASSWORD_LENGTH = 256;
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_REFRESH_TOKENS_PER_USER = 5;
+const ACCESS_TTL = '15m';
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // ⚠️ CONTRATO: = _lib.REFRESH_MAX_AGE
+const MAX_SESSIONS = 5;
+const SCRYPT_KEYLEN = 64;
+const SCRYPT_SALT_BYTES = 16;
+const SCRYPT_HASH_HEX_LEN = SCRYPT_KEYLEN * 2;
+const SCRYPT_SALT_HEX_LEN = SCRYPT_SALT_BYTES * 2;
+const REFRESH_TOKEN_RE = /^[A-Za-z0-9_-]{60,80}$/;
+const MAX_NAME_LEN = 100;
+const MAX_EMAIL_LEN = 254;
+const MAX_PASSWORD_LEN = 200;
+const MIN_PASSWORD_LEN = 8;
+const MAX_USER_AGENT_LEN = 512;
+// ⚠️ CONTRATO: confirmar enum real de users.role ('CUSTOMER' vs 'user')
+const DEFAULT_ROLE = 'CUSTOMER';
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const NAME_REGEX = /^[\p{L}\p{N}\s.'-]+$/u;
-
-const COMMON_PASSWORDS = new Set([
-  '12345678', '123456789', '1234567890', 'password', 'password1',
-  'qwerty123', 'qwertyuiop', 'senha123', 'admin123', 'letmein',
-  'welcome1', 'iloveyou', 'abc12345', '1q2w3e4r', '1qaz2wsx'
-]);
-
-const MAX_LOGIN_PER_IP = 30;
-const MAX_LOGIN_PER_EMAIL = 8;
-const MAX_SIGNUP_PER_IP = 10;
-const MAX_SIGNUP_PER_EMAIL = 3;
-const RATE_WINDOW_MS = 15 * 60 * 1000;
-const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
-
-const MIN_RESPONSE_MS = 350;
-const MAX_RENTALS = 100;
-
-const ACCESS_TTL = '1h';
-const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-const GENERIC_AUTH_ERROR = 'E-mail ou senha incorretos.';
-const GENERIC_SIGNUP_ERROR = 'Não foi possível concluir o cadastro.';
-const GENERIC_RATE_ERROR = 'Muitas tentativas. Tente novamente mais tarde.';
-const GENERIC_ERROR = 'Serviço indisponível.';
-
-// ─────────────────────────────────────────────────────────────
-// HANDLER
-// ─────────────────────────────────────────────────────────────
-module.exports = async function handler(req, res) {
-  res.setHeader('Vary', 'Cookie');
-  res.setHeader('Allow', 'GET, HEAD, POST');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'no-store');
-
-  const action = parseAction(req.query);
-  if (!action) return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
-
-  const method = (req.method || 'GET').toUpperCase();
-
-  if (method !== 'GET' && method !== 'HEAD') {
-    if (!checkOrigin(req)) {
-      return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
-    }
-  }
-
-  switch (action) {
-    case 'login':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleLogin(req, res);
-    case 'signup':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleSignup(req, res);
-    case 'logout':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleLogout(req, res);
-    case 'logout-all':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleLogoutAll(req, res);
-    case 'refresh':
-      if (method !== 'POST') return methodNotAllowed(res, 'POST');
-      return handleRefresh(req, res);
-    case 'me':
-      if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res, 'GET, HEAD');
-      return handleMe(req, res);
-    default:
-      return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
-  }
-};
-
-// ─────────────────────────────────────────────────────────────
-// HASH DE SENHA
-// ─────────────────────────────────────────────────────────────
-function hashPassword(password) {
-  return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16).toString('hex');
-    crypto.scrypt(password, salt, 64, (err, derived) => {
-      if (err) return reject(err);
-      resolve(`scrypt$${salt}$${derived.toString('hex')}`);
-    });
-  });
+if (!JWT_ISSUER || !JWT_AUDIENCE) {
+  throw new Error(
+    '[auth] JWT_ISSUER/JWT_AUDIENCE ausentes em _lib.js — emissão abortada.'
+  );
 }
+const ISSUER = JWT_ISSUER;
+const AUDIENCE = JWT_AUDIENCE;
 
-function verifyPassword(password, storedHash) {
-  return new Promise((resolve) => {
-    try {
-      if (typeof storedHash !== 'string') return resolve(false);
-
-      const parts = storedHash.split('$');
-      if (parts.length !== 3) return resolve(false);
-      const [algo, salt, hash] = parts;
-
-      if (algo !== 'scrypt') return resolve(false);
-      if (!/^[a-f0-9]{32}$/.test(salt)) return resolve(false);
-      if (!/^[a-f0-9]{128}$/.test(hash)) return resolve(false);
-
-      const expected = Buffer.from(hash, 'hex');
-      crypto.scrypt(password, salt, expected.length, (err, derived) => {
-        if (err || !derived) return resolve(false);
-        try {
-          resolve(
-            derived.length === expected.length &&
-            crypto.timingSafeEqual(derived, expected)
-          );
-        } catch {
-          resolve(false);
-        }
-      });
-    } catch {
-      resolve(false);
-    }
-  });
-}
+// [FIX 8] Hash fictício pré-computado para equalizar timing em login
+// (gerado uma única vez no boot, com os mesmos parâmetros da app).
+const DUMMY_PASSWORD_HASH = (() => {
+  const salt = crypto.randomBytes(SCRYPT_SALT_BYTES);
+  const derived = crypto.scryptSync(
+    crypto.randomBytes(32).toString('hex'),
+    salt,
+    SCRYPT_KEYLEN
+  );
+  return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
+})();
 
 // ─────────────────────────────────────────────────────────────
-// JWT
+// HELPERS
 // ─────────────────────────────────────────────────────────────
-function signAccessToken(user) {
+function getJwtSecret() {
   const secret = String(process.env.JWT_SECRET || '').trim();
-  if (Buffer.byteLength(secret, 'utf8') < 32) {
-    throw new Error('JWT_SECRET ausente ou muito curto.');
+  if (!secret || secret.length < 32) {
+    const err = new Error('JWT_SECRET ausente ou curto demais.');
+    err.code = 'JWT_SECRET_INVALID';
+    throw err;
   }
+  return secret;
+}
+
+function assertJwtConfig() {
+  getJwtSecret();
+}
+
+function signAccessToken(user) {
   return jwt.sign(
     { id: String(user.id), email: user.email, role: user.role },
-    secret,
-    { algorithm: 'HS256', expiresIn: ACCESS_TTL }
+    getJwtSecret(),
+    {
+      algorithm: 'HS256',
+      expiresIn: ACCESS_TTL,
+      issuer: ISSUER,
+      audience: AUDIENCE,
+    }
   );
 }
 
-function verifyAccessToken(token) {
+function hashRefreshToken(raw) {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+function generateRefreshToken() {
+  return crypto.randomBytes(48).toString('base64url');
+}
+
+function isValidRefreshTokenFormat(raw) {
+  return typeof raw === 'string' && REFRESH_TOKEN_RE.test(raw);
+}
+
+function parseBody(req) {
+  let body = req.body;
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { return null; }
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  return body;
+}
+
+function parseAction(req) {
+  return String((req.query && req.query.action) || '');
+}
+
+function sendJson(res, status, payload) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  return res.status(status).json(payload);
+}
+
+function normalizeEmail(v) {
+  return String(v).trim().toLowerCase();
+}
+
+function isValidEmail(v) {
+  return (
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= MAX_EMAIL_LEN &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
+  );
+}
+
+function isValidName(v) {
+  if (typeof v !== 'string') return false;
+  const t = v.trim();
+  if (!t || t.length > MAX_NAME_LEN) return false;
+  if (/[\u0000-\u001F\u007F]/.test(t)) return false;
+  return true;
+}
+
+function isValidPassword(v) {
+  return (
+    typeof v === 'string' &&
+    v.length >= MIN_PASSWORD_LEN &&
+    v.length <= MAX_PASSWORD_LEN
+  );
+}
+
+function trimUserAgent(ua) {
+  if (typeof ua !== 'string') return null;
+  return ua.slice(0, MAX_USER_AGENT_LEN);
+}
+
+// [FIX 10.2] Composição de Set-Cookie sem sobrescrever outros cookies
+function appendSetCookie(res, cookieStr) {
+  const existing = res.getHeader('Set-Cookie');
+  const list = existing
+    ? Array.isArray(existing) ? existing.slice() : [String(existing)]
+    : [];
+  list.push(cookieStr);
+  res.setHeader('Set-Cookie', list);
+}
+
+// ─────────────────────────────────────────────────────────────
+// COOKIES (⚠️ CONTRATO com _lib.js)
+// ─────────────────────────────────────────────────────────────
+function setRefreshCookie(res, raw) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  appendSetCookie(
+    res,
+    `rt=${raw}; HttpOnly; Path=/api/auth; SameSite=Strict; Max-Age=${Math.floor(
+      REFRESH_TTL_MS / 1000
+    )}${secure}`
+  );
+}
+
+function clearRefreshCookie(res) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  appendSetCookie(
+    res,
+    `rt=; HttpOnly; Path=/api/auth; SameSite=Strict; Max-Age=0${secure}`
+  );
+}
+
+function readRefreshCookie(req) {
+  const cookie = String(req.headers.cookie || '');
+  const m = cookie.match(/(?:^|;\s*)rt=([^;]+)/);
+  if (!m) return null;
   try {
-    const secret = String(process.env.JWT_SECRET || '').trim();
-    if (Buffer.byteLength(secret, 'utf8') < 32) return null;
-    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] });
-    if (!payload || typeof payload.id !== 'string') return null;
-    return payload;
+    return decodeURIComponent(m[1]);
   } catch {
     return null;
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// REFRESH TOKENS (com transação)
+// SENHAS
 // ─────────────────────────────────────────────────────────────
-
-/**
- * Gera e persiste um novo refresh token dentro de uma transação.
- * Já aplica o limite de 5 sessões ativas.
- */
-async function createRefreshToken(userId) {
-  const raw = crypto.randomBytes(48).toString('base64url');
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
-  const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
-  const nowIso = new Date().toISOString();
-
-  await db.transaction(async (tx) => {
-    await tx.insert(refreshTokens).values({
-      id: crypto.randomUUID(),
-      userId,
-      tokenHash: hash,
-      expiresAt,
-      revokedAt: null,
-      createdAt: nowIso
+function scryptAsync(password, salt, keylen) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keylen, (err, derived) => {
+      if (err) reject(err);
+      else resolve(derived);
     });
+  });
+}
 
-    // Busca tokens ativos ordenados por criação (mais antigos primeiro)
-    const rows = await tx.select({ id: refreshTokens.id })
-      .from(refreshTokens)
-      .where(and(
-        eq(refreshTokens.userId, userId),
-        isNull(refreshTokens.revokedAt)
-      ))
-      .orderBy(refreshTokens.createdAt);
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(SCRYPT_SALT_BYTES);
+  const derived = await scryptAsync(password, salt, SCRYPT_KEYLEN);
+  return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
+}
 
-    if (rows.length > MAX_REFRESH_TOKENS_PER_USER) {
-      const excess = rows.length - MAX_REFRESH_TOKENS_PER_USER;
-      const idsToRevoke = rows.slice(0, excess).map(r => r.id);
+async function verifyPassword(password, stored) {
+  if (typeof password !== 'string' || !isValidPassword(password)) return false;
+  if (typeof stored !== 'string') return false;
 
-      await tx.update(refreshTokens)
-        .set({ revokedAt: nowIso })
-        .where(inArray(refreshTokens.id, idsToRevoke));
+  const parts = stored.split('$');
+  if (parts.length !== 3) return false;
+  if (parts[0] !== 'scrypt') return false;
+  if (parts[1].length !== SCRYPT_SALT_HEX_LEN) return false;
+  if (parts[2].length !== SCRYPT_HASH_HEX_LEN) return false;
+  if (!/^[0-9a-f]+$/i.test(parts[1])) return false;
+  if (!/^[0-9a-f]+$/i.test(parts[2])) return false;
+
+  const salt = Buffer.from(parts[1], 'hex');
+  const expected = Buffer.from(parts[2], 'hex');
+  if (salt.length !== SCRYPT_SALT_BYTES) return false;
+  if (expected.length !== SCRYPT_KEYLEN) return false;
+
+  const derived = await scryptAsync(password, salt, SCRYPT_KEYLEN);
+  return crypto.timingSafeEqual(derived, expected);
+}
+
+// ─────────────────────────────────────────────────────────────
+// PLANO
+// ─────────────────────────────────────────────────────────────
+async function resolvePlan(userId) {
+  let plan = 'free';
+  let planDegraded = false;
+  try {
+    const result = await getPlanForUserDetailed(userId);
+    if (result?.degraded) {
+      planDegraded = true;
+    } else if (result && VALID_PLANS.has(result.plan)) {
+      plan = result.plan;
     }
+  } catch {
+    planDegraded = true;
+  }
+  return { plan, planDegraded };
+}
+
+// ─────────────────────────────────────────────────────────────
+// RATE LIMIT (⚠️ CONTRATO com checkAndIncrement)
+// ─────────────────────────────────────────────────────────────
+function rateUnavailable(results) {
+  return results.some(
+    (r) =>
+      r &&
+      (r.reason === 'rate_limit_unavailable' ||
+        r.reason === 'rate_limit_error' ||
+        r.reason === 'internal_error')
+  );
+}
+
+function rateLimited(results) {
+  return results.some(
+    (r) =>
+      r &&
+      r.limited === true &&
+      r.reason !== 'rate_limit_unavailable' &&
+      r.reason !== 'rate_limit_error'
+  );
+}
+
+async function applyRateLimit(res, keys) {
+  try {
+    const results = await Promise.all(
+      keys.map((k) => checkAndIncrement(k, { failClosed: true }))
+    );
+    if (rateUnavailable(results)) {
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
+    }
+    if (rateLimited(results)) {
+      // [FIX 7] Retry-After do limiter, não inventado
+      const limited = results.find((r) => r && r.limited === true) || {};
+      const retryAfterMs =
+        typeof limited.retryAfterMs === 'number' && limited.retryAfterMs > 0
+          ? limited.retryAfterMs
+          : null;
+      if (retryAfterMs) {
+        res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1000)));
+      }
+      return sendJson(res, 429, {
+        ok: false,
+        error: 'Muitas tentativas. Tente novamente em instantes.',
+        retryAfterMs: retryAfterMs ?? undefined,
+      });
+    }
+    return null;
+  } catch {
+    return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SESSÕES — advisory lock unificado
+// ─────────────────────────────────────────────────────────────
+async function acquireUserLock(tx, userId) {
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtext(${String(userId)}))`
+  );
+}
+
+async function createRefreshTokenLocked(tx, userId, meta) {
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  const sessions = await tx
+    .select({ id: refreshTokens.id, createdAt: refreshTokens.createdAt })
+    .from(refreshTokens)
+    .where(
+      and(
+        eq(refreshTokens.userId, userId),
+        isNull(refreshTokens.revokedAt),
+        gt(refreshTokens.expiresAt, nowIso)
+      )
+    )
+    .orderBy(refreshTokens.createdAt);
+
+  if (sessions.length >= MAX_SESSIONS) {
+    const toRevoke = sessions.slice(0, sessions.length - MAX_SESSIONS + 1);
+    const ids = toRevoke.map((s) => s.id);
+    if (ids.length) {
+      await tx
+        .update(refreshTokens)
+        .set({ revokedAt: nowIso })
+        .where(inArray(refreshTokens.id, ids));
+    }
+  }
+
+  const raw = generateRefreshToken();
+  const tokenHash = hashRefreshToken(raw);
+  const expiresAt = new Date(now.getTime() + REFRESH_TTL_MS).toISOString();
+
+  await tx.insert(refreshTokens).values({
+    id: crypto.randomUUID(),
+    userId,
+    tokenHash,
+    expiresAt,
+    ip: meta.ip || null,
+    userAgent: meta.userAgent || null,
+    createdAt: nowIso,
   });
 
-  return raw;
-}
-
-/**
- * Busca um refresh token ativo (não revogado).
- */
-async function findRefreshToken(raw) {
-  if (!raw) return null;
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
-  const [row] = await db.select().from(refreshTokens)
-    .where(and(
-      eq(refreshTokens.tokenHash, hash),
-      isNull(refreshTokens.revokedAt)
-    ))
-    .limit(1);
-  return row || null;
-}
-
-/**
- * Revoga um refresh token (soft delete).
- * Retorna true se revogou, false se já estava revogado ou não existia.
- */
-async function revokeRefreshToken(raw) {
-  if (!raw) return false;
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
-
-  const updated = await db.update(refreshTokens)
-    .set({ revokedAt: new Date().toISOString() })
-    .where(and(
-      eq(refreshTokens.tokenHash, hash),
-      isNull(refreshTokens.revokedAt)
-    ))
-    .returning({ id: refreshTokens.id });
-
-  return updated.length > 0;
+  return { raw, expiresAt };
 }
 
 // ─────────────────────────────────────────────────────────────
-// LOGIN
-// ─────────────────────────────────────────────────────────────
-async function handleLogin(req, res) {
-  const startedAt = Date.now();
-  const ip = clientIp(req);
-  const userAgent = req.headers['user-agent'] || '';
-  const body = parseBody(req);
-
-  const email = normalizeEmail(body.email);
-  const password = typeof body.password === 'string' ? body.password : '';
-
-  if (!EMAIL_REGEX.test(email) || password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
-    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-    await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_input' });
-    return sendJson(res, 400, { ok: false, error: GENERIC_AUTH_ERROR });
-  }
-
-  // Rate limit dentro do try para capturar falhas do Redis
-  let ipRate, emailRate;
-  try {
-    [ipRate, emailRate] = await Promise.all([
-      checkAndIncrement(`login:ip:${ip}`, MAX_LOGIN_PER_IP, RATE_WINDOW_MS, { failClosed: true }),
-      checkAndIncrement(`login:email:${email}`, MAX_LOGIN_PER_EMAIL, RATE_WINDOW_MS, { failClosed: true })
-    ]);
-  } catch (rateErr) {
-    console.error('[auth/login] rate limit indisponível:', rateErr.message);
-    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
-  }
-
-  if (ipRate.limited || emailRate.limited) {
-    const retryAfter = Math.max(ipRate.retryAfter || 1, emailRate.retryAfter || 1, 1);
-    res.setHeader('Retry-After', String(retryAfter));
-    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-    await audit('login', { email, ip, userAgent, success: false, reason: 'rate_limited' });
-    return sendJson(res, 429, { ok: false, error: GENERIC_RATE_ERROR });
-  }
-
-  try {
-    const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-
-    if (!user || !user.passwordHash) {
-      await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-      await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_credentials' });
-      return sendJson(res, 401, { ok: false, error: GENERIC_AUTH_ERROR });
-    }
-
-    const valid = await verifyPassword(password, user.passwordHash);
-    if (!valid) {
-      await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-      await audit('login', { email, ip, userAgent, success: false, reason: 'invalid_credentials' });
-      return sendJson(res, 401, { ok: false, error: GENERIC_AUTH_ERROR });
-    }
-
-    await resetBucket(`login:email:${email}`).catch(() => {});
-
-    const accessToken = signAccessToken(user);
-    const refreshToken = await createRefreshToken(user.id);
-
-    setAuthCookies(res, { access_token: accessToken, refresh_token: refreshToken });
-
-    let plan = 'free';
-    try {
-      const planResult = await getPlanForUserDetailed(user.id);
-      if (planResult && VALID_PLANS.has(planResult.plan)) plan = planResult.plan;
-    } catch {}
-
-    await audit('login', { email, userId: user.id, ip, userAgent, success: true });
-    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-
-    return sendJson(res, 200, {
-      ok: true,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
-      }
-    });
-  } catch (error) {
-    await equalizeTiming(startedAt, MIN_RESPONSE_MS);
-    await audit('login', { email, ip, userAgent, success: false, reason: error.code || 'error' });
-    console.error('[auth/login]', error.code || error.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// SIGNUP (transacional)
+// HANDLERS
 // ─────────────────────────────────────────────────────────────
 async function handleSignup(req, res) {
-  const ip = clientIp(req);
-  const userAgent = req.headers['user-agent'] || '';
   const body = parseBody(req);
+  if (!body) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  const name = normalizeName(body.name);
+  // [FIX 4] validação de tipos ANTES de normalizar
+  if (
+    typeof body.name !== 'string' ||
+    typeof body.email !== 'string' ||
+    typeof body.password !== 'string'
+  ) {
+    return sendJson(res, 400, { ok: false, error: 'Dados de cadastro inválidos.' });
+  }
+
+  const name = body.name.trim();
   const email = normalizeEmail(body.email);
-  const password = typeof body.password === 'string' ? body.password : '';
+  const password = body.password;
 
-  if (!isValidName(name) || !EMAIL_REGEX.test(email) || !isValidPassword(password)) {
-    await audit('signup', { email, ip, userAgent, success: false, reason: 'invalid_input' });
-    return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
+  if (!isValidName(name)) {
+    return sendJson(res, 400, { ok: false, error: 'Nome inválido.' });
+  }
+  if (!isValidEmail(email)) {
+    return sendJson(res, 400, { ok: false, error: 'E-mail inválido.' });
+  }
+  if (!isValidPassword(password)) {
+    return sendJson(res, 400, { ok: false, error: 'Senha inválida.' });
   }
 
-  let ipRate, emailRate;
-  try {
-    [ipRate, emailRate] = await Promise.all([
-      checkAndIncrement(`signup:ip:${ip}`, MAX_SIGNUP_PER_IP, SIGNUP_WINDOW_MS, { failClosed: true }),
-      checkAndIncrement(`signup:email:${email}`, MAX_SIGNUP_PER_EMAIL, SIGNUP_WINDOW_MS, { failClosed: true })
-    ]);
-  } catch (rateErr) {
-    console.error('[auth/signup] rate limit indisponível:', rateErr.message);
-    return sendJson(res, 503, { ok: false, error: GENERIC_ERROR });
-  }
-
-  if (ipRate.limited || emailRate.limited) {
-    const retryAfter = Math.max(ipRate.retryAfter || 1, emailRate.retryAfter || 1, 1);
-    res.setHeader('Retry-After', String(retryAfter));
-    await audit('signup', { email, ip, userAgent, success: false, reason: 'rate_limited' });
-    return sendJson(res, 429, { ok: false, error: GENERIC_RATE_ERROR });
-  }
-
-  try {
-    const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
-
-    if (existing) {
-      await audit('signup', { email, ip, userAgent, success: false, reason: 'email_exists' });
-      return sendJson(res, 400, { ok: false, error: GENERIC_SIGNUP_ERROR });
-    }
-
-    const passwordHash = await hashPassword(password);
-
-    // ★ Transação: user + refresh token juntos
-    let user;
-    let refreshToken;
-    try {
-      await db.transaction(async (tx) => {
-        const [inserted] = await tx.execute(sql`
-          INSERT INTO users (email, password_hash, name, role, created_at, updated_at)
-          VALUES (${email}, ${passwordHash}, ${name}, 'CUSTOMER', NOW(), NOW())
-          RETURNING id, email, name, role, created_at, updated_at
-        `);
-
-        // Adaptador Neon pode retornar { rows: [...] } ou array
-        user = inserted?.rows?.[0] || inserted?.[0] || inserted;
-        if (!user) throw new Error('INSERT_RETURNED_NOTHING');
-
-        // Cria refresh token na mesma transação
-        const raw = crypto.randomBytes(48).toString('base64url');
-        const hash = crypto.createHash('sha256').update(raw).digest('hex');
-        const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
-
-        await tx.insert(refreshTokens).values({
-          id: crypto.randomUUID(),
-          userId: user.id,
-          tokenHash: hash,
-          expiresAt,
-          revokedAt: null,
-          createdAt: new Date().toISOString()
-        });
-
-        refreshToken = raw;
-      });
-    } catch (txErr) {
-      await audit('signup', { email, ip, userAgent, success: false, reason: txErr.code || 'error' });
-      console.error('[auth/signup] falha na transação:', txErr.code || txErr.message);
-      return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
-    }
-
-    const accessToken = signAccessToken(user);
-    setAuthCookies(res, { access_token: accessToken, refresh_token: refreshToken });
-
-    await audit('signup', { email, ip, userAgent, userId: user.id, success: true });
-
-    return sendJson(res, 201, {
-      ok: true,
-      requiresEmailConfirmation: false,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan: 'free'
-      }
-    });
-  } catch (error) {
-    await audit('signup', { email, ip, userAgent, success: false, reason: error.code || 'error' });
-    console.error('[auth/signup]', error.code || error.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// LOGOUT (retorna 503 se revogação falhar)
-// ─────────────────────────────────────────────────────────────
-async function handleLogout(req, res) {
   const ip = clientIp(req);
-  const userAgent = req.headers['user-agent'] || '';
-  const raw = getRefreshToken(req);
-
-  if (raw) {
-    try {
-      await revokeRefreshToken(raw);
-    } catch (err) {
-      console.error('[auth/logout] falha ao revogar refresh:', err.message);
-      // ★ Não limpa cookies: o token no navegador ainda é válido
-      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível. Tente novamente.' });
-    }
+  if (!ip) {
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
 
-  clearAuthCookies(res);
-  res.setHeader('Clear-Site-Data', '"cookies"');
-  await audit('logout', { ip, userAgent, success: true });
-  return sendJson(res, 200, { ok: true });
-}
-
-// ─────────────────────────────────────────────────────────────
-// LOGOUT-ALL
-// ─────────────────────────────────────────────────────────────
-async function handleLogoutAll(req, res) {
-  const token = getAccessToken(req);
-  const payload = verifyAccessToken(token);
-  if (!payload) return sendJson(res, 401, { ok: false });
+  if (await applyRateLimit(res, [`signup:ip:${ip}`, `signup:email:${email}`])) return;
 
   try {
-    await db.update(refreshTokens)
-      .set({ revokedAt: new Date().toISOString() })
-      .where(and(
-        eq(refreshTokens.userId, payload.id),
-        isNull(refreshTokens.revokedAt)
-      ));
-  } catch (err) {
-    console.error('[auth/logout-all]', err.message);
-    return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+    assertJwtConfig();
+  } catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
   }
 
-  clearAuthCookies(res);
-  res.setHeader('Clear-Site-Data', '"cookies"');
-  await audit('logout_all', { userId: payload.id, ip: clientIp(req), success: true });
-  return sendJson(res, 200, { ok: true });
-}
+  const passwordHash = await hashPassword(password);
 
-// ─────────────────────────────────────────────────────────────
-// REFRESH (rotação atômica)
-// ─────────────────────────────────────────────────────────────
-async function handleRefresh(req, res) {
-  const ip = clientIp(req);
-  const raw = getRefreshToken(req);
-
-  if (!raw) return sendJson(res, 401, { ok: false, error: 'Sessão ausente.' });
-
-  const hash = crypto.createHash('sha256').update(raw).digest('hex');
-
-  let newRefresh = null;
-  let user = null;
+  let createdUserId = null;
+  let accessToken = null;
+  let refreshRaw = null;
 
   try {
     await db.transaction(async (tx) => {
-      // ★ Revoga o antigo atomicamente (só se ainda não revogado)
-      const updated = await tx.update(refreshTokens)
-        .set({ revokedAt: new Date().toISOString() })
-        .where(and(
-          eq(refreshTokens.tokenHash, hash),
-          isNull(refreshTokens.revokedAt)
-        ))
-        .returning({ userId: refreshTokens.userId, expiresAt: refreshTokens.expiresAt });
-
-      if (!updated.length) {
-        throw new Error('REFRESH_NOT_FOUND');
+      const [existing] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
+      if (existing) {
+        const err = new Error('EMAIL_TAKEN');
+        err.code = 'EMAIL_TAKEN';
+        throw err;
       }
 
-      const row = updated[0];
+      const [insertedUser] = await tx
+        .insert(users)
+        .values({
+          id: crypto.randomUUID(),
+          name,
+          email,
+          passwordHash,
+          role: DEFAULT_ROLE,
+          createdAt: new Date().toISOString(),
+          // ⚠️ CONTRATO: confirmar se users.updatedAt é obrigatório.
+          // Se for e não tiver DEFAULT, descomentar a linha abaixo:
+          // updatedAt: new Date().toISOString(),
+        })
+        .returning();
 
-      if (new Date(row.expiresAt).getTime() < Date.now()) {
-        throw new Error('REFRESH_EXPIRED');
-      }
+      createdUserId = insertedUser.id;
+      accessToken = signAccessToken(insertedUser);
 
-      const [u] = await tx.select().from(users).where(eq(users.id, row.userId)).limit(1);
-      if (!u) throw new Error('USER_NOT_FOUND');
-      user = u;
-
-      // Cria novo refresh na mesma transação
-      const newRaw = crypto.randomBytes(48).toString('base64url');
-      const newHash = crypto.createHash('sha256').update(newRaw).digest('hex');
-      const newExpires = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
-
-      await tx.insert(refreshTokens).values({
-        id: crypto.randomUUID(),
-        userId: user.id,
-        tokenHash: newHash,
-        expiresAt: newExpires,
-        revokedAt: null,
-        createdAt: new Date().toISOString()
+      await acquireUserLock(tx, insertedUser.id);
+      const created = await createRefreshTokenLocked(tx, insertedUser.id, {
+        ip,
+        userAgent: trimUserAgent(req.headers['user-agent']),
       });
-
-      newRefresh = newRaw;
+      refreshRaw = created.raw;
     });
   } catch (err) {
-    if (err.message === 'REFRESH_NOT_FOUND' || err.message === 'REFRESH_EXPIRED' || err.message === 'USER_NOT_FOUND') {
-      return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+    // [FIX 3] só trata 23505 como e-mail duplicado se a constraint for a certa
+    if (err.code === 'EMAIL_TAKEN') {
+      return sendJson(res, 409, { ok: false, error: 'E-mail já cadastrado.' });
     }
-    console.error('[auth/refresh]', err.code || err.message);
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
+    if (err.code === '23505') {
+      const constraint = String(err.constraint || err.detail || '').toLowerCase();
+      if (constraint.includes('email') || constraint.includes('users_email')) {
+        return sendJson(res, 409, { ok: false, error: 'E-mail já cadastrado.' });
+      }
+      console.error('[auth][signup] unique violation inesperada:', constraint);
+      return sendJson(res, 409, { ok: false, error: 'Conflito de dados.' });
+    }
+    console.error('[auth][signup] erro:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
-  const accessToken = signAccessToken(user);
-  setAuthCookies(res, { access_token: accessToken, refresh_token: newRefresh });
+  const { plan, planDegraded } = await resolvePlan(createdUserId);
 
-  let plan = 'free';
+  setRefreshCookie(res, refreshRaw);
+  // [FIX 10.3] auditoria (sem dados sensíveis)
+  audit?.('auth.signup', { userId: createdUserId, ip });
+  return sendJson(res, 201, { ok: true, accessToken, plan, planDegraded });
+}
+
+async function handleLogin(req, res) {
+  const body = parseBody(req);
+  if (!body) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
+
+  // [FIX 4] tipos antes de normalizar
+  if (typeof body.email !== 'string' || typeof body.password !== 'string') {
+    return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
+  }
+
+  const email = normalizeEmail(body.email);
+  const password = body.password;
+
+  if (!isValidEmail(email) || !isValidPassword(password)) {
+    return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
+  }
+
+  const ip = clientIp(req);
+  if (!ip) {
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
+  }
+
+  if (await applyRateLimit(res, [`login:ip:${ip}`, `login:email:${email}`])) return;
+
   try {
-    const result = await getPlanForUserDetailed(user.id);
-    if (result && VALID_PLANS.has(result.plan)) plan = result.plan;
-  } catch {}
+    assertJwtConfig();
+  } catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
+  }
 
-  await audit('refresh', { userId: user.id, ip, success: true });
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
 
+  // [FIX 8] equaliza timing: verifica contra hash fictício se usuário não existe
+  const passwordOk = user
+    ? await verifyPassword(password, user.passwordHash)
+    : (await verifyPassword(password, DUMMY_PASSWORD_HASH), false);
+
+  if (!user || !passwordOk) {
+    audit?.('auth.login.failed', { email, ip }); // [FIX 10.3]
+    return sendJson(res, 401, { ok: false, error: 'Credenciais inválidas.' });
+  }
+
+  let accessToken = null;
+  let refreshRaw = null;
+
+  try {
+    await db.transaction(async (tx) => {
+      accessToken = signAccessToken(user);
+      await acquireUserLock(tx, user.id);
+      const created = await createRefreshTokenLocked(tx, user.id, {
+        ip,
+        userAgent: trimUserAgent(req.headers['user-agent']),
+      });
+      refreshRaw = created.raw;
+    });
+  } catch (err) {
+    console.error('[auth][login] erro:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
+  }
+
+  const { plan, planDegraded } = await resolvePlan(user.id);
+
+  setRefreshCookie(res, refreshRaw);
+  audit?.('auth.login.success', { userId: user.id, ip });
   return sendJson(res, 200, {
     ok: true,
-    user: {
-      id: String(user.id),
-      email: sanitizeEmail(user.email),
-      name: sanitizeName(user.name),
-      plan
-    }
+    accessToken,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    plan,
+    planDegraded,
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// ME
-// ─────────────────────────────────────────────────────────────
-async function handleMe(req, res) {
-  const method = (req.method || 'GET').toUpperCase();
-  const token = getAccessToken(req);
-
-  if (!token) {
-    if (method === 'HEAD') { res.status(401); return res.end(); }
-    return sendJson(res, 401, { ok: false });
+async function handleRefresh(req, res) {
+  const raw = readRefreshCookie(req);
+  if (!isValidRefreshTokenFormat(raw)) {
+    clearRefreshCookie(res);
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
   }
 
-  const payload = verifyAccessToken(token);
-  if (!payload) {
-    if (method === 'HEAD') { res.status(401); return res.end(); }
-    return sendJson(res, 401, { ok: false });
+  const ip = clientIp(req);
+  if (!ip) {
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
+  }
+
+  if (await applyRateLimit(res, [`refresh:ip:${ip}`])) return;
+
+  try {
+    assertJwtConfig();
+  } catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
+  }
+
+  const tokenHash = hashRefreshToken(raw);
+
+  const [row] = await db
+    .select()
+    .from(refreshTokens)
+    .where(
+      and(
+        eq(refreshTokens.tokenHash, tokenHash),
+        isNull(refreshTokens.revokedAt)
+      )
+    )
+    .limit(1);
+
+  if (!row) {
+    clearRefreshCookie(res);
+    audit?.('auth.refresh.rejected', { reason: 'not_found', ip });
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+  }
+
+  // Pré-checagem rápida (fora da transação) para evitar lock desnecessário
+  const preExp = Date.parse(row.expiresAt);
+  if (!Number.isFinite(preExp) || preExp <= Date.now()) {
+    clearRefreshCookie(res);
+    audit?.('auth.refresh.rejected', { reason: 'expired_pre', userId: row.userId, ip });
+    return sendJson(res, 401, { ok: false, error: 'Sessão expirada.' });
+  }
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, row.userId))
+    .limit(1);
+  if (!user) {
+    clearRefreshCookie(res);
+    audit?.('auth.refresh.rejected', { reason: 'no_user', userId: row.userId, ip });
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+  }
+
+  let newRaw = null;
+  let accessToken = null;
+
+  try {
+    await db.transaction(async (tx) => {
+      await acquireUserLock(tx, user.id);
+
+      // [FIX 5] revalidar expiração DENTRO da transação, após o lock
+      const [fresh] = await tx
+        .select({ id: refreshTokens.id, expiresAt: refreshTokens.expiresAt, revokedAt: refreshTokens.revokedAt })
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, row.id))
+        .limit(1);
+
+      if (!fresh || fresh.revokedAt) {
+        const err = new Error('REFRESH_RACE');
+        err.code = 'REFRESH_RACE';
+        throw err;
+      }
+      const exp = Date.parse(fresh.expiresAt);
+      if (!Number.isFinite(exp) || exp <= Date.now()) {
+        const err = new Error('REFRESH_EXPIRED');
+        err.code = 'REFRESH_EXPIRED';
+        throw err;
+      }
+
+      const nowIso = new Date().toISOString();
+      const revokeResult = await tx
+        .update(refreshTokens)
+        .set({ revokedAt: nowIso, replacedAt: nowIso })
+        .where(
+          and(
+            eq(refreshTokens.id, row.id),
+            isNull(refreshTokens.revokedAt)
+          )
+        )
+        .returning({ id: refreshTokens.id });
+
+      if (!revokeResult.length) {
+        const err = new Error('REFRESH_RACE');
+        err.code = 'REFRESH_RACE';
+        throw err;
+      }
+
+      accessToken = signAccessToken(user);
+
+      const created = await createRefreshTokenLocked(tx, user.id, {
+        ip,
+        userAgent: trimUserAgent(req.headers['user-agent']),
+      });
+      newRaw = created.raw;
+    });
+  } catch (err) {
+    if (err.code === 'REFRESH_RACE' || err.code === 'REFRESH_EXPIRED') {
+      clearRefreshCookie(res);
+      audit?.('auth.refresh.rejected', { reason: err.code, userId: user.id, ip });
+      return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+    }
+    console.error('[auth][refresh] erro:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
+  }
+
+  const { plan, planDegraded } = await resolvePlan(user.id);
+
+  setRefreshCookie(res, newRaw);
+  return sendJson(res, 200, {
+    ok: true,
+    accessToken,
+    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    plan,
+    planDegraded,
+  });
+}
+
+async function handleLogout(req, res) {
+  const raw = readRefreshCookie(req);
+  if (isValidRefreshTokenFormat(raw)) {
+    const tokenHash = hashRefreshToken(raw);
+
+    // [FIX 1] localiza userId fora da transação para adquirir o lock correto
+    let userId = null;
+    try {
+      const [row] = await db
+        .select({ userId: refreshTokens.userId })
+        .from(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .limit(1);
+      userId = row?.userId || null;
+    } catch (err) {
+      console.error('[auth][logout] lookup falhou:', err.message);
+      return sendJson(res, 500, { ok: false, error: 'Logout não confirmado pelo servidor.' });
+    }
+
+    if (userId) {
+      try {
+        await db.transaction(async (tx) => {
+          await acquireUserLock(tx, userId);
+          // Revogação condicional DENTRO do lock; estado pode ter mudado
+          await tx
+            .update(refreshTokens)
+            .set({ revokedAt: new Date().toISOString() })
+            .where(
+              and(
+                eq(refreshTokens.tokenHash, tokenHash),
+                isNull(refreshTokens.revokedAt)
+              )
+            );
+        });
+      } catch (err) {
+        console.error('[auth][logout] erro:', err.message);
+        return sendJson(res, 500, { ok: false, error: 'Logout não confirmado pelo servidor.' });
+      }
+      audit?.('auth.logout', { userId, ip: clientIp(req) });
+    }
+  }
+  clearRefreshCookie(res);
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleLogoutAll(req, res, authUser) {
+  try {
+    await db.transaction(async (tx) => {
+      await acquireUserLock(tx, authUser.id);
+      await tx
+        .update(refreshTokens)
+        .set({ revokedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(refreshTokens.userId, authUser.id),
+            isNull(refreshTokens.revokedAt)
+          )
+        );
+    });
+  } catch (err) {
+    console.error('[auth][logout-all] erro:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
+  }
+
+  clearRefreshCookie(res);
+  audit?.('auth.logout-all', { userId: authUser.id, ip: clientIp(req) });
+  // Observação: access tokens já emitidos permanecem válidos até expirar.
+  return sendJson(res, 200, { ok: true });
+}
+
+async function handleMe(req, res, authUser) {
+  let user;
+  try {
+    [user] = await db
+      .select({ id: users.id, name: users.name, email: users.email, role: users.role })
+      .from(users)
+      .where(eq(users.id, authUser.id))
+      .limit(1);
+  } catch (err) {
+    console.error('[auth][me] erro:', err.message);
+    return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+  }
+
+  if (!user) return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
+
+  const { plan, planDegraded } = await resolvePlan(user.id);
+  return sendJson(res, 200, { ok: true, user, plan, planDegraded });
+}
+
+// ─────────────────────────────────────────────────────────────
+// ROTEADOR
+// ─────────────────────────────────────────────────────────────
+const MUTATING_ACTIONS = new Set(['signup', 'login', 'refresh', 'logout', 'logout-all']);
+const KNOWN_ACTIONS = new Set(['signup', 'login', 'refresh', 'logout', 'logout-all', 'me']);
+
+module.exports = async (req, res) => {
+  const action = parseAction(req);
+
+  // [FIX 2] CORS/CSRF aplicados ANTES do OPTIONS
+  const allowedOrigin = String(process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  const originOk = checkOrigin(req);
+
+  if (req.method === 'OPTIONS') {
+    if (!originOk) return res.status(403).end();
+    if (allowedOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Max-Age', '600');
+    return res.status(204).end();
+  }
+
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+
+  // [FIX 2] CSRF em toda operação mutável
+  if (req.method === 'POST' && MUTATING_ACTIONS.has(action) && !originOk) {
+    return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
   }
 
   try {
-    const [user] = await db.select().from(users).where(eq(users.id, payload.id)).limit(1);
-    if (!user) {
-      if (method === 'HEAD') { res.status(401); return res.end(); }
-      return sendJson(res, 401, { ok: false });
-    }
+    if (action === 'signup' && req.method === 'POST') return await handleSignup(req, res);
+    if (action === 'login' && req.method === 'POST') return await handleLogin(req, res);
+    if (action === 'refresh' && req.method === 'POST') return await handleRefresh(req, res);
+    if (action === 'logout' && req.method === 'POST') return await handleLogout(req, res);
 
-    let plan = 'free';
-    let userRentals = [];
-
-    try {
-      const planResult = await getPlanForUserDetailed(user.id);
-      if (planResult && VALID_PLANS.has(planResult.plan)) plan = planResult.plan;
-    } catch (planErr) {
-      console.error('[auth/me] plano falhou:', planErr.message);
-      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
-    }
-
-    try {
-      userRentals = await getActiveRentals(user.id);
-    } catch (rentalErr) {
-      console.error('[auth/me] aluguéis falharam:', rentalErr.message);
-      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
-    }
-
-    const body = {
-      ok: true,
-      user: {
-        id: String(user.id),
-        email: sanitizeEmail(user.email),
-        name: sanitizeName(user.name),
-        plan
-      },
-      rentals: userRentals
-    };
-
-    if (method === 'HEAD') {
-      res.status(200);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      return res.end();
-    }
-
-    return sendJson(res, 200, body);
-  } catch (error) {
-    console.error('[auth/me]', error.code || error.message);
-    if (method === 'HEAD') { res.status(502); return res.end(); }
-    return sendJson(res, 502, { ok: false, error: GENERIC_ERROR });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// ALUGUÉIS ATIVOS
-// ─────────────────────────────────────────────────────────────
-async function getActiveRentals(userId) {
-  const nowIso = new Date().toISOString();
-
-  const rows = await db.select({
-    trackId: rentals.trackId,
-    albumId: rentals.albumId,
-    expiresAt: rentals.expiresAt
-  })
-    .from(rentals)
-    .where(and(
-      eq(rentals.userId, userId),
-      eq(rentals.status, 'ACTIVE'),
-      lte(rentals.startsAt, nowIso),
-      gt(rentals.expiresAt, nowIso)
-    ))
-    .orderBy(rentals.expiresAt)  // ★ ordena por vencimento
-    .limit(MAX_RENTALS);
-
-  const trackIds = rows.map(r => r.trackId).filter(Boolean);
-  const trackMeta = new Map();
-  if (trackIds.length) {
-    const list = await db.select({
-      id: tracks.id,
-      albumId: tracks.albumId,
-      trackNumber: tracks.trackNumber
-    }).from(tracks).where(inArray(tracks.id, trackIds));  // ★ inArray
-
-    for (const t of list) trackMeta.set(t.id, t);
-  }
-
-  const out = [];
-  for (const r of rows) {
-    if (r.trackId) {
-      const meta = trackMeta.get(r.trackId);
-      if (meta && meta.albumId != null && meta.trackNumber != null) {
-        out.push({
-          kind: 'track',
-          trackKey: `${meta.albumId}:${meta.trackNumber}`,
-          expiresAt: r.expiresAt
-        });
+    if (action === 'logout-all') {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
       }
-    } else if (r.albumId) {
-      out.push({
-        kind: 'album',
-        albumId: r.albumId,
-        expiresAt: r.expiresAt
-      });
+      let authUser = null;
+      try {
+        authUser = await getAuthUser(req);
+      } catch {
+        return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+      }
+      if (!authUser) return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
+      return await handleLogoutAll(req, res, authUser);
     }
+
+    if (action === 'me') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
+      }
+      let authUser = null;
+      try {
+        authUser = await getAuthUser(req);
+      } catch {
+        return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+      }
+      if (!authUser) return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
+      return await handleMe(req, res, authUser);
+    }
+
+    if (KNOWN_ACTIONS.has(action)) {
+      return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
+    }
+
+    return sendJson(res, 404, { ok: false, error: 'Ação não encontrada.' });
+  } catch (err) {
+    console.error('[auth] erro não tratado:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
-
-  return out;
-}
-
-// ─────────────────────────────────────────────────────────────
-// VALIDAÇÃO / SANITIZAÇÃO
-// ─────────────────────────────────────────────────────────────
-function parseAction(query) {
-  if (!query) return null;
-  const raw = String(query.action || '').trim().toLowerCase();
-  if (!['login', 'signup', 'logout', 'logout-all', 'refresh', 'me'].includes(raw)) return null;
-  return raw;
-}
-
-function parseBody(req) {
-  let body = req.body;
-  if (typeof body === 'string') {
-    try { body = JSON.parse(body || '{}'); } catch { body = {}; }
-  }
-  return body && typeof body === 'object' ? body : {};
-}
-
-function normalizeEmail(value) {
-  if (typeof value !== 'string') return '';
-  const normalized = value.normalize('NFC').trim().toLowerCase();
-  if (normalized.length > MAX_EMAIL_LENGTH) return '';
-  return normalized;
-}
-
-function sanitizeEmail(value) {
-  if (typeof value !== 'string') return '';
-  return value.trim().toLowerCase().slice(0, MAX_EMAIL_LENGTH);
-}
-
-function normalizeName(value) {
-  if (typeof value !== 'string') return '';
-  const normalized = value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
-  if (normalized.length > MAX_NAME_LENGTH) return '';
-  return normalized;
-}
-
-function sanitizeName(value) {
-  if (typeof value !== 'string') return '';
-  return value.normalize('NFC').replace(/[\u0000-\u001F\u007F]/g, '').replace(/<[^>]*>/g, '').trim().slice(0, MAX_NAME_LENGTH);
-}
-
-function isValidName(name) {
-  return name.length >= MIN_NAME_LENGTH && name.length <= MAX_NAME_LENGTH && NAME_REGEX.test(name);
-}
-
-function isValidPassword(password) {
-  if (typeof password !== 'string') return false;
-  if (password.length < MIN_PASSWORD_LENGTH) return false;
-  if (password.length > MAX_PASSWORD_LENGTH) return false;
-  if (COMMON_PASSWORDS.has(password.toLowerCase())) return false;
-  if (/^(.)\1+$/.test(password)) return false;
-  return true;
-}
-
-// ─────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────
-function methodNotAllowed(res, allow) {
-  res.setHeader('Allow', allow);
-  return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
-}
-
-function equalizeTiming(startedAt, minMs) {
-  const remaining = minMs - (Date.now() - startedAt);
-  if (remaining > 0) return new Promise((r) => setTimeout(r, remaining));
-  return Promise.resolve();
-}
+};
