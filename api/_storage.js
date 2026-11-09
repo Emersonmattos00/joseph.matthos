@@ -1,5 +1,14 @@
 'use strict';
 
+/* ============================================================
+   api/_storage.js — Backblaze B2 via S3 API
+   ------------------------------------------------------------
+   - Um bucket físico (B2_MEDIA_BUCKET), prefixos por tipo
+   - Validação estrita de MIME, extensão e tamanho
+   - URLs assinadas com prazo curto
+   - Compatível com admin.js (buildPathForKind) e stream.js (getPlaybackUrl)
+   ============================================================ */
+
 const {
   GetObjectCommand,
   HeadObjectCommand,
@@ -11,9 +20,9 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 let client;
 let _configCache = null;
 
-/* ============================================================
-   CONFIGURAÇÃO (Baseada no .env fornecido)
-   ============================================================ */
+// ─────────────────────────────────────────────────────────────
+// CONFIGURAÇÃO (cacheada)
+// ─────────────────────────────────────────────────────────────
 function getStorageConfig() {
   if (_configCache) return _configCache;
 
@@ -28,7 +37,6 @@ function getStorageConfig() {
     throw err;
   }
 
-  // B2_PUBLIC_BASE_URL ou fallback padrão do B2
   const publicBaseUrl = String(
     process.env.B2_PUBLIC_BASE_URL || `https://f005.backblazeb2.com/file`
   ).trim().replace(/\/+$/, '');
@@ -54,10 +62,9 @@ function getS3Client() {
   return client;
 }
 
-/* ============================================================
-   RESOLUÇÃO DE PREFIXOS E BUCKET
-   ============================================================ */
-// Retorna o prefixo de pasta baseado no seu .env
+// ─────────────────────────────────────────────────────────────
+// PREFIXOS POR TIPO
+// ─────────────────────────────────────────────────────────────
 function getPrefixForKind(kind) {
   switch (kind) {
     case 'image':
@@ -73,12 +80,10 @@ function getPrefixForKind(kind) {
   }
 }
 
-// Sempre retorna o bucket físico central
 function resolveBucket() {
   return getStorageConfig().mediaBucket;
 }
 
-// Monta o caminho final concatenando o prefixo + nome do arquivo
 function buildPathForKind(kind, filename) {
   const prefix = getPrefixForKind(kind);
   if (!prefix) {
@@ -86,13 +91,24 @@ function buildPathForKind(kind, filename) {
     err.code = 'INVALID_KIND';
     throw err;
   }
-  // Remove barras extras e garante caminho limpo
   return `${prefix}/${String(filename).replace(/^\/+/, '')}`;
 }
 
-/* ============================================================
-   VALIDAÇÃO DE CHAVES
-   ============================================================ */
+// ─────────────────────────────────────────────────────────────
+// VALIDAÇÕES
+// ─────────────────────────────────────────────────────────────
+const MIME_BY_KIND = {
+  'image': new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']),
+  'audio-preview': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm']),
+  'audio-full': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/wav', 'audio/x-wav'])
+};
+
+const EXT_BY_KIND = {
+  'image': new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif']),
+  'audio-preview': new Set(['mp3', 'm4a', 'aac', 'ogg', 'webm']),
+  'audio-full': new Set(['mp3', 'm4a', 'aac', 'ogg', 'webm', 'flac', 'wav'])
+};
+
 function validateObjectKey(key) {
   if (
     typeof key !== 'string' || !key.trim() || key.length > 1024 ||
@@ -105,25 +121,37 @@ function validateObjectKey(key) {
   return key;
 }
 
-/* ============================================================
-   URL PÚBLICA
-   ============================================================ */
+function validateMimeForKind(kind, mime) {
+  const allowed = MIME_BY_KIND[kind] || MIME_BY_KIND[Object.keys(MIME_BY_KIND).find(k => kind.includes(k))];
+  if (!allowed) throw new Error('Tipo de mídia inválido.');
+  if (!allowed.has(String(mime).toLowerCase())) {
+    throw new Error(`Content-Type não permitido para ${kind}.`);
+  }
+}
+
+function validateExtForKind(kind, filename) {
+  const ext = String(filename || '').split('.').pop().toLowerCase();
+  if (!ext || !/^[a-z0-9]{1,8}$/.test(ext)) throw new Error('Extensão inválida.');
+  const allowed = EXT_BY_KIND[kind] || EXT_BY_KIND[Object.keys(EXT_BY_KIND).find(k => kind.includes(k))];
+  if (!allowed || !allowed.has(ext)) throw new Error(`Extensão ".${ext}" não permitida para ${kind}.`);
+  return ext;
+}
+
+// ─────────────────────────────────────────────────────────────
+// URL PÚBLICA
+// ─────────────────────────────────────────────────────────────
 function getPublicUrl(key) {
   if (!key) throw new Error('Caminho é obrigatório.');
   validateObjectKey(key);
-  
+
   const { publicBaseUrl, mediaBucket } = getStorageConfig();
-  
-  // Se você tiver um domínio customizado para imagens (B2_IMAGE_PUBLIC_URL)
-  // Ex: https://img.seudominio.com
   const customImageUrl = String(process.env.B2_IMAGE_PUBLIC_URL || '').trim().replace(/\/+$/, '');
-  if (customImageUrl && key.startsWith(getPrefixForKind('image'))) {
-    // Remove o prefixo base (ex: "assets/img") para colar direto na URL customizada,
-    // ou mantém se o CDN esperar o path completo. Ajuste conforme sua Cloudflare/CDN.
+  const imagePrefix = getPrefixForKind('image');
+
+  if (customImageUrl && key.startsWith(imagePrefix + '/')) {
     return `${customImageUrl}/${encodeKey(key)}`;
   }
 
-  // URL padrão do B2: https://f005.backblazeb2.com/file/BUCKET/KEY
   return `${publicBaseUrl}/${encodeURIComponent(mediaBucket)}/${encodeKey(key)}`;
 }
 
@@ -131,33 +159,42 @@ function encodeKey(key) {
   return String(key).split('/').map(encodeURIComponent).join('/');
 }
 
-/* ============================================================
-   OPERAÇÕES NO S3
-   ============================================================ */
+// ─────────────────────────────────────────────────────────────
+// OPERAÇÕES S3
+// ─────────────────────────────────────────────────────────────
 async function uploadObject(key, body, contentType) {
   validateObjectKey(key);
-  if (typeof contentType !== 'string' || !/^[\w.+-]+\/[\w.+-]+$/.test(contentType)) {
-    throw new Error('Content-Type inválido.');
-  }
+
+  const kind = inferKindFromKey(key);
+  validateMimeForKind(kind, contentType);
+
+  if (!body || body.length === 0) throw new Error('Arquivo vazio.');
+  if (body.length > 200 * 1024 * 1024) throw new Error('Arquivo excede o tamanho máximo.');
 
   const bucket = resolveBucket();
   return getS3Client().send(new PutObjectCommand({
-    Bucket: bucket, Key: key, Body: body, ContentType: contentType
+    Bucket: bucket,
+    Key: key,
+    Body: body,
+    ContentType: contentType
   }));
 }
 
 async function createSignedUploadUrl(key, contentType, expiresInSec = 900) {
   validateObjectKey(key);
-  if (typeof contentType !== 'string' || !/^[\w.+-]+\/[\w.+-]+$/.test(contentType)) {
-    throw new Error('Content-Type inválido.');
-  }
+
+  const kind = inferKindFromKey(key);
+  validateMimeForKind(kind, contentType);
+
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido.');
   }
 
   const bucket = resolveBucket();
   const command = new PutObjectCommand({
-    Bucket: bucket, Key: key, ContentType: contentType
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType
   });
 
   const uploadUrl = await getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
@@ -190,6 +227,7 @@ async function objectExists(key) {
 
 async function createSignedDownloadUrl(key, expiresInSec, downloadFilename) {
   validateObjectKey(key);
+
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido.');
   }
@@ -210,12 +248,37 @@ async function createSignedDownloadUrl(key, expiresInSec, downloadFilename) {
   return getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
 }
 
+async function getPlaybackUrl(key, isFull = false) {
+  if (!key) throw new Error('Chave do áudio não informada.');
+  validateObjectKey(key);
+  return createSignedDownloadUrl(key, 300);
+}
+
+// ─────────────────────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────────────────────
+function inferKindFromKey(key) {
+  const prefix = String(key).split('/')[0];
+  const map = {
+    [getPrefixForKind('image')]: 'image',
+    [getPrefixForKind('audio-preview')]: 'audio-preview',
+    [getPrefixForKind('audio-full')]: 'audio-full'
+  };
+  return map[prefix] || 'audio-full';
+}
+
+// ─────────────────────────────────────────────────────────────
+// EXPORTAÇÕES
+// ─────────────────────────────────────────────────────────────
 module.exports = {
   createSignedDownloadUrl,
   createSignedUploadUrl,
   getObjectMetadata,
   getPublicUrl,
+  getPlaybackUrl,
   objectExists,
   uploadObject,
-  buildPathForKind
+  buildPathForKind,
+  validateExtForKind,
+  validateMimeForKind
 };
