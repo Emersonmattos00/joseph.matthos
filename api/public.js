@@ -1,9 +1,10 @@
 /* ============================================================
-   api/public.js — Catálogo Público (Versão Híbrida Definitiva)
+   api/public.js — Catálogo Público (Versão Final Híbrida)
    ------------------------------------------------------------
-   - Mantém a busca pelo schema antigo (published: true) para 
-     não quebrar os dados que já estavam no banco.
-   - Garante o aninhamento (albums -> tracks) para o painel de playlists.
+   - Restaura busca de planos (assinatura) e alugueis para o site
+   - Mantém compatibilidade com banco antigo (published: true)
+   - Aninha faixas nos álbuns para o painel de playlists
+   - Validações de segurança e cache
    ============================================================ */
 
 'use strict';
@@ -12,35 +13,55 @@ const { sendJson } = require('./_lib');
 const { db, eq, and, asc, desc, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
-module.exports = async (req, res) => {
+function setHeaders(res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+}
+
+function normalizeId(value) {
+  if (typeof value !== 'string') return null;
+  const id = String(value).trim();
+  if (!id || id.length > 128) return null;
+  return id;
+}
+
+module.exports = async (req, res) => {
+  setHeaders(res);
 
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return sendJson(res, 405, { ok: false, error: 'Method not allowed' });
   }
 
-  const { track, album } = req.query;
+  const trackId = normalizeId(req.query?.track);
+  const albumId = normalizeId(req.query?.album);
+
+  if ((req.query?.track != null && !trackId) || (req.query?.album != null && !albumId)) {
+    return sendJson(res, 400, { ok: false, error: 'Parâmetro inválido.' });
+  }
+  if (trackId && albumId) {
+    return sendJson(res, 400, { ok: false, error: 'Informe apenas uma consulta por vez.' });
+  }
 
   try {
-    // ── 1. Retorna faixa específica (Player) ──────────────────
-    if (track) {
+    // ── 1. FAIXA INDIVIDUAL (Player / Modal) ─────────────────
+    if (trackId) {
       const [trackRow] = await db.select()
         .from(schema.tracks)
-        .where(and(eq(schema.tracks.id, track), eq(schema.tracks.published, true)))
+        .where(and(eq(schema.tracks.id, trackId), eq(schema.tracks.published, true)))
         .limit(1);
 
-      if (!trackRow) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada ou não publicada.' });
+      if (!trackRow) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 
       const [albumRow] = await db.select()
         .from(schema.albums)
         .where(and(eq(schema.albums.id, trackRow.albumId), eq(schema.albums.published, true)))
         .limit(1);
 
-      if (!albumRow) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado ou não publicado.' });
+      if (!albumRow) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
 
       const albumTracks = await db.select()
         .from(schema.tracks)
@@ -60,11 +81,11 @@ module.exports = async (req, res) => {
       });
     }
 
-    // ── 2. Retorna álbum específico ───────────────────────────
-    if (album) {
+    // ── 2. ÁLBUM INDIVIDUAL ──────────────────────────────────
+    if (albumId) {
       const [albumRow] = await db.select()
         .from(schema.albums)
-        .where(and(eq(schema.albums.id, album), eq(schema.albums.published, true)))
+        .where(and(eq(schema.albums.id, albumId), eq(schema.albums.published, true)))
         .limit(1);
 
       if (!albumRow) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
@@ -77,8 +98,9 @@ module.exports = async (req, res) => {
       return sendJson(res, 200, { ok: true, album: albumRow, tracks });
     }
 
-    // ── 3. Home: contrato completo esperado pelo frontend ─────
-    // Busca os álbuns que estão publicados (compatível com o schema antigo)
+    // ── 3. HOME: CATÁLOGO COMPLETO ───────────────────────────
+    
+    // Álbuns (compatível com banco antigo)
     const albums = await db.select()
       .from(schema.albums)
       .where(eq(schema.albums.published, true))
@@ -88,7 +110,7 @@ module.exports = async (req, res) => {
     let tracks = [];
 
     if (albumIds.length > 0) {
-      // Busca todas as faixas publicadas desses álbuns
+      // Faixas (compatível com banco antigo)
       tracks = await db.select()
         .from(schema.tracks)
         .where(and(
@@ -98,7 +120,7 @@ module.exports = async (req, res) => {
         .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber));
     }
 
-    // Aninha as faixas dentro de cada álbum (necessário para o playlists.js)
+    // Aninha as faixas nos álbuns (necessário para o painel de playlists)
     const tracksByAlbum = new Map();
     for (const t of tracks) {
       if (!tracksByAlbum.has(t.albumId)) tracksByAlbum.set(t.albumId, []);
@@ -110,7 +132,7 @@ module.exports = async (req, res) => {
       tracks: tracksByAlbum.get(a.id) || []
     }));
 
-    // Busca o conteúdo do site (textos, imagens, etc)
+    // Conteúdo do site (textos, imagens, etc)
     let content = {};
     try {
       const [row] = await db.select().from(schema.siteContent)
@@ -120,14 +142,24 @@ module.exports = async (req, res) => {
       console.warn('[public] site_content indisponível:', e.message);
     }
 
-    // Retorna a estrutura que o site.js espera
+    // ★ RESTAURAÇÃO: Planos Comerciais (Assinatura)
+    let plans = [];
+    try {
+      plans = await db.select().from(schema.plans).where(eq(schema.plans.active, true));
+    } catch (e) {
+      console.warn('[public] planos indisponíveis:', e.message);
+    }
+
+    // ★ RESTAURAÇÃO: Planos de Aluguel
+    const rentalPlans = Array.isArray(content.rentalPlans) ? content.rentalPlans : [];
+
     return sendJson(res, 200, {
       ok: true,
       content,
-      albums: albumsWithTracks,  // Álbuns com faixas aninhadas
-      tracks: tracks,            // Array global (compatibilidade)
-      plans: [],
-      rentalPlans: [],
+      albums: albumsWithTracks,
+      tracks,
+      plans,       // <-- Devolve os preços de assinatura
+      rentalPlans, // <-- Devolve os preços de aluguel
     });
 
   } catch (err) {
