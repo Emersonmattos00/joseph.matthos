@@ -1,10 +1,5 @@
 /* ============================================================
-   js/admin/editors/albums.js — v6 (drag & drop + downloads)
-   ------------------------------------------------------------
-   - Listeners diretos em cada botão (sem delegação)
-   - Drag & drop para reordenar faixas dentro de um álbum
-   - Backend: PATCH /api/admin?action=track-order
-   - Download de faixa individual e álbum completo (admin)
+   js/admin/editors/albums.js — v7 (Corrigido para Backend Final)
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -21,7 +16,6 @@ const State = {
   error: null
 };
 
-// ⚡ Estado do drag & drop
 let _dragState = null;
 
 // ─────────────────────────────────────────────────────────────
@@ -222,13 +216,14 @@ function bindAlbumButtons(scope) {
       e.preventDefault();
       e.stopPropagation();
       const albumId = btn.dataset.albumDelete;
+      const album = State.albums.find((a) => a.id === albumId);
 
-      if (!confirm(`Excluir o álbum "${albumId}"? As faixas também serão removidas.`)) return;
+      if (!confirm(`Excluir o álbum "${album?.title || albumId}"? As faixas também serão removidas.`)) return;
 
       try {
         await apiFetch('album', {
           method: 'DELETE',
-          query: { id: albumId, force: 'true' }
+          query: { id: albumId }
         });
         State.expandedAlbumIds.delete(albumId);
         State.tracks.delete(albumId);
@@ -266,11 +261,12 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const trackId = Number(btn.dataset.trackEdit);
+      // CORREÇÃO: Manter ID como String (UUID), não Number()
+      const trackId = btn.dataset.trackEdit;
       const albumId = btn.dataset.trackAlbum;
 
       const list = State.tracks.get(albumId) || [];
-      const track = list.find((t) => Number(t.id) === trackId);
+      const track = list.find((t) => String(t.id) === trackId);
       if (track) openTrackModal(albumId, track);
       else toast('Faixa não encontrada.', '⚠');
     });
@@ -280,7 +276,8 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const trackId = Number(btn.dataset.trackDelete);
+      // CORREÇÃO: Manter ID como String (UUID)
+      const trackId = btn.dataset.trackDelete;
       const albumId = btn.dataset.trackAlbum;
 
       if (!confirm('Excluir esta faixa?')) return;
@@ -305,7 +302,6 @@ function bindTrackButtons(scope) {
     });
   });
 
-  // ⚡ Drag & drop
   bindTrackDragDrop(scope);
 }
 
@@ -333,8 +329,8 @@ async function downloadTrack(trackId, titleHint) {
       throw new Error(res?.error || 'Falha ao gerar URL.');
     }
 
-    triggerDownload(res.url, res.filename);
-    toast(`Download iniciado: ${res.filename}`, '⬇');
+    triggerDownload(res.url, res.filename || `${titleHint || trackId}.mp3`);
+    toast(`Download iniciado: ${titleHint || trackId}`, '⬇');
   } catch (err) {
     console.error('[albums] downloadTrack:', err);
     toast(err?.message || `Falha ao baixar "${titleHint || trackId}".`, '⚠');
@@ -387,7 +383,7 @@ async function downloadAlbum(albumId) {
     for (let i = 0; i < valid.length; i++) {
       const t = valid[i];
       try {
-        triggerDownload(t.url, t.filename);
+        triggerDownload(t.url, t.filename || `${t.title || t.id}.mp3`);
         ok++;
       } catch {
         fail++;
@@ -488,9 +484,9 @@ function bindTrackDragDrop(scope) {
       rows.splice(insertAt, 0, _dragState.row);
 
       const order = rows.map((row, i) => ({
-      id: String(row.dataset.trackId),
-      track_number: i + 1
-    }));
+        id: String(row.dataset.trackId),
+        track_number: i + 1
+      }));
 
       const originalHtml = tbody.innerHTML;
       cleanupDrag(scope);
@@ -513,9 +509,10 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   try {
     reorderTableRows(tbody, order);
 
+    // CORREÇÃO: Incluir albumId no body para o backend validar corretamente
     const res = await apiFetch('track-order', {
       method: 'PATCH',
-      body: { order }
+      body: { albumId, order }
     });
 
     if (!res?.ok) throw new Error(res?.error || 'Falha ao reordenar.');
@@ -535,7 +532,8 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
 function reorderTableRows(tbody, order) {
   const rowsById = new Map();
   tbody.querySelectorAll('tr[data-track-id]').forEach((row) => {
-    rowsById.set(Number(row.dataset.trackId), row);
+    // CORREÇÃO: Garantir String em vez de Number
+    rowsById.set(String(row.dataset.trackId), row);
   });
 
   order.forEach((item, newIndex) => {
@@ -563,11 +561,11 @@ function renderAlbumBlock(album) {
     <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(album.id)}">
       <div class="album-header">
         <div class="album-cover" ${
-          album.cover_image
-            ? `style="background-image:url('${escAttr(album.cover_image)}')"`
+          album.coverImage || album.cover_image
+            ? `style="background-image:url('${escAttr(album.coverImage || album.cover_image)}')"`
             : ''
         }>
-          ${album.cover_image ? '' : esc(album.cover_initials || '♪')}
+          ${album.coverImage || album.cover_image ? '' : esc(album.title.charAt(0).toUpperCase())}
         </div>
         <div class="album-info">
           <div class="album-title">
@@ -577,11 +575,10 @@ function renderAlbumBlock(album) {
             </span>
           </div>
           <div class="album-meta">
-            <span class="gold">${esc((album.type || 'album').toUpperCase())}</span>
+            <span class="gold">ÁLBUM</span>
             · ${album.year || '—'}
             · ${trackCount} faixa${trackCount === 1 ? '' : 's'}
           </div>
-          ${album.description ? `<div class="album-desc">${esc(album.description)}</div>` : ''}
         </div>
         <div class="album-actions" style="display:flex;gap:0.4rem;align-items:center;">
           <button class="btn btn-ghost btn-sm"
@@ -647,8 +644,9 @@ function renderTracksList(albumId, tracks) {
 }
 
 function renderTrackRow(albumId, track, idx) {
-  const hasPreview = !!track.preview_path;
-  const hasFull = !!track.full_path;
+  // CORREÇÃO: Mapear camelCase retornado pelo backend
+  const hasPreview = !!track.previewPath || !!track.preview_path;
+  const hasFull = !!track.fullPath || !!track.full_path;
 
   const audioChips = `
     <span class="audio-chip ${hasPreview ? '' : 'none'}" title="Preview">
@@ -659,15 +657,17 @@ function renderTrackRow(albumId, track, idx) {
     </span>
   `;
 
-  const statusBadge = track.published
+  const isPublished = track.status === 'PUBLISHED' || track.published;
+  const statusBadge = isPublished
     ? '<span class="badge-mini badge-premium">Pub</span>'
     : '<span class="badge-mini badge-free">Rasc</span>';
 
-  const price = Number(track.price_cents) || 0;
+  // CORREÇÃO: Buscar priceCents
+  const price = Number(track.priceCents || track.price_cents) || 0;
 
   return `
     <tr data-track-id="${escAttr(String(track.id))}"
-        data-track-index="${Number(track.track_index) || 0}"
+        data-track-index="${Number(track.trackNumber || track.track_index) || 0}"
         draggable="true"
         class="track-row">
       <td class="track-drag-cell">
@@ -711,30 +711,11 @@ function openAlbumModal(album) {
   const a = album || {
     id: '', title: '', artist: 'Joseph Matthos',
     year: new Date().getFullYear(), type: 'album',
-    cover_initials: '', cover_image: '', description: '',
-    published: false, order_index: 0
+    coverImage: '', description: '', published: false
   };
 
   openAdminModal(`
     <h3>${isNew ? 'Novo álbum' : 'Editar álbum'}</h3>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="albumId">ID (slug)</label>
-        <input type="text" id="albumId" value="${escAttr(a.id)}"
-               ${isNew ? '' : 'disabled'}
-               placeholder="album-bbb" maxlength="64">
-        <div class="form-hint">Letras, números e hífens.</div>
-      </div>
-      <div class="form-group">
-        <label for="albumType">Tipo</label>
-        <select id="albumType">
-          <option value="album" ${a.type === 'album' ? 'selected' : ''}>Álbum</option>
-          <option value="ep"    ${a.type === 'ep'    ? 'selected' : ''}>EP</option>
-          <option value="single"${a.type === 'single'? 'selected' : ''}>Single</option>
-        </select>
-      </div>
-    </div>
 
     <div class="form-group">
       <label for="albumTitle">Título *</label>
@@ -743,34 +724,13 @@ function openAlbumModal(album) {
 
     <div class="form-row">
       <div class="form-group">
-        <label for="albumArtist">Artista</label>
-        <input type="text" id="albumArtist" value="${escAttr(a.artist || '')}">
-      </div>
-      <div class="form-group">
         <label for="albumYear">Ano</label>
         <input type="number" id="albumYear" value="${escAttr(String(a.year || ''))}">
       </div>
-    </div>
-
-    <div class="form-row">
       <div class="form-group">
-        <label for="albumCoverInitials">Iniciais da capa</label>
-        <input type="text" id="albumCoverInitials" value="${escAttr(a.cover_initials || '')}" maxlength="8" placeholder="JM">
+        <label for="albumCoverImage">URL da capa</label>
+        <input type="text" id="albumCoverImage" value="${escAttr(a.coverImage || a.cover_image || '')}" placeholder="https://...">
       </div>
-      <div class="form-group">
-        <label for="albumOrderIndex">Ordem</label>
-        <input type="number" id="albumOrderIndex" value="${escAttr(String(a.order_index || 0))}">
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label for="albumCoverImage">URL da capa</label>
-      <input type="text" id="albumCoverImage" value="${escAttr(a.cover_image || '')}" placeholder="https://...">
-    </div>
-
-    <div class="form-group">
-      <label for="albumDescription">Descrição</label>
-      <textarea id="albumDescription" rows="3">${esc(a.description || '')}</textarea>
     </div>
 
     <div class="form-group">
@@ -797,23 +757,14 @@ function openAlbumModal(album) {
     const errEl = document.getElementById('albumError');
     if (errEl) errEl.textContent = '';
 
+    // CORREÇÃO: Não enviar 'id' customizado. O backend gera UUID e o slug.
     const payload = {
-      id: document.getElementById('albumId').value.trim(),
       title: document.getElementById('albumTitle').value.trim(),
-      artist: document.getElementById('albumArtist').value.trim(),
       year: Number(document.getElementById('albumYear').value) || null,
-      type: document.getElementById('albumType').value,
-      cover_initials: document.getElementById('albumCoverInitials').value.trim(),
       cover_image: document.getElementById('albumCoverImage').value.trim(),
-      description: document.getElementById('albumDescription').value.trim(),
-      order_index: Number(document.getElementById('albumOrderIndex').value) || 0,
       published: document.getElementById('albumPublished').checked
     };
 
-    if (!payload.id || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/.test(payload.id)) {
-      if (errEl) errEl.textContent = 'ID inválido.';
-      return;
-    }
     if (!payload.title) {
       if (errEl) errEl.textContent = 'Título obrigatório.';
       return;
@@ -824,12 +775,10 @@ function openAlbumModal(album) {
         await apiFetch('albums', { method: 'POST', body: payload });
         toast('Álbum criado.', '💿');
       } else {
-        const patch = { ...payload };
-        delete patch.id;
         await apiFetch('album', {
           method: 'PATCH',
           query: { id: a.id },
-          body: patch
+          body: payload
         });
         toast('Álbum atualizado.', '💿');
       }
@@ -848,13 +797,12 @@ function openAlbumModal(album) {
 function openTrackModal(albumId, track) {
   const isNew = !track;
   const t = track || {
-    id: null, album_id: albumId, track_index: 0,
-    title: '', duration: '', preview_start: 0, preview_duration: 30,
-    price_cents: 499, for_sale: true, published: false,
-    preview_path: null, full_path: null, lyrics: []
+    id: null, albumId: albumId, trackNumber: 0,
+    title: '', duration: '',
+    priceCents: 499, forSale: true, status: 'DRAFT',
+    previewPath: null, fullPath: null, lyrics: []
   };
 
-  // Mostra a letra como JSON (para permitir edição de timestamps)
   const lyricsText = (() => {
     if (!Array.isArray(t.lyrics) || !t.lyrics.length) return '[]';
     return JSON.stringify(t.lyrics, null, 2);
@@ -875,28 +823,17 @@ function openTrackModal(albumId, track) {
       </div>
       <div class="form-group">
         <label for="trackPrice">Preço (centavos)</label>
-        <input type="number" id="trackPrice" value="${escAttr(String(t.price_cents || 0))}" min="1">
-      </div>
-    </div>
-
-    <div class="form-row">
-      <div class="form-group">
-        <label for="trackPreviewStart">Início da prévia (s)</label>
-        <input type="number" id="trackPreviewStart" value="${escAttr(String(t.preview_start || 0))}" min="0">
-      </div>
-      <div class="form-group">
-        <label for="trackPreviewDuration">Duração da prévia (s)</label>
-        <input type="number" id="trackPreviewDuration" value="${escAttr(String(t.preview_duration || 30))}" min="5" max="120">
+        <input type="number" id="trackPrice" value="${escAttr(String(t.priceCents || 0))}" min="1">
       </div>
     </div>
 
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
-        <input type="checkbox" id="trackPublished" ${t.published ? 'checked' : ''}>
+        <input type="checkbox" id="trackPublished" ${t.status === 'PUBLISHED' ? 'checked' : ''}>
         Publicar faixa
       </label>
       <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;margin-top:0.5rem;">
-        <input type="checkbox" id="trackForSale" ${t.for_sale !== false ? 'checked' : ''}>
+        <input type="checkbox" id="trackForSale" ${t.forSale !== false ? 'checked' : ''}>
         Disponível para aluguel
       </label>
     </div>
@@ -904,12 +841,12 @@ function openTrackModal(albumId, track) {
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
       <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">🎧 Prévia (30s)</h4>
       <div data-preview-status style="font-size:0.85rem;margin-bottom:0.5rem;">
-        ${t.preview_path
-          ? `<span class="audio-chip">✓ ${esc(t.preview_path)}</span>`
+        ${t.previewPath
+          ? `<span class="audio-chip">✓ ${esc(t.previewPath)}</span>`
           : '<span class="audio-chip none">Nenhum arquivo</span>'}
       </div>
       <button class="btn btn-outline btn-sm" data-upload-preview type="button">
-        ${t.preview_path ? '↻ Substituir prévia' : '⬆ Enviar prévia'}
+        ${t.previewPath ? '↻ Substituir prévia' : '⬆ Enviar prévia'}
       </button>
       <input type="file" id="trackPreviewInput" accept="audio/*" hidden>
     </div>
@@ -917,12 +854,12 @@ function openTrackModal(albumId, track) {
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
       <h4 style="margin:0 0 0.75rem;font-size:0.9rem;color:var(--accent);">🎵 Áudio completo</h4>
       <div data-full-status style="font-size:0.85rem;margin-bottom:0.5rem;">
-        ${t.full_path
-          ? `<span class="audio-chip">✓ ${esc(t.full_path)}</span>`
+        ${t.fullPath
+          ? `<span class="audio-chip">✓ ${esc(t.fullPath)}</span>`
           : '<span class="audio-chip none">Nenhum arquivo</span>'}
       </div>
       <button class="btn btn-outline btn-sm" data-upload-full type="button">
-        ${t.full_path ? '↻ Substituir áudio completo' : '⬆ Enviar áudio completo'}
+        ${t.fullPath ? '↻ Substituir áudio completo' : '⬆ Enviar áudio completo'}
       </button>
       <input type="file" id="trackFullInput" accept="audio/*" hidden>
     </div>
@@ -931,9 +868,7 @@ function openTrackModal(albumId, track) {
       <label for="trackLyrics">Letra (JSON sincronizado)</label>
       <textarea id="trackLyrics" rows="10" style="font-family:monospace;font-size:0.85rem;line-height:1.5;tab-size:2;">${esc(lyricsText)}</textarea>
       <div class="form-hint">
-        Formato: <code>[{ "time": 0, "text": "Primeira linha" }, ...]</code><br>
-        <strong>time</strong> em segundos (ex: <code>0</code>, <code>4.5</code>, <code>12</code>).<br>
-        <button type="button" class="btn btn-ghost btn-sm" id="trackLyricsHelpBtn" style="margin-top:0.5rem;padding:0.2rem 0.6rem;font-size:0.75rem;">📖 Ver exemplo completo</button>
+        Formato: <code>[{ "time": 0, "text": "Primeira linha" }, ...]</code>
       </div>
     </div>
 
@@ -983,14 +918,13 @@ function openTrackModal(albumId, track) {
       return;
     }
 
+    // CORREÇÃO: Enviar camelCase para bater com o backend
     const payload = {
       title: document.getElementById('trackTitle').value.trim(),
       duration: document.getElementById('trackDuration').value.trim(),
-      preview_start: Number(document.getElementById('trackPreviewStart').value) || 0,
-      preview_duration: Number(document.getElementById('trackPreviewDuration').value) || 30,
-      price_cents: Number(document.getElementById('trackPrice').value) || 499,
-      for_sale: document.getElementById('trackForSale').checked,
-      published: document.getElementById('trackPublished').checked,
+      priceCents: Number(document.getElementById('trackPrice').value) || 499,
+      forSale: document.getElementById('trackForSale').checked,
+      status: document.getElementById('trackPublished').checked ? 'PUBLISHED' : 'DRAFT',
       lyrics
     };
 
@@ -1003,7 +937,7 @@ function openTrackModal(albumId, track) {
       if (isNew) {
         await apiFetch('tracks', {
           method: 'POST',
-          body: { ...payload, album_id: albumId }
+          body: { ...payload, albumId: albumId }
         });
         toast('Faixa criada.', '🎵');
       } else {
@@ -1024,57 +958,10 @@ function openTrackModal(albumId, track) {
   });
 }
 
-// ── Botão de ajuda do formato JSON
-const helpBtn = document.getElementById('trackLyricsHelpBtn');
-if (helpBtn) {
-  helpBtn.addEventListener('click', () => {
-    openAdminModal(`
-      <h3>Formato da letra sincronizada</h3>
-
-      <p style="color:var(--text-dim);margin-bottom:1rem;">
-        Cole um array JSON onde cada linha tem um <code>time</code> (em segundos) e um <code>text</code>.
-      </p>
-
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem;">
-        <pre style="font-family:monospace;font-size:0.8rem;line-height:1.6;color:var(--text);overflow-x:auto;margin:0;">[
-  { "time": 0,    "text": "Primeira linha" },
-  { "time": 4.5,  "text": "Segunda linha" },
-  { "time": 9,    "text": "Terceira linha" },
-  { "time": 13.2, "text": "Quarta linha" }
-]</pre>
-      </div>
-
-      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
-        Como calcular o <code>time</code>
-      </h4>
-      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
-        <li>Ouve a música e anota o segundo exato em que cada verso começa</li>
-        <li>Pode usar decimais: <code>4.5</code> = 4 segundos e meio</li>
-        <li>A letra acende no player quando o áudio chega nesse tempo</li>
-      </ul>
-
-      <h4 style="font-size:0.9rem;margin-bottom:0.5rem;color:var(--accent);">
-        Dicas
-      </h4>
-      <ul style="color:var(--text-dim);font-size:0.85rem;line-height:1.7;margin-left:1.2rem;margin-bottom:1rem;">
-        <li>Se colar texto puro, o sistema distribui 4s por linha automaticamente</li>
-        <li>Linhas vazias são ignoradas</li>
-        <li>Não pode ter vírgula depois do último item</li>
-      </ul>
-
-      <div style="display:flex;justify-content:flex-end;margin-top:1.5rem;">
-        <button class="btn btn-primary btn-sm" data-close type="button">Entendi</button>
-      </div>
-    `);
-  });
-}
-
 // ─────────────────────────────────────────────────────────────
 // Upload
 // ─────────────────────────────────────────────────────────────
-function bindTrackUpload({
-  buttonSel, inputId, statusSel, kind, uploadFn, field, albumId, track
-}) {
+function bindTrackUpload({ buttonSel, inputId, statusSel, kind, uploadFn, field, albumId, track }) {
   const button = document.querySelector(buttonSel);
   const input = document.getElementById(inputId);
   const statusEl = document.querySelector(statusSel);
@@ -1106,6 +993,8 @@ function bindTrackUpload({
 
       if (!result?.path) throw new Error('Upload não retornou path.');
 
+      // Como o upload-confirm já associou se enviarmos albumId/trackNumber, 
+      // o PATCH abaixo é um fallback.
       await apiFetch('track', {
         method: 'PATCH',
         query: { id: track.id },
