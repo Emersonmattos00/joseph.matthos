@@ -1,97 +1,69 @@
 'use strict';
 
 /* ============================================================
-   api/public.js — Catálogo público (Versão Final Segura)
+   api/public.js — Catálogo Público (Versão Final Definitiva)
    ------------------------------------------------------------
-   - Nunca expõe streamKey / previewKey / fullPath / previewPath
-   - Mantém contrato do player (audioPath é booleano seguro)
-   - Regra oficial: tracks.status = 'PUBLISHED'
-   - Fallback apenas na home (para compatibilidade com banco antigo)
-   - Aluguéis validados (só produtos com faixa/álbum publicados)
+   - Alinhado ao schema real (src/schema.js)
+   - Projeções explícitas (NÃO expõe chaves B2)
+   - Regra estrita: tracks.status === 'PUBLISHED'
+   - Planos e aluguéis com falha isolada (não derrubam o catálogo)
+   - Letras incluídas na rota individual
    ============================================================ */
 
 const { sendJson } = require('./_lib');
-const { db, eq, and, asc, desc, inArray, or } = require('./_db');
+const { db, eq, and, asc, desc, inArray } = require('./_db');
 const schema = require('./_db').schema;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function validUuid(v) { return typeof v === 'string' && UUID_RE.test(v); }
 
-/* ─── Projeções Públicas (nunca expõem chaves B2) ──────── */
+/* ─── Projeções Públicas (sem chaves B2, sem status/published) ── */
 
-function publicAlbumFields() {
+function albumFields() {
   return {
     id: schema.albums.id,
     title: schema.albums.title,
     slug: schema.albums.slug,
-    artist: schema.albums.artist,
+    coverUrl: schema.albums.coverUrl,
     year: schema.albums.year,
     type: schema.albums.type,
     description: schema.albums.description,
-    coverUrl: schema.albums.coverUrl,
     sortOrder: schema.albums.sortOrder,
-    published: schema.albums.published
+    artist: schema.albums.artist
   };
 }
 
-function publicTrackFields() {
+function trackFields() {
   return {
     id: schema.tracks.id,
     albumId: schema.tracks.albumId,
     title: schema.tracks.title,
     trackNumber: schema.tracks.trackNumber,
-    duration: schema.tracks.duration,
-    locked: schema.tracks.locked,
-    status: schema.tracks.status
-    // ❌ streamKey, previewKey, fullPath, previewPath NUNCA
+    durationSeconds: schema.tracks.durationSeconds,
+    locked: schema.tracks.locked
   };
 }
 
-/* ─── Busca blindada para banco antigo (fallback na home) ─ */
+/* ─── Buscas base (sem fallback inseguro) ─────────────────── */
 
-async function fetchAlbumsForHome() {
-  try {
-    return await db.select(publicAlbumFields()).from(schema.albums)
-      .where(eq(schema.albums.published, true))
-      .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
-  } catch (err) {
-    console.warn('[public] Fallback álbuns (sem sortOrder/createdAt):', err.message);
-    // Tenta sem ordenação (banco antigo)
-    return await db.select({
-      id: schema.albums.id,
-      title: schema.albums.title,
-      coverUrl: schema.albums.coverUrl,
-      published: schema.albums.published
-    }).from(schema.albums).where(eq(schema.albums.published, true));
-  }
+async function getAlbumsPublic() {
+  return db.select(albumFields()).from(schema.albums)
+    .where(eq(schema.albums.published, true))
+    .orderBy(asc(schema.albums.sortOrder), desc(schema.albums.createdAt));
 }
 
-async function fetchTracksForHome(albumIds) {
-  if (!albumIds.length) return [];
-  try {
-    // Tenta a regra oficial (status)
-    return await db.select(publicTrackFields()).from(schema.tracks)
-      .where(and(
-        eq(schema.tracks.status, 'PUBLISHED'),
-        inArray(schema.tracks.albumId, albumIds)
-      ))
-      .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber));
-  } catch (err) {
-    console.warn('[public] Fallback faixas (status não existe):', err.message);
-    // Banco antigo: usa published
-    return await db.select({
-      id: schema.tracks.id,
-      albumId: schema.tracks.albumId,
-      title: schema.tracks.title,
-      trackNumber: schema.tracks.trackNumber,
-      duration: schema.tracks.duration
-    }).from(schema.tracks)
-      .where(and(
-        eq(schema.tracks.published, true),
-        inArray(schema.tracks.albumId, albumIds)
-      ))
-      .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber));
-  }
+async function getTracksPublic(albumIds) {
+  if (!Array.isArray(albumIds) || albumIds.length === 0) return [];
+  return db.select(trackFields()).from(schema.tracks)
+    .where(and(
+      inArray(schema.tracks.albumId, albumIds),
+      eq(schema.tracks.status, 'PUBLISHED')
+    ))
+    .orderBy(
+      asc(schema.tracks.albumId),
+      asc(schema.tracks.trackNumber),
+      asc(schema.tracks.createdAt)
+    );
 }
 
 /* ─── Handler Principal ───────────────────────────────────── */
@@ -102,92 +74,96 @@ module.exports = async (req, res) => {
   res.setHeader('Expires', '0');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
-    return sendJson(res, 405, { ok: false, error: 'Method not allowed' });
+    return sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
   }
 
-  const { track, album } = req.query;
+  const trackId = req.query?.track;
+  const albumId = req.query?.album;
+
+  if (trackId && albumId) {
+    return sendJson(res, 400, { ok: false, error: 'INVALID_QUERY' });
+  }
 
   try {
     // ═══════════════════════════════════════════════════════════
-    // 1. FAIXA ESPECÍFICA (Player)
+    // 1. FAIXA INDIVIDUAL (Player)
     // ═══════════════════════════════════════════════════════════
-    if (track) {
-      if (!validUuid(track)) {
-        return sendJson(res, 400, { ok: false, error: 'INVALID_TRACK_ID' });
-      }
+    if (trackId) {
+      if (!validUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'INVALID_TRACK_ID' });
 
-      // Busca faixa com regra oficial (status), com fallback para banco antigo
-      let trackRow = null;
-      try {
-        const [row] = await db.select(publicTrackFields()).from(schema.tracks)
-          .where(and(eq(schema.tracks.id, track), eq(schema.tracks.status, 'PUBLISHED')))
-          .limit(1);
-        trackRow = row;
-      } catch (err) {
-        // Banco sem coluna status: usa published
-        const [row] = await db.select().from(schema.tracks)
-          .where(and(eq(schema.tracks.id, track), eq(schema.tracks.published, true)))
-          .limit(1);
-        trackRow = row;
-      }
-
-      if (!trackRow) return sendJson(res, 404, { ok: false, error: 'TRACK_NOT_FOUND' });
-
-      // Busca álbum (sem expor campos privados)
-      const [albumRow] = await db.select(publicAlbumFields()).from(schema.albums)
-        .where(eq(schema.albums.id, trackRow.albumId))
+      // Busca a faixa com letras (lyrics é jsonb no schema)
+      const [track] = await db.select({
+        ...trackFields(),
+        lyrics: schema.tracks.lyrics
+      }).from(schema.tracks)
+        .where(and(
+          eq(schema.tracks.id, trackId),
+          eq(schema.tracks.status, 'PUBLISHED')
+        ))
         .limit(1);
 
-      if (!albumRow) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
+      if (!track) return sendJson(res, 404, { ok: false, error: 'TRACK_NOT_FOUND' });
 
-      // Faixas do álbum (sem chaves privadas)
-      const albumTracks = await fetchTracksForHome([albumRow.id]);
+      const [album] = await db.select(albumFields()).from(schema.albums)
+        .where(and(
+          eq(schema.albums.id, track.albumId),
+          eq(schema.albums.published, true)
+        ))
+        .limit(1);
 
-      // 🔒 audioPath é booleano — o player usa /api/stream, não a chave
-      const hasAudio = Boolean(trackRow.streamKey || trackRow.previewKey);
+      if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
+
+      const albumTracks = await getTracksPublic([album.id]);
+
+      // Verifica áudio internamente, sem expor chave
+      const [meta] = await db.select({
+        streamKey: schema.tracks.streamKey,
+        previewKey: schema.tracks.previewKey
+      }).from(schema.tracks).where(eq(schema.tracks.id, trackId)).limit(1);
+      const hasAudio = Boolean(meta?.streamKey || meta?.previewKey);
 
       return sendJson(res, 200, {
         ok: true,
-        id: trackRow.id,
-        title: trackRow.title,
-        artist: albumRow.artist || 'Joseph Matthos',
-        albumTitle: albumRow.title,
-        coverUrl: albumRow.coverUrl,
+        id: track.id,
+        title: track.title,
+        artist: album.artist || 'Joseph Matthos',
+        albumTitle: album.title,
+        coverUrl: album.coverUrl,
         audioPath: hasAudio ? 'ready' : '',
-        lyrics: [],
+        lyrics: Array.isArray(track.lyrics) ? track.lyrics : [],
         albumTracks
       });
     }
 
     // ═══════════════════════════════════════════════════════════
-    // 2. ÁLBUM ESPECÍFICO
+    // 2. ÁLBUM INDIVIDUAL
     // ═══════════════════════════════════════════════════════════
-    if (album) {
-      if (!validUuid(album)) {
-        return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
-      }
+    if (albumId) {
+      if (!validUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
 
-      const [albumRow] = await db.select(publicAlbumFields()).from(schema.albums)
-        .where(eq(schema.albums.id, album))
+      const [album] = await db.select(albumFields()).from(schema.albums)
+        .where(and(
+          eq(schema.albums.id, albumId),
+          eq(schema.albums.published, true)
+        ))
         .limit(1);
 
-      if (!albumRow) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
+      if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
-      const tracks = await fetchTracksForHome([albumRow.id]);
-      return sendJson(res, 200, { ok: true, album: albumRow, tracks });
+      const tracks = await getTracksPublic([album.id]);
+      return sendJson(res, 200, { ok: true, album, tracks });
     }
 
     // ═══════════════════════════════════════════════════════════
-    // 3. HOME (Catálogo completo)
+    // 3. HOME (Catálogo Completo — Erros comerciais não derrubam)
     // ═══════════════════════════════════════════════════════════
-    const albums = await fetchAlbumsForHome();
+    const albums = await getAlbumsPublic();
     const albumIds = albums.map(a => a.id);
-    const tracks = await fetchTracksForHome(albumIds);
+    const tracks = await getTracksPublic(albumIds);
 
-    // Agrupa faixas dentro dos álbuns
+    // Agrupa faixas por álbum
     const byAlbum = new Map();
     for (const t of tracks) {
       if (!byAlbum.has(t.albumId)) byAlbum.set(t.albumId, []);
@@ -198,16 +174,19 @@ module.exports = async (req, res) => {
       tracks: byAlbum.get(a.id) || []
     }));
 
-    // Conteúdo do site (para textos/imagens)
+    // ── Conteúdo (opcional, não derruba a home) ────────────
     let content = {};
     try {
       const [row] = await db.select({ data: schema.siteContent.data })
         .from(schema.siteContent).where(eq(schema.siteContent.key, 'default')).limit(1);
-      if (row?.data) content = row.data;
-    } catch {}
+      if (row && row.data) content = row.data;
+    } catch (err) {
+      console.warn('[public] site_content indisponível:', err.message);
+    }
 
-    // Planos de assinatura
+    // ── Planos (falha isolada) ──────────────────────────────
     let plans = [];
+    let plansError = false;
     try {
       plans = await db.select({
         id: schema.plans.id,
@@ -217,10 +196,14 @@ module.exports = async (req, res) => {
         intervalUnit: schema.plans.intervalUnit,
         intervalCount: schema.plans.intervalCount
       }).from(schema.plans).where(eq(schema.plans.active, true));
-    } catch {}
+    } catch (err) {
+      console.error('[public] Falha ao buscar planos:', err.message);
+      plansError = true;
+    }
 
-    // Aluguéis (validando só produtos publicados)
+    // ── Aluguéis (falha isolada) ────────────────────────────
     let rentalPlans = [];
+    let rentalsError = false;
     try {
       const products = await db.select({
         id: schema.rentalProducts.id,
@@ -230,16 +213,19 @@ module.exports = async (req, res) => {
         durationHours: schema.rentalProducts.durationHours,
         priceCents: schema.rentalProducts.priceCents,
         currency: schema.rentalProducts.currency
-      }).from(schema.rentalProducts).where(eq(schema.rentalProducts.active, true));
+      }).from(schema.rentalProducts)
+        .where(eq(schema.rentalProducts.active, true));
 
       const validTracks = new Set(tracks.map(t => t.id));
       const validAlbums = new Set(albumIds);
 
       rentalPlans = products
         .filter(p => {
-          if (p.trackId) return validTracks.has(p.trackId);
-          if (p.albumId) return validAlbums.has(p.albumId);
-          return false;
+          // ★ Regra: exatamente UM destino válido
+          const hasT = Boolean(p.trackId);
+          const hasA = Boolean(p.albumId);
+          if (hasT === hasA) return false;
+          return hasT ? validTracks.has(p.trackId) : validAlbums.has(p.albumId);
         })
         .map(p => {
           const hours = Number(p.durationHours);
@@ -249,24 +235,29 @@ module.exports = async (req, res) => {
           return {
             id: p.id, label: p.name,
             days: Math.floor(hours / 24), hours: hours % 24,
-            durationHours: hours,
-            price: cents / 100, priceCents: cents,
-            currency: p.currency || 'BRL',
-            available: true,
-            trackId: p.trackId || null,
-            albumId: p.albumId || null
+            durationHours: hours, price: cents / 100, priceCents: cents,
+            currency: p.currency || 'BRL', available: true,
+            trackId: p.trackId || null, albumId: p.albumId || null
           };
         })
         .filter(Boolean);
-    } catch {}
+    } catch (err) {
+      console.error('[public] Falha ao buscar aluguéis:', err.message);
+      rentalsError = true;
+    }
 
+    // ═══════════════════════════════════════════════════════════
+    // RESPOSTA FINAL (catálogo sempre; comércio pode falhar)
+    // ═══════════════════════════════════════════════════════════
     return sendJson(res, 200, {
       ok: true,
       content,
       albums: albumsWithTracks,
       tracks,
       plans,
-      rentalPlans
+      rentalPlans,
+      plansError,
+      rentalsError
     });
 
   } catch (err) {
