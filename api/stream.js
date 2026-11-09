@@ -1,130 +1,413 @@
 /* ============================================================
-   api/stream.js — Entrega de áudio (Versão Final Segura)
+   api/stream.js — Entrega segura de áudio
+   ------------------------------------------------------------
+   Joseph Matthos
+
+   Correções:
+   - Validação de publicação
+   - Autorização Premium
+   - Validação de aluguel por início e expiração
+   - Validação da identidade do usuário
+   - Rate limit
+   - Proteção contra chaves inválidas
+   - URLs temporárias para áudio completo
+   - CDN para prévias
+   - Diagnóstico JSON
+   - Tratamento de erros HTTP
+   - Compatibilidade com player.js
    ============================================================ */
 
 'use strict';
 
-const { eq, and, gt, or } = require('drizzle-orm');
+const {
+  eq,
+  and,
+  gt,
+  lte,
+  or
+} = require('drizzle-orm');
+
 const { db } = require('./_db');
-const { tracks, rentals, subscriptions } = require('../src/schema.js');
+const {
+  tracks,
+  rentals,
+  subscriptions
+} = require('../src/schema.js');
+
 const { getAuthUser } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
-// ★ CDN fallback para previews gratuitas
-const CDN_BASE = process.env.CDN_BASE_URL || 'https://josephmatthos-cdn.emerson-mattos00.workers.dev';
+const CDN_BASE = String(
+  process.env.CDN_BASE_URL ||
+  'https://josephmatthos-cdn.emerson-mattos00.workers.dev'
+).trim().replace(/\/+$/, '');
 
-module.exports = async (req, res) => {
-  // CORS restrito
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
+const MAX_TRACK_ID_LENGTH = 128;
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
+/* ============================================================
+   RESPOSTAS
+   ============================================================ */
+
+function json(res, status, data) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  return res.status(status).json(data);
+}
+
+function setHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+}
+
+/* ============================================================
+   IDENTIFICADOR
+   ============================================================ */
+
+function normalizeTrackId(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+
+  const id = String(value).trim();
+
+  if (!id || id.length > MAX_TRACK_ID_LENGTH) {
+    return null;
+  }
+
+  return id;
+}
+
+/* ============================================================
+   CHAVE DE ARMAZENAMENTO
+   ============================================================ */
+
+function normalizeStorageKey(value) {
+  if (typeof value !== 'string') return null;
+
+  const key = value.trim();
+
+  if (
+    !key ||
+    key.length > 1024 ||
+    key.startsWith('/') ||
+    key.includes('\\') ||
+    key.includes('?') ||
+    key.includes('#') ||
+    key.split('/').some(part =>
+      !part || part === '.' || part === '..'
+    )
+  ) {
+    return null;
+  }
+
+  return key;
+}
+
+/* ============================================================
+   IP PARA RATE LIMIT
+   ============================================================ */
+
+function getClientIp(req) {
+  const forwarded = req.headers?.['x-forwarded-for'];
+
+  return String(
+    req.ip ||
+    (typeof forwarded === 'string'
+      ? forwarded.split(',')[0].trim()
+      : '') ||
+    'unknown'
+  ).slice(0, 128);
+}
+
+/* ============================================================
+   AUTORIZAÇÃO PREMIUM
+   ============================================================ */
+
+async function hasActiveSubscription(userId, now) {
+  const [subscription] = await db
+    .select({
+      id: subscriptions.id
+    })
+    .from(subscriptions)
+    .where(
+      and(
+        eq(subscriptions.userId, userId),
+        eq(subscriptions.status, 'ACTIVE'),
+        gt(subscriptions.currentPeriodEnd, now)
+      )
+    )
+    .limit(1);
+
+  return Boolean(subscription);
+}
+
+/* ============================================================
+   AUTORIZAÇÃO DE ALUGUEL
+   ============================================================ */
+
+async function hasActiveRental(userId, track, now) {
+  const conditions = [
+    eq(rentals.userId, userId),
+    eq(rentals.status, 'ACTIVE'),
+    lte(rentals.startsAt, now),
+    gt(rentals.expiresAt, now)
+  ];
+
+  const trackOrAlbum = track.albumId
+    ? or(
+        eq(rentals.trackId, track.id),
+        eq(rentals.albumId, track.albumId)
+      )
+    : eq(rentals.trackId, track.id);
+
+  conditions.push(trackOrAlbum);
+
+  const [rental] = await db
+    .select({
+      id: rentals.id
+    })
+    .from(rentals)
+    .where(and(...conditions))
+    .limit(1);
+
+  return Boolean(rental);
+}
+
+/* ============================================================
+   AUTORIZAÇÃO COMPLETA
+   ============================================================ */
+
+async function getAccessLevel(user, track, now) {
+  if (!user?.id) return 'preview';
 
   try {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || 'unknown';
-    
-    // Rate limit com fail-closed (se Redis cair em prod, nega)
-    const rl = await checkStreamRateLimit(ip);
-    if (!rl.success) return res.status(429).json({ error: 'Muitas requisições' });
+    if (await hasActiveSubscription(user.id, now)) {
+      return 'full';
+    }
+  } catch (error) {
+    console.error(
+      '[stream] Erro ao consultar assinatura:',
+      error.message
+    );
+    return 'preview';
+  }
 
-    const { trackId } = req.query;
-    if (!trackId) return res.status(400).json({ error: 'trackId obrigatório' });
+  try {
+    if (await hasActiveRental(user.id, track, now)) {
+      return 'full';
+    }
+  } catch (error) {
+    console.error(
+      '[stream] Erro ao consultar aluguel:',
+      error.message
+    );
+    return 'preview';
+  }
 
-    const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
-    if (!track) return res.status(404).json({ error: 'Faixa não encontrada' });
+  return 'preview';
+}
 
-    let user = null;
-    try { user = await getAuthUser(req); } catch (e) {}
+/* ============================================================
+   DIAGNÓSTICO
+   ============================================================ */
 
-    let accessLevel = 'preview';
+function diagnosticResponse(res, status, data) {
+  return json(res, status, {
+    ok: status >= 200 && status < 300,
+    ...data
+  });
+}
 
-    if (user) {
-      const now = new Date().toISOString();
-      
-      // 1. Checa Assinatura Premium
-      try {
-        const [sub] = await db.select().from(subscriptions)
-          .where(and(
-            eq(subscriptions.userId, user.id),
-            eq(subscriptions.status, 'ACTIVE'),
-            gt(subscriptions.currentPeriodEnd, now)
-          )).limit(1);
-        if (sub) accessLevel = 'full';
-      } catch (e) {
-        console.error('[stream] Erro ao checar assinatura:', e);
-      }
+/* ============================================================
+   HANDLER
+   ============================================================ */
 
-      // 2. Checa Aluguel (se não for Premium)
-      if (accessLevel !== 'full') {
-        try {
-          const rentalCond = or(
-            eq(rentals.trackId, track.id),
-            track.albumId ? eq(rentals.albumId, track.albumId) : eq(rentals.trackId, track.id)
-          );
-          const [rent] = await db.select().from(rentals)
-            .where(and(
-              eq(rentals.userId, user.id),
-              eq(rentals.status, 'ACTIVE'),
-              gt(rentals.expiresAt, now),
-              rentalCond
-            )).limit(1);
-          if (rent) accessLevel = 'full';
-        } catch (e) {
-          console.error('[stream] Erro ao checar aluguel:', e);
-        }
-      }
+module.exports = async function streamHandler(req, res) {
+  setHeaders(res);
+
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    return json(res, 405, {
+      error: 'Método não permitido.'
+    });
+  }
+
+  try {
+    const trackId = normalizeTrackId(req.query?.trackId);
+    const diagnostic = req.query?.format === 'json';
+
+    if (!trackId) {
+      return diagnostic
+        ? diagnosticResponse(res, 400, {
+            error: 'trackId obrigatório.'
+          })
+        : json(res, 400, {
+            error: 'trackId obrigatório.'
+          });
     }
 
-    // LÓGICA DE SEGURANÇA: Decide qual arquivo entregar
-    let b2Key;
+    // 1. Rate limit
+    const ip = getClientIp(req);
+    const rateLimit = await checkStreamRateLimit(ip);
+
+    if (!rateLimit.success) {
+      return diagnostic
+        ? diagnosticResponse(res, 429, {
+            error: 'Muitas requisições.'
+          })
+        : json(res, 429, {
+            error: 'Muitas requisições.'
+          });
+    }
+
+    // 2. Recuperação da faixa (status + published)
+    const [track] = await db
+      .select({
+        id: tracks.id,
+        albumId: tracks.albumId,
+        status: tracks.status,
+        published: tracks.published,
+        streamKey: tracks.streamKey,
+        previewKey: tracks.previewKey,
+        fullPath: tracks.fullPath,
+        previewPath: tracks.previewPath
+      })
+      .from(tracks)
+      .where(
+        and(
+          eq(tracks.id, trackId),
+          eq(tracks.status, 'PUBLISHED'),
+          eq(tracks.published, true)
+        )
+      )
+      .limit(1);
+
+    if (!track) {
+      return diagnostic
+        ? diagnosticResponse(res, 404, {
+            error: 'Faixa não encontrada ou não publicada.'
+          })
+        : json(res, 404, {
+            error: 'Faixa não encontrada ou não publicada.'
+          });
+    }
+
+    // 3. Identificação do usuário (falha fechada)
+    let user = null;
+
+    try {
+      user = await getAuthUser(req);
+    } catch (error) {
+      console.error(
+        '[stream] Erro de autenticação:',
+        error.message
+      );
+      return diagnostic
+        ? diagnosticResponse(res, 503, {
+            error: 'Não foi possível verificar a sessão.'
+          })
+        : json(res, 503, {
+            error: 'Autenticação temporariamente indisponível.'
+          });
+    }
+
+    const now = new Date().toISOString();
+
+    // 4. Verificação de acesso
+    const accessLevel = await getAccessLevel(user, track, now);
+
+    // 5. Seleção do arquivo
+    const rawKey = accessLevel === 'full'
+      ? (track.streamKey || track.fullPath)
+      : (track.previewKey || track.previewPath);
+
+    if (!rawKey) {
+      return diagnostic
+        ? diagnosticResponse(res, 403, {
+            error: 'Prévia indisponível.',
+            accessLevel
+          })
+        : json(res, 403, {
+            error: 'Prévia indisponível.',
+            message: 'Alugue ou assine para ouvir o áudio completo.'
+          });
+    }
+
+    const key = normalizeStorageKey(rawKey);
+
+    if (!key) {
+      console.error(
+        '[stream] Chave de armazenamento inválida:',
+        track.id
+      );
+      return diagnostic
+        ? diagnosticResponse(res, 500, {
+            error: 'Configuração de áudio inválida.'
+          })
+        : json(res, 500, {
+            error: 'Configuração de áudio inválida.'
+          });
+    }
+
+    // 6. Diagnóstico sem revelar URL
+    if (diagnostic) {
+      return diagnosticResponse(res, 200, {
+        accessLevel,
+        message: 'Acesso ao áudio autorizado.'
+      });
+    }
+
+    // 7. Áudio completo: URL assinada
     if (accessLevel === 'full') {
-      b2Key = track.streamKey || track.fullPath;
-    } else {
-      b2Key = track.previewKey;
-      if (!b2Key) {
-        return res.status(403).json({ 
-          error: 'Prévia indisponível', 
-          message: 'Alugue ou assine para ouvir o áudio completo.' 
+      try {
+        const signedUrl = await getPlaybackUrl(key, true);
+
+        if (
+          typeof signedUrl !== 'string' ||
+          !signedUrl.startsWith('https://')
+        ) {
+          throw new Error('URL assinada inválida.');
+        }
+
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        return res.redirect(302, signedUrl);
+      } catch (error) {
+        console.error(
+          '[stream] Falha ao gerar URL assinada:',
+          error.message
+        );
+        return json(res, 503, {
+          error: 'Serviço de áudio temporariamente indisponível.'
         });
       }
     }
 
-    if (!b2Key) {
-      return res.status(404).json({ error: 'Arquivo de áudio não configurado no banco.' });
+    // 8. Prévia: CDN público
+    if (!CDN_BASE || !CDN_BASE.startsWith('https://')) {
+      return json(res, 503, {
+        error: 'CDN de prévias indisponível.'
+      });
     }
 
-    // Padronização do caminho
-    const cleanKey = String(b2Key)
-      .replace(/^\/+/, '')
-      .replace(/^josephmatthos\//, ''); 
+    const encodedKey = key
+      .split('/')
+      .map(encodeURIComponent)
+      .join('/');
 
-    // ★ CORREÇÃO DE SEGURANÇA: URL assinada para áudio completo
-    if (accessLevel === 'full') {
-      try {
-        // Gera URL assinada do B2 que expira em 5 minutos (300s)
-        // O `true` avisa ao _storage.js para usar o bucket de áudio full
-        const signedUrl = await getPlaybackUrl(cleanKey, true);
-        
-        res.setHeader('Cache-Control', 'no-store');
-        return res.redirect(302, signedUrl);
-      } catch (err) {
-        console.error('[stream] Falha ao gerar URL assinada:', err.message);
-        // Fail-closed: se o B2 falhar, NÃO entrega o áudio completo.
-        return res.status(503).json({ error: 'Serviço de áudio temporariamente indisponível.' });
-      }
-    }
+    const cdnUrl = `${CDN_BASE}/${encodedKey}`;
 
-    // Preview: CDN público é aceitável (arquivo de 30s)
-    const cdnUrl = `${CDN_BASE}/${cleanKey}`;
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     return res.redirect(302, cdnUrl);
 
   } catch (error) {
-    console.error('[stream] erro detalhado:', error);
-    if (!res.headersSent) {
-      return res.status(500).json({ error: 'Erro interno no servidor' });
-    }
+    console.error('[stream] Erro interno:', error);
+    if (res.headersSent) return;
+    return json(res, 500, {
+      error: 'Erro interno ao entregar áudio.'
+    });
   }
-};// redeploy Thu Nov  5 18:32:20 UTC 2026
+};
