@@ -1,5 +1,5 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v27 FINAL AUDITADO)
+   SITE.JS — Joseph Matthos (v28 FINAL AUDITADO)
    ------------------------------------------------------------
    Correções aplicadas:
    - isPremium() retorna booleano padronizado
@@ -106,6 +106,7 @@ async function boot() {
     renderDiscography();
     renderPlaylists();
     renderArtistHero();
+    renderArtistStats(); // <-- NOVA FUNÇÃO AQUI
     renderSpotifySections();
     initCarousels();
     bindArtistTabs();
@@ -571,29 +572,6 @@ function renderArtistHero() {
     banner.style.backgroundImage = 'transparent';
   }
 
-  const statsEl = document.getElementById('statPlays');
-  if (statsEl) {
-    const totalTracks = SITE.albums.reduce(
-      (acc, a) => acc + resolveAlbumTracks(a).length, 0
-    );
-    statsEl.textContent = totalTracks > 0 ? totalTracks * 12 : 534;
-  }
-
-  const followersEl = document.getElementById('statFollowers');
-  if (followersEl) {
-    followersEl.textContent = Number(localStorage.getItem('jm_followers') || 0);
-  }
-
-  const memberEl = document.getElementById('memberSince');
-  if (memberEl && SITE.user?.createdAt) {
-    try {
-      const d = new Date(SITE.user.createdAt);
-      const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-      memberEl.textContent = `Membro desde: ${months[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
-    } catch {}
-  }
-
   const followBtn = document.getElementById('followBtn');
   if (followBtn) {
     const isFollowing = localStorage.getItem('jm_following') === '1';
@@ -607,18 +585,61 @@ function renderArtistHero() {
         const newState = !now;
         localStorage.setItem('jm_following', newState ? '1' : '0');
 
-        const currentFollowers = Number(localStorage.getItem('jm_followers') || 0);
-        const newFollowers = Math.max(0, currentFollowers + (newState ? 1 : -1));
-        localStorage.setItem('jm_followers', String(newFollowers));
-
         followBtn.textContent = newState ? 'SEGUINDO' : 'SIGA';
         followBtn.classList.toggle('following', newState);
-        if (followersEl) followersEl.textContent = newFollowers;
 
+        renderArtistStats(); // Atualiza os números na tela
         toast(newState ? 'Seguindo Joseph Matthos' : 'Deixou de seguir', '✦');
       });
     }
   }
+
+  // Bind do botão de coração (curtir artista)
+  const settingsBtn = document.getElementById('settingsBtn');
+  if (settingsBtn && settingsBtn.dataset.bound !== '1') {
+    settingsBtn.dataset.bound = '1';
+    settingsBtn.addEventListener('click', () => {
+      const isLiked = localStorage.getItem('jm_liked_artist') === '1';
+      const newState = !isLiked;
+      localStorage.setItem('jm_liked_artist', newState ? '1' : '0');
+      
+      settingsBtn.classList.toggle('liked', newState);
+      settingsBtn.style.color = newState ? '#e63946' : '';
+      
+      renderArtistStats(); // Atualiza os números na tela
+      toast(newState ? 'Você curtiu Joseph Matthos!' : 'Curtida removida.', '❤️');
+    });
+    
+    // Inicializa o estado visual do coração
+    if (localStorage.getItem('jm_liked_artist') === '1') {
+      settingsBtn.classList.add('liked');
+      settingsBtn.style.color = '#e63946';
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ESTATÍSTICAS (SEGUIDORES E CURTIDAS)
+// ─────────────────────────────────────────────────────────────
+function renderArtistStats() {
+  // Valores base do banco (simulação)
+  const BASE_FOLLOWERS = 1250;
+  const BASE_LIKES = 3400;
+
+  // Verifica se o usuário já interagiu (salvo no localStorage)
+  const isFollowing = localStorage.getItem('jm_following') === '1';
+  const isLiked = localStorage.getItem('jm_liked_artist') === '1';
+
+  // Calcula o total
+  const totalFollowers = BASE_FOLLOWERS + (isFollowing ? 1 : 0);
+  const totalLikes = BASE_LIKES + (isLiked ? 1 : 0);
+
+  // Atualiza os elementos na tela
+  const elFollowers = document.getElementById('statFollowers');
+  const elLikes = document.getElementById('statPlays');
+
+  if (elFollowers) elFollowers.textContent = totalFollowers.toLocaleString('pt-BR');
+  if (elLikes) elLikes.textContent = totalLikes.toLocaleString('pt-BR');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2203,6 +2224,6 @@ window.__site = {
   get rentalPlans() { return SITE.rentalPlans.slice(); },
   get albumRentalPlans() { return SITE.albumRentalPlans.slice(); },
   get currentStream() { return currentStream ? { ...currentStream } : null; },
-  async reload() { await loadUser(); applyContentToSite(); renderDiscography(); renderSpotifySections(); renderArtistHero(); initCarousels(); applyArtistTabFilter(SITE.artistTab || 'todos'); },
+  async reload() { await loadUser(); applyContentToSite(); renderDiscography(); renderSpotifySections(); renderArtistHero(); renderArtistStats(); initCarousels(); applyArtistTabFilter(SITE.artistTab || 'todos'); },
   openManageModal
 };
