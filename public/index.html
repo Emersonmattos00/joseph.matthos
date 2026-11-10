@@ -119,14 +119,16 @@
             <h1 class="artist-spotify-name" id="artistTitle">Joseph Matthos</h1>
             <p class="artist-tagline" id="heroSub">Seja um dos primeiros seguidores</p>
 
-            <div class="artist-stats-row" style="display:none;" aria-hidden="true">
-              <span id="statPlays">0</span>
-              <span id="statFollowers">0</span>
+            <!-- ═══════════ ÁREA DE ESTATÍSTICAS (VISÍVEL) ═══════════ -->
+            <div class="artist-stats-row" style="display:flex; gap:1rem; margin-top:1rem; color:#b3b3b3; font-size:0.9rem;">
+              <span><strong id="statFollowers" style="color:#fff;">0</strong> seguidores</span>
+              <span>·</span>
+              <span><strong id="statPlays" style="color:#fff;">0</strong> curtidas</span>
             </div>
-            <span id="memberSince" style="display:none;">Membro desde: Jul '26</span>
+            <span id="memberSince" style="margin-top:0.5rem; display:block; color:#888; font-size:0.8rem;">Membro desde: Jul '26</span>
+            <!-- ═══════════════════════════════════════════════════════ -->
 
             <div class="artist-actions">
-
               <div class="social-links" id="socialLinks"></div>
 
               <button class="btn btn-follow" id="followBtn">
@@ -190,7 +192,7 @@
       <div class="amz-grid" id="gridAlbunsRecentes"></div>
     </section>
 
-    <!-- ═══════════ DISCOGRAFIA (GRADE — sem setas, sem carrossel) ═══════════ -->
+    <!-- ═══════════ DISCOGRAFIA (GRADE) ═══════════ -->
     <section id="discografia" aria-labelledby="discoTitle" class="section-amz-discografia">
       <div class="amz-discografia-wrap">
         <div class="section-spotify-header">
@@ -200,14 +202,12 @@
 
         <div id="discographyContainer"></div>
 
-        <!-- Playlists escondidas (JS ainda procura os IDs) -->
         <div id="playlistsPanel" style="display:none" aria-hidden="true">
           <div id="playlistsGrid"></div>
         </div>
       </div>
     </section>
 
-    <!-- Principais Músicas: escondido (JS ainda procura #gridPrincipais) -->
     <div id="gridPrincipais" style="display:none" aria-hidden="true"></div>
 
     <!-- ═══════════ SOBRE ═══════════ -->
@@ -277,23 +277,19 @@
   </div>
   <audio id="audio" preload="auto"></audio>
 
-  <!-- ═══════════ PLAYER EXPANDIDO v2 ═══════════ -->
+  <!-- ═══════════ PLAYER EXPANDIDO ═══════════ -->
   <div class="modal-overlay player-modal-overlay" id="expandedPlayerModal" role="dialog" aria-modal="true" aria-labelledby="expandedPlayerTitle">
     <div class="music-player">
-
-      <!-- Topo: fechar / tabs / menu -->
       <div class="player-top">
         <button class="player-icon-btn" id="closeExpandedPlayer" aria-label="Fechar player">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"/>
           </svg>
         </button>
-
         <div class="mobile-tabs" role="tablist">
           <button class="mobile-tab active" data-tab="music" role="tab" aria-selected="true">Música</button>
           <button class="mobile-tab" data-tab="lyrics" role="tab" aria-selected="false">Letra</button>
         </div>
-
         <button class="player-icon-btn" id="expandedFullscreenBtn" aria-label="Tela cheia">
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
             <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
@@ -301,73 +297,68 @@
         </button>
       </div>
 
-      <!-- Coluna principal -->
       <div class="player-grid">
-  <!-- Coluna 1: Capa -->
-  <div class="player-col player-col--cover">
-    <div class="player-cover-wrap">
-      <div class="player-cover-bg" id="expandedPlayerCoverBg"></div>
-      <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
-    </div>
-  </div>
+        <div class="player-col player-col--cover">
+          <div class="player-cover-wrap">
+            <div class="player-cover-bg" id="expandedPlayerCoverBg"></div>
+            <div class="album-cover" id="expandedPlayerCover" aria-hidden="true"></div>
+          </div>
+        </div>
 
-  <!-- Coluna 2: Controles -->
-  <div class="player-col player-col--controls">
-    <div class="player-track-head">
-      <div class="player-track-info">
-        <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
-        <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
+        <div class="player-col player-col--controls">
+          <div class="player-track-head">
+            <div class="player-track-info">
+              <div class="track-title" id="expandedPlayerTitle">Nenhuma faixa selecionada</div>
+              <div class="track-artist" id="expandedPlayerAlbum">Joseph Matthos</div>
+            </div>
+            <button class="player-icon-btn player-like-btn" id="expandedLikeBtn" aria-label="Curtir">
+              <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="none" stroke="currentColor" stroke-width="2"/>
+              </svg>
+            </button>
+          </div>
+
+          <div class="progress-container">
+            <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+              <div class="progress" id="expandedProgressFill"></div>
+            </div>
+            <div class="time-info">
+              <span id="expandedCurrentTime">0:00</span>
+              <span id="expandedDuration">0:00</span>
+            </div>
+          </div>
+
+          <div class="controls">
+            <button class="control-btn" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+            </button>
+            <button class="control-btn" id="expandedPrevBtn" title="Anterior" aria-label="Faixa anterior">
+              <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+            </button>
+            <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
+              <svg viewBox="0 0 24 24" width="32" height="32" id="expandedPlayIcon"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+            </button>
+            <button class="control-btn" id="expandedNextBtn" title="Próxima" aria-label="Próxima faixa">
+              <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+            </button>
+            <button class="control-btn" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            </button>
+          </div>
+
+          <div class="player-actions" id="expandedPlayerActions"></div>
+        </div>
+
+        <div class="lyrics-col">
+          <div class="lyrics-header">
+            <h3 id="lyricsPanelTitle">Faixas do álbum</h3>
+          </div>
+          <div class="lyrics-scroll" id="expandedLyricsContent">
+            <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
+          </div>
+        </div>
       </div>
-      <button class="player-icon-btn player-like-btn" id="expandedLikeBtn" aria-label="Curtir">
-        <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
-          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="none" stroke="currentColor" stroke-width="2"/>
-        </svg>
-      </button>
-    </div>
 
-    <div class="progress-container">
-      <div class="progress-bar" id="expandedProgressBar" role="slider" aria-label="Progresso" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
-        <div class="progress" id="expandedProgressFill"></div>
-      </div>
-      <div class="time-info">
-        <span id="expandedCurrentTime">0:00</span>
-        <span id="expandedDuration">0:00</span>
-      </div>
-    </div>
-
-    <div class="controls">
-      <button class="control-btn" id="expandedShuffleBtn" title="Aleatório" aria-label="Aleatório" hidden>
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-      </button>
-      <button class="control-btn" id="expandedPrevBtn" title="Anterior" aria-label="Faixa anterior">
-        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
-      </button>
-      <button class="control-btn play-btn" id="expandedPlayBtn" title="Play/Pause" aria-label="Reproduzir ou pausar">
-        <svg viewBox="0 0 24 24" width="32" height="32" id="expandedPlayIcon"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
-      </button>
-      <button class="control-btn" id="expandedNextBtn" title="Próxima" aria-label="Próxima faixa">
-        <svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-      </button>
-      <button class="control-btn" id="expandedMuteBtn" title="Mudo" aria-label="Ativar ou desativar som">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-      </button>
-    </div>
-
-    <div class="player-actions" id="expandedPlayerActions"></div>
-  </div>
-
-  <!-- Coluna 3: Lista / Letra -->
-  <div class="lyrics-col">
-    <div class="lyrics-header">
-      <h3 id="lyricsPanelTitle">Faixas do álbum</h3>
-    </div>
-    <div class="lyrics-scroll" id="expandedLyricsContent">
-      <p class="lyrics-empty">Toque uma faixa com letra cadastrada.</p>
-    </div>
-  </div>
-</div>
-
-      <!-- Fila -->
       <div class="player-queue" id="expandedPlayerQueue" hidden>
         <div class="player-queue-header">
           <span class="player-queue-label">A seguir</span>
@@ -375,7 +366,6 @@
         </div>
         <div class="player-queue-list" id="expandedQueueList"></div>
       </div>
-
     </div>
   </div>
 
@@ -518,6 +508,7 @@
         <button data-tab="sobre"><span class="ico">👤</span> Sobre</button>
         <button data-tab="filosofia"><span class="ico">💭</span> Filosofia</button>
         <button data-tab="discografia"><span class="ico">💿</span> Discografia</button>
+        <button data-tab="playlists"><span class="ico">🎵</span> Playlists</button>
         <button data-tab="vendas"><span class="ico">💰</span> Vendas</button>
         <button data-tab="planos"><span class="ico">💳</span> Planos</button>
         <button data-tab="contato"><span class="ico">📞</span> Contato</button>
@@ -616,6 +607,14 @@
         </div>
       </div>
 
+      <div class="admin-section" id="tab-playlists">
+        <div class="admin-card">
+          <h3>Gerenciador de Playlists</h3>
+          <p class="hint" style="margin-bottom: 1rem;">Crie coleções e adicione músicas do seu catálogo.</p>
+          <div id="playlistsEditor"></div>
+        </div>
+      </div>
+
       <div class="admin-section" id="tab-vendas">
         <div class="admin-card">
           <h3>Vendas <button class="btn btn-outline btn-sm" id="salesRefresh" style="float:right;">↻ Atualizar</button></h3>
@@ -678,7 +677,6 @@
   </div>
 </div>
 
-<!-- Carrega apenas o site público -->
-<script type="module" src="js/site.js?v=22"></script>
+<script type="module" src="js/site.js?v=999"></script>
 </body>
 </html>

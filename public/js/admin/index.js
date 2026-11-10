@@ -5,22 +5,8 @@
    - Detecta URL /?admin e abre o painel automaticamente
    - FLUXO: sessão → conteúdo → dashboard
    - Binds resilientes (try/catch por editor)
-   - Nav tabs com bind único (MutationObserver só no <nav>)
-   - Uploads de imagem (bg, vinil, sobre) via Base64
-   - Uploads de áudio vivem em editors/albums.js
-     (presigned URL + PATCH automático em tracks.*_path)
-   - Downloads de faixa/álbum vivem em editors/albums.js
-     (URLs assinadas via /api/admin?action=download-*)
-
-   🔧 CORREÇÕES APLICADAS
-   ------------------------------------------------------------
-   1. Removidos binds órfãos de previewUpload / fullUpload
-   2. Adicionado handler para a tab 'discografia'
-   3. Comentários atualizados para refletir o fluxo real
-   4. bindUpload de imagem mantido (imagens continuam Base64)
-   5. Resiliente a falhas (safeRender, safeCall)
-   6. Aba "Downloads" removida — funcionalidade embutida
-      em editors/albums.js (ícone por faixa + botão por álbum)
+   - Nav tabs com bind único (MutationObserver no <nav>)
+   - Uploads de imagem via Base64; áudio em editors/albums.js
    ============================================================ */
 
 import { AdminState, markDirty, markClean } from './state.js';
@@ -55,6 +41,7 @@ const TAB_TITLES = {
   sobre: 'Sobre',
   filosofia: 'Filosofia',
   discografia: 'Discografia',
+  playlists: 'Playlists',      // ★ ADICIONADO
   vendas: 'Vendas',
   planos: 'Planos',
   contato: 'Contato',
@@ -64,16 +51,12 @@ const TAB_TITLES = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// Bootstrap — NÃO carrega conteúdo. Apenas prepara a UI e,
-// se estivermos na rota admin, delega para openAdminSite().
+// Bootstrap
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
   console.log('[admin] bootstrap iniciado');
 
-  // 1) Atalho SEMPRE primeiro (não depende de sessão)
   initAdminShortcuts();
-
-  // 2) Binds de navegação e ações (idempotentes, seguros sem sessão)
   bindNavTabs();
   bindContentInputs();
   bindGlobalActions();
@@ -81,8 +64,6 @@ async function bootstrap() {
   bindUploadZones();
   bindRefreshButtons();
 
-  // 3) Só orquestra o admin se estivermos na rota ?admin
-  //    openAdminSite() verifica a sessão ANTES de carregar conteúdo.
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('admin')) {
     setTimeout(() => {
@@ -94,8 +75,7 @@ async function bootstrap() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FLUXO PÓS-LOGIN — chamado por auth.js após autenticar.
-// Exposto em window.__admin.bootContent para o auth.js invocar.
+// Pós-login: carrega conteúdo e renderiza
 // ─────────────────────────────────────────────────────────────
 export async function loadAdminContentAndRender() {
   console.log('[admin] carregando conteúdo pós-login...');
@@ -117,16 +97,13 @@ export async function loadAdminContentAndRender() {
     AdminState.contentVersion = 0;
   }
 
-  // Aplica no site público
   safeCall('applyContentToSite', AdminState.content);
   safeCall('refreshFlatPlaylist');
   safeCall('refreshPlanConfig');
   safeCall('updateCartFab');
 
-  // Preenche campos (resiliente)
   loadAllAdminFields();
 
-  // Dashboard assíncrono — não bloqueia
   renderDashboard().catch((err) => {
     if (err && (err.status === 401 || err.status === 403)) return;
     console.warn('[admin] dashboard:', err);
@@ -137,12 +114,6 @@ export async function loadAdminContentAndRender() {
 
 // ─────────────────────────────────────────────────────────────
 // Nav tabs
-// ------------------------------------------------------------
-// Estratégia:
-//  - attach() roda imediatamente (caso os botões já existam)
-//  - MutationObserver observa APENAS o <nav class="admin-nav">
-//    para re-bindar quando os botões aparecerem depois do login
-//  - Guard dataset.bound evita bind duplicado
 // ─────────────────────────────────────────────────────────────
 function bindNavTabs() {
   const attach = () => {
@@ -214,8 +185,9 @@ async function onClickNavButton(event) {
     } else if (tab === 'contato') {
       renderSocialEditor(AdminState.content);
     } else if (tab === 'discografia') {
-      // Editor de álbuns/faixas — funcional (CRUD + upload + downloads)
       renderAlbumsEditor(AdminState.content);
+    } else if (tab === 'playlists') {     // ★ ADICIONADO
+      renderPlaylistsEditor(AdminState.content);
     }
   } catch (err) {
     if (err && (err.status === 401 || err.status === 403)) {
@@ -229,7 +201,7 @@ async function onClickNavButton(event) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Aplica conteúdo nos campos data-content — RESILIENTE
+// Campos data-content
 // ─────────────────────────────────────────────────────────────
 function loadAllAdminFields() {
   const content = AdminState.content;
@@ -271,8 +243,6 @@ function ensureContentStructure(content) {
   if (!content.filosofia) content.filosofia = {};
   if (!Array.isArray(content.filosofia.frases)) content.filosofia.frases = [];
 
-  // `discografia.albums` não é mais usado — mantido só para compatibilidade
-  // caso algum componente antigo ainda leia. O site lê de SITE.albums.
   if (!content.discografia) content.discografia = {};
   if (!Array.isArray(content.discografia.albums)) content.discografia.albums = [];
 
@@ -291,7 +261,7 @@ function ensureContentStructure(content) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind dos inputs genéricos data-content
+// Inputs data-content
 // ─────────────────────────────────────────────────────────────
 function bindContentInputs() {
   document.querySelectorAll('[data-content]').forEach((el) => {
@@ -318,9 +288,6 @@ function bindContentInputs() {
 
 // ─────────────────────────────────────────────────────────────
 // Botões dos editores
-// ------------------------------------------------------------
-// Nota: bindAlbumsAddButton foi removido — o editor de álbuns
-// agora cuida dos próprios binds (CRUD + upload + downloads).
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
   try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
@@ -344,14 +311,7 @@ function bindEditorButtons() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload zones — IMAGENS
-// ------------------------------------------------------------
-// Uploads de imagem retornam { url, path, bucket } e continuam
-// via Base64 (imagens são pequenas e cabem no body da Vercel).
-//
-// ⚠️  Uploads de ÁUDIO não são tratados aqui.
-//     Eles vivem em editors/albums.js, com presigned URL
-//     e PATCH automático em tracks.preview_path / full_path.
+// Uploads de imagem
 // ─────────────────────────────────────────────────────────────
 function bindUploadZones() {
   document.querySelectorAll('[data-upload-target]').forEach((zone) => {
@@ -378,7 +338,7 @@ function bindUploadZones() {
     });
   });
 
-  // ── Imagem de fundo
+  // Imagem de fundo
   try {
     bindUpload('bgUpload', ({ url }) => {
       if (!url) return;
@@ -391,7 +351,7 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem do vinil
+  // Imagem do vinil
   try {
     bindUpload('vinylUpload', ({ url }) => {
       if (!url) return;
@@ -405,7 +365,7 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // ── Imagem da seção Sobre
+  // Imagem Sobre
   try {
     bindUpload('sobreUpload', ({ url }) => {
       if (!url) return;
@@ -417,9 +377,6 @@ function bindUploadZones() {
       toast('Imagem da seção Sobre atualizada.', '🖼');
     }, 'image');
   } catch (e) { console.warn(e); }
-
-  // ⚠️  Uploads de áudio (previewUpload / fullUpload) vivem em
-  //     editors/albums.js (presigned URL + PATCH automático).
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -648,7 +605,6 @@ if (document.readyState === 'loading') {
   bootstrap();
 }
 
-// Expor rebind manual (útil para debug)
 window.__adminRebind = () => {
   document.querySelectorAll('.admin-nav button').forEach((b) => delete b.dataset.bound);
   bindNavTabs();

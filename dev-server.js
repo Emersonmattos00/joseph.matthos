@@ -1,6 +1,9 @@
-// dotenv removido — usando --env-file nativo
+process.loadEnvFile('.env.local'); // dotenv removido — usando --env-file nativo
 const express = require('express');
 const path = require('path');
+
+// Pasta onde estão os arquivos estáticos (index.html, css, js)
+const STATIC_DIR = path.join(__dirname, 'public');
 
 const app = express();
 
@@ -15,7 +18,7 @@ app.use((req, res, next) => {
 // ─────────────────────────────────────────────────────────────
 // SERVIDOR ESTÁTICO SEGURO
 // ─────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname), {
+app.use(express.static(STATIC_DIR, {
   extensions: ['html'],
   index: 'index.html',
   dotfiles: 'deny',
@@ -26,50 +29,60 @@ app.use(express.static(path.join(__dirname), {
 
 // Rota explícita para o Service Worker
 app.get('/sw.js', (req, res) => {
-  res.sendFile(path.join(__dirname, 'sw.js'));
+  res.sendFile(path.join(STATIC_DIR, 'sw.js'));
 });
 
 // ─────────────────────────────────────────────────────────────
-// ROTAS DA API
+// ROTAS DA API (capturando query strings)
 // ─────────────────────────────────────────────────────────────
 const apiFiles = ['public', 'auth', 'stream', 'payments', 'admin'];
 
+// Carrega os handlers
+const handlers = {};
 for (const name of apiFiles) {
   try {
-    const handler = require('./api/' + name + '.js');
-    
-    app.all('/api/' + name, async (req, res) => {
-      try {
-        await handler(req, res);
-      } catch (err) {
-        console.error('Erro em /api/' + name + ':', err);
-        if (!res.headersSent) {
-          res.status(500).json({ ok: false, error: err.message });
-        }
-      }
-    });
-    console.log('✅ Rota /api/' + name + ' carregada');
-    
+    handlers[name] = require('./api/' + name + '.js');
+    console.log('✅ Handler /api/' + name + ' carregado');
   } catch (err) {
     if (err.message.includes('require() cannot be used on an ESM graph')) {
-      app.all('/api/' + name, async (req, res) => {
-        try {
-          const module = await import('./api/' + name + '.js');
-          const handler = module.default || module;
-          await handler(req, res);
-        } catch (e) {
-          console.error('Erro em /api/' + name + ':', e);
-          if (!res.headersSent) {
-            res.status(500).json({ ok: false, error: e.message });
-          }
-        }
-      });
-      console.log('✅ Rota /api/' + name + ' carregada (via ESM)');
+      console.log('⚠️ Handler /api/' + name + ' é ESM, será carregado sob demanda');
     } else {
-      console.warn('⚠️  Falha ao carregar /api/' + name + ':', err.message);
+      console.warn('⚠️ Falha ao carregar /api/' + name + ':', err.message);
     }
   }
 }
+
+// Middleware único que intercepta qualquer /api/*
+app.use('/api', async (req, res, next) => {
+  // Extrai o nome do recurso (ex: /api/payments?type=rental -> "payments")
+  // O req.path já ignora a query string
+  const parts = req.path.split('/').filter(Boolean);
+  const name = parts[0];
+
+  if (!name) return next();
+
+  const handler = handlers[name];
+
+  if (!handler) {
+    try {
+      const module = await import('./api/' + name + '.js');
+      const dynamicHandler = module.default || module;
+      await dynamicHandler(req, res);
+      return;
+    } catch (e) {
+      return res.status(404).json({ ok: false, error: 'Rota não encontrada: ' + name });
+    }
+  }
+
+  try {
+    await handler(req, res);
+  } catch (err) {
+    console.error('Erro em /api/' + name + ':', err);
+    if (!res.headersSent) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+});
 
 // ─────────────────────────────────────────────────────────────
 // FALLBACK (SPA)
@@ -79,7 +92,7 @@ app.get('*', (req, res, next) => {
   if (path.basename(req.path).startsWith('.')) {
     return res.status(403).send('Acesso negado');
   }
-  res.sendFile(path.join(__dirname, 'index.html'));
+  res.sendFile(path.join(STATIC_DIR, 'index.html'));
 });
 
 // ─────────────────────────────────────────────────────────────

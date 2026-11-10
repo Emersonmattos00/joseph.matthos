@@ -1,8 +1,12 @@
 // src/schema.js
-// Versão CJS pura — sem bundling do drizzle-kit
+// Versão CJS pura — espelha EXATAMENTE o banco de produção.
+// Não rode `drizzle-kit push` sem este arquivo bater com o banco.
 'use strict';
 
-const { pgTable, text, uuid, timestamp, integer, boolean, jsonb, pgEnum, date, char, bigserial, index, uniqueIndex, foreignKey } = require('drizzle-orm/pg-core');
+const {
+  pgTable, text, uuid, timestamp, integer, boolean, jsonb, pgEnum,
+  date, char, bigserial, index, uniqueIndex
+} = require('drizzle-orm/pg-core');
 const { sql } = require('drizzle-orm');
 
 // ─── Enums ──────────────────────────────────────────
@@ -12,6 +16,21 @@ const rentalStatus = pgEnum('RentalStatus', ['PENDING', 'ACTIVE', 'EXPIRED', 'CA
 const subscriptionStatus = pgEnum('SubscriptionStatus', ['PENDING', 'ACTIVE', 'PAUSED', 'CANCELLED', 'EXPIRED', 'PAST_DUE']);
 const trackStatus = pgEnum('TrackStatus', ['DRAFT', 'PUBLISHED', 'ARCHIVED']);
 const userRole = pgEnum('UserRole', ['CUSTOMER', 'ADMIN']);
+
+// ─── _prisma_migrations (gerenciada pelo Prisma) ─────
+// Espelhada para o Drizzle não tentar apagá-la.
+// Ela tem 8 colunas reais: id, checksum, finished_at, migration_name,
+// logs, rolled_back_at, started_at, applied_steps_count.
+const prismaMigrations = pgTable('_prisma_migrations', {
+  id: text().primaryKey(),
+  checksum: text().notNull(),
+  finishedAt: timestamp('finished_at', { withTimezone: true, mode: 'string' }),
+  migrationName: text('migration_name').notNull(),
+  logs: text(),
+  rolledBackAt: timestamp('rolled_back_at', { withTimezone: true, mode: 'string' }),
+  startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).notNull(),
+  appliedStepsCount: integer('applied_steps_count').notNull()
+});
 
 // ─── Users ──────────────────────────────────────────
 const users = pgTable('users', {
@@ -54,7 +73,7 @@ const albums = pgTable('albums', {
   year: integer(),
   type: text().default('album'),
   description: text(),
-  published: boolean().default(false),   // ✅ ADICIONADO
+  published: boolean().default(false),
   coverInitials: text('cover_initials'),
   orderIndex: integer('order_index').default(0)
 }, (t) => [
@@ -85,8 +104,8 @@ const tracks = pgTable('tracks', {
   trackNumber: integer('track_number'),
   fullPath: text('full_path'),
   previewPath: text('preview_path'),
-  published: boolean().default(false),   // ✅ ADICIONADO
-  locked: boolean().default(false)       // ✅ ADICIONADO
+  published: boolean().default(false),
+  locked: boolean().default(false)
 }, (t) => [
   index('tracks_album_id_idx').on(t.albumId),
   index('tracks_album_id_track_number_idx').on(t.albumId, t.trackNumber),
@@ -207,7 +226,7 @@ const authAuditLog = pgTable('auth_audit_log', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
 });
 
-// ─── Payments ──────────────────────────────────────
+// ─── Payments Events ──────────────────────────────
 const paymentsEvents = pgTable('payments_events', {
   id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
   provider: text().default('mercadopago').notNull(),
@@ -220,6 +239,34 @@ const paymentsEvents = pgTable('payments_events', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
 });
 
+// ─── Payment Events (legado — outra tabela, não confundir) ────
+// Existe no banco mas o código atual usa paymentsEvents.
+// Espelhada aqui para o Drizzle não tentar apagá-la.
+const paymentEventsLegacy = pgTable('payment_events', {
+  id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
+  provider: text().default('mercadopago').notNull(),
+  providerEvent: text('provider_event').notNull(),
+  eventType: text('event_type').notNull(),
+  externalId: text('external_id'),
+  payload: jsonb().notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
+  failureReason: text('failure_reason'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
+});
+
+// ─── Upload Intents ──────────────────────────────
+const uploadIntents = pgTable('upload_intents', {
+  id: uuid().primaryKey().defaultRandom(),
+  adminUser: text('admin_user').notNull(),
+  kind: text().notNull(),
+  path: text().notNull(),
+  contentType: text('content_type').notNull(),
+  sizeLimit: integer('size_limit'),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+});
+
 // ─── Orders ──────────────────────────────────────────
 const orders = pgTable('orders', {
   id: uuid().primaryKey().defaultRandom(),
@@ -229,6 +276,8 @@ const orders = pgTable('orders', {
   currency: char({ length: 3 }).default('BRL').notNull(),
   externalPaymentId: text('external_payment_id'),
   idempotencyKey: text('idempotency_key'),
+  preferenceId: text('preference_id'),
+  preferenceInitPoint: text('preference_init_point'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
   paidAt: timestamp('paid_at', { withTimezone: true, mode: 'string' })
 }, (t) => [uniqueIndex('orders_idempotency_key_key').on(t.idempotencyKey), index('orders_user_id_idx').on(t.userId)]);
@@ -242,21 +291,79 @@ const orderItems = pgTable('order_items', {
   unitPriceCents: integer('unit_price_cents').notNull()
 });
 
-// ─── Outros (mantidos para compatibilidade) ──────────────
-const refreshTokens = pgTable('refresh_tokens', { id: uuid().primaryKey().defaultRandom() });
-const passwordResetTokens = pgTable('password_reset_tokens', { id: uuid().primaryKey().defaultRandom() });
-const emailVerificationTokens = pgTable('email_verification_tokens', { id: uuid().primaryKey().defaultRandom() });
-const newsletterSubscribers = pgTable('newsletter_subscribers', { id: uuid().primaryKey().defaultRandom() });
-const socialLinks = pgTable('social_links', { id: uuid().primaryKey().defaultRandom() });
-const playbackEvents = pgTable('playback_events', { id: bigserial({ mode: 'bigint' }).primaryKey().notNull() });
-const prismaMigrations = pgTable('_prisma_migrations', { id: text().primaryKey() });
+// ─── Tokens e compatibilidade ──────────────────────
+
+const refreshTokens = pgTable('refresh_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+}, (t) => [
+  uniqueIndex('refresh_tokens_hash_key').on(t.tokenHash),
+  index('refresh_tokens_user_idx').on(t.userId)
+]);
+
+const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+}, (t) => [
+  uniqueIndex('password_reset_tokens_hash_key').on(t.tokenHash),
+  index('password_reset_tokens_user_idx').on(t.userId)
+]);
+
+const emailVerificationTokens = pgTable('email_verification_tokens', {
+  id: uuid().primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+}, (t) => [
+  uniqueIndex('email_verification_tokens_hash_key').on(t.tokenHash),
+  index('email_verification_tokens_user_idx').on(t.userId)
+]);
+
+const newsletterSubscribers = pgTable('newsletter_subscribers', {
+  id: uuid().primaryKey().defaultRandom(),
+  email: text().notNull(),
+  name: text(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+}, (t) => [uniqueIndex('newsletter_subscribers_email_key').on(t.email)]);
+
+const socialLinks = pgTable('social_links', {
+  id: uuid().primaryKey().defaultRandom(),
+  platform: text().notNull(),
+  label: text(),
+  url: text().notNull(),
+  sortOrder: integer('sort_order').default(0).notNull(),
+  active: boolean().default(true).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+});
+
+const playbackEvents = pgTable('playback_events', {
+  id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
+  userId: uuid('user_id'),
+  trackId: uuid('track_id'),
+  source: text(),
+  secondsPlayed: integer('seconds_played'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
+}, (t) => [
+  index('playback_events_user_idx').on(t.userId, t.createdAt),
+  index('playback_events_track_idx').on(t.trackId, t.createdAt)
+]);
 
 // ─── Exporta tudo ──────────────────────────────────────
 module.exports = {
   adminAudit, albums, artists, authAuditLog, emailVerificationTokens,
   newsletterSubscribers, orderItems, orderStatus, orders, passwordResetTokens,
-  paymentsEvents, plans, playbackEvents, prismaMigrations, productType,
-  refreshTokens, rentalProducts, rentalStatus, rentals, siteContent,
-  siteContentHistory, socialLinks, subscriptionStatus, subscriptions,
-  trackStatus, tracks, userRole, users
+  paymentEventsLegacy, paymentsEvents, plans, playbackEvents, prismaMigrations,
+  productType, refreshTokens, rentalProducts, rentalStatus, rentals,
+  siteContent, siteContentHistory, socialLinks, subscriptionStatus,
+  subscriptions, trackStatus, tracks, uploadIntents, userRole, users
 };

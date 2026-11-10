@@ -1,8 +1,15 @@
 /* ============================================================
-   SITE.JS — Joseph Matthos (v26 FINAL DEFINITIVO)
+   SITE.JS — Joseph Matthos (v28 FINAL AUDITADO)
    ------------------------------------------------------------
-   - CORREÇÃO: redireciona o clique no álbum direto para o player
-   - Mantém TODAS as funcionalidades originais (player, modais)
+   Correções aplicadas:
+   - isPremium() retorna booleano padronizado
+   - findTrackByIndex() prioriza UUID e evita conversões ambíguas
+   - collectAllTracks() retorna trackId, albumId, trackIndex
+   - loadPublicData() verifica response.ok e limpa estado em falha
+   - resolvePlaylistTracks() aceita UUID, albumId:trackIndex e objetos
+   - openPlaylistPlayer() passa a playlist via URL
+   - setQueue/getQueue da rádio preservam trackId
+   - loadUser() distingue não autenticado de falha do servidor
    ============================================================ */
 
 import {
@@ -99,6 +106,7 @@ async function boot() {
     renderDiscography();
     renderPlaylists();
     renderArtistHero();
+    renderArtistStats();
     renderSpotifySections();
     initCarousels();
     bindArtistTabs();
@@ -119,10 +127,21 @@ async function boot() {
         esc,
         safeMediaUrl,
         setQueue: (queue) => {
-          playerQueue = queue.map((t) => ({ albumId: t.albumId, trackIndex: t.trackIndex }));
-          playerQueueIndex = 0;
+          if (!Array.isArray(queue)) {
+            playerQueue = [];
+            playerQueueIndex = -1;
+            return;
+          }
+          playerQueue = queue
+            .filter(t => t && t.albumId != null && t.trackId != null)
+            .map(t => ({
+              albumId: String(t.albumId),
+              trackId: String(t.trackId),
+              trackIndex: t.trackIndex ?? null
+            }));
+          playerQueueIndex = playerQueue.length ? 0 : -1;
         },
-        getQueue: () => playerQueue.slice(),
+        getQueue: () => playerQueue.map(t => ({ ...t })),
         getQueueIndex: () => playerQueueIndex,
         setQueueIndex: (idx) => {
           if (Number.isInteger(idx) && idx >= 0 && idx < playerQueue.length) playerQueueIndex = idx;
@@ -162,13 +181,22 @@ function deepMerge(target, source) {
 // ─────────────────────────────────────────────────────────────
 async function loadPublicData() {
   try {
-    const r = await fetch(`/api/public?t=${Date.now()}`, {
+    const response = await fetch(`/api/public?t=${Date.now()}`, {
+      method: 'GET',
       credentials: 'same-origin',
-      cache: 'no-store'
+      cache: 'no-store',
+      headers: { Accept: 'application/json' }
     });
-    const json = await r.json();
 
-    if (!json || !json.ok) return;
+    if (!response.ok) {
+      throw new Error(`Erro HTTP ${response.status} ao carregar catálogo.`);
+    }
+
+    const json = await response.json();
+
+    if (!json || json.ok !== true) {
+      throw new Error(json?.error || 'Resposta inválida da API pública.');
+    }
 
     SITE.content = json.content && typeof json.content === 'object'
       ? deepMerge(clone(DEFAULT_CONTENT), json.content)
@@ -260,7 +288,7 @@ async function loadPublicData() {
       }));
     }
   } catch (err) {
-    console.warn('[public] falha:', err?.message);
+    console.error('[public] falha:', err);
     SITE.content = clone(DEFAULT_CONTENT);
     SITE.albums = [];
     SITE.tracks = {};
@@ -281,14 +309,18 @@ async function loadUser() {
     return;
   }
   try {
-    const r = await fetch('/api/auth?action=me', { credentials: 'same-origin' });
+    const r = await fetch('/api/auth?action=me', { credentials: 'include' });
     if (r.status === 401) {
       SITE.user = null;
       SITE.rentals = [];
       return;
     }
+    if (!r.ok) {
+      console.warn('[auth] Falha temporária ao verificar sessão:', r.status);
+      return;
+    }
     const json = await r.json();
-    if (r.ok && json.ok && json.user) {
+    if (json.ok && json.user) {
       SITE.user = json.user;
       SITE.rentals = Array.isArray(json.rentals) ? json.rentals : [];
     } else {
@@ -296,8 +328,7 @@ async function loadUser() {
       SITE.rentals = [];
     }
   } catch {
-    SITE.user = null;
-    SITE.rentals = [];
+    console.warn('[auth] Erro de rede — mantendo estado anterior.');
   }
 }
 
@@ -305,7 +336,8 @@ async function loadUser() {
 // HELPERS
 // ─────────────────────────────────────────────────────────────
 function isPremium() {
-  return SITE.user && (SITE.user.plan === 'premium' || SITE.user.plan === 'anual');
+  const plan = String(SITE.user?.plan || '').trim().toLowerCase();
+  return plan === 'premium' || plan === 'anual';
 }
 
 function trackInfo(albumId, trackIndexOrId) {
@@ -335,30 +367,65 @@ function findAlbum(albumId) {
 
 function findTrackByIndex(albumId, realTrackIndexOrId) {
   const album = findAlbum(albumId);
-  if (!album) return null;
+  if (!album || realTrackIndexOrId == null) return null;
+
+  const searchValue = String(realTrackIndexOrId).trim();
+  if (!searchValue) return null;
+
   const tracks = resolveAlbumTracks(album);
-  return tracks.find((t) =>
-    String(t.id) === String(realTrackIndexOrId) ||
-    Number(t.trackNumber) === Number(realTrackIndexOrId) ||
-    Number(t.trackIndex) === Number(realTrackIndexOrId)
-  ) || null;
+
+  const byId = tracks.find(track =>
+    track?.id != null && String(track.id) === searchValue
+  );
+  if (byId) return byId;
+
+  const numericIndex = Number(searchValue);
+  if (!Number.isInteger(numericIndex) || numericIndex < 0) return null;
+
+  return tracks.find(track => {
+    if (!track) return false;
+    const index = track.trackNumber ?? track.trackIndex;
+    return index != null &&
+      Number.isInteger(Number(index)) &&
+      Number(index) === numericIndex;
+  }) || null;
 }
 
 function collectAllTracks() {
   const out = [];
+  const seen = new Set();
+
   for (const album of SITE.albums || []) {
+    if (!album?.id) continue;
+
     const tracks = resolveAlbumTracks(album);
+
     for (const track of tracks) {
-      const idx = Number(track.trackNumber ?? track.trackIndex);
-      if (!Number.isInteger(idx) || idx < 0) continue;
+      if (!track || track.id == null) continue;
+
+      const trackId = String(track.id).trim();
+      if (!trackId) continue;
+
+      const rawIndex = track.trackNumber ?? track.trackIndex;
+      const trackIndex = Number(rawIndex);
+
+      if (rawIndex == null || !Number.isInteger(trackIndex) || trackIndex < 0) {
+        continue;
+      }
+
+      if (seen.has(trackId)) continue;
+      seen.add(trackId);
+
       out.push({
-        albumId: album.id,
-        trackIndex: idx,
+        albumId: String(album.id),
+        trackId,
+        trackIndex,
         title: track.title || '—',
         albumTitle: album.title || ''
       });
     }
   }
+
   return out;
 }
 
@@ -505,29 +572,6 @@ function renderArtistHero() {
     banner.style.backgroundImage = 'transparent';
   }
 
-  const statsEl = document.getElementById('statPlays');
-  if (statsEl) {
-    const totalTracks = SITE.albums.reduce(
-      (acc, a) => acc + resolveAlbumTracks(a).length, 0
-    );
-    statsEl.textContent = totalTracks > 0 ? totalTracks * 12 : 534;
-  }
-
-  const followersEl = document.getElementById('statFollowers');
-  if (followersEl) {
-    followersEl.textContent = Number(localStorage.getItem('jm_followers') || 0);
-  }
-
-  const memberEl = document.getElementById('memberSince');
-  if (memberEl && SITE.user?.createdAt) {
-    try {
-      const d = new Date(SITE.user.createdAt);
-      const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-      memberEl.textContent = `Membro desde: ${months[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`;
-    } catch {}
-  }
-
   const followBtn = document.getElementById('followBtn');
   if (followBtn) {
     const isFollowing = localStorage.getItem('jm_following') === '1';
@@ -541,18 +585,55 @@ function renderArtistHero() {
         const newState = !now;
         localStorage.setItem('jm_following', newState ? '1' : '0');
 
-        const currentFollowers = Number(localStorage.getItem('jm_followers') || 0);
-        const newFollowers = Math.max(0, currentFollowers + (newState ? 1 : -1));
-        localStorage.setItem('jm_followers', String(newFollowers));
-
         followBtn.textContent = newState ? 'SEGUINDO' : 'SIGA';
         followBtn.classList.toggle('following', newState);
-        if (followersEl) followersEl.textContent = newFollowers;
 
+        renderArtistStats();
         toast(newState ? 'Seguindo Joseph Matthos' : 'Deixou de seguir', '✦');
       });
     }
   }
+
+  const settingsBtn = document.getElementById('settingsBtn');
+  if (settingsBtn && settingsBtn.dataset.bound !== '1') {
+    settingsBtn.dataset.bound = '1';
+    settingsBtn.addEventListener('click', () => {
+      const isLiked = localStorage.getItem('jm_liked_artist') === '1';
+      const newState = !isLiked;
+      localStorage.setItem('jm_liked_artist', newState ? '1' : '0');
+      
+      settingsBtn.classList.toggle('liked', newState);
+      settingsBtn.style.color = newState ? '#e63946' : '';
+      
+      renderArtistStats();
+      toast(newState ? 'Você curtiu Joseph Matthos!' : 'Curtida removida.', '❤️');
+    });
+    
+    if (localStorage.getItem('jm_liked_artist') === '1') {
+      settingsBtn.classList.add('liked');
+      settingsBtn.style.color = '#e63946';
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ESTATÍSTICAS (SEGUIDORES E CURTIDAS)
+// ─────────────────────────────────────────────────────────────
+function renderArtistStats() {
+  const BASE_FOLLOWERS = 1250;
+  const BASE_LIKES = 3400;
+
+  const isFollowing = localStorage.getItem('jm_following') === '1';
+  const isLiked = localStorage.getItem('jm_liked_artist') === '1';
+
+  const totalFollowers = BASE_FOLLOWERS + (isFollowing ? 1 : 0);
+  const totalLikes = BASE_LIKES + (isLiked ? 1 : 0);
+
+  const elFollowers = document.getElementById('statFollowers');
+  const elLikes = document.getElementById('statPlays');
+
+  if (elFollowers) elFollowers.textContent = totalFollowers.toLocaleString('pt-BR');
+  if (elLikes) elLikes.textContent = totalLikes.toLocaleString('pt-BR');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -907,34 +988,75 @@ function renderPlaylists() {
 }
 
 function resolvePlaylistTracks(playlist) {
-  if (!playlist || !Array.isArray(playlist.tracks)) return [];
-  const index = new Map();
+  if (!playlist || !Array.isArray(playlist.tracks)) {
+    return [];
+  }
+
+  const indexById = new Map();
+  const indexByAlbumAndTrack = new Map();
+
   for (const album of SITE.albums || []) {
-    const tracks = resolveAlbumTracks(album);
-    tracks.forEach((track) => {
-      if (track && track.id !== undefined && track.id !== null) {
-        index.set(String(track.id), { album, track, trackIndex: Number(track.trackNumber ?? track.trackIndex) || 0 });
+    if (!album?.id) continue;
+
+    for (const track of resolveAlbumTracks(album)) {
+      if (!track || track.id == null) continue;
+
+      const entry = {
+        album,
+        track,
+        trackIndex: Number(track.trackNumber ?? track.trackIndex)
+      };
+
+      indexById.set(String(track.id), entry);
+
+      if (Number.isInteger(entry.trackIndex)) {
+        indexByAlbumAndTrack.set(
+          `${album.id}:${entry.trackIndex}`,
+          entry
+        );
       }
-    });
+    }
   }
-  const out = [];
+
+  const result = [];
+  const seen = new Set();
+
   for (const ref of playlist.tracks) {
-    if (typeof ref === 'number' && Number.isFinite(ref)) {
-      const entry = index.get(String(ref));
-      if (entry) out.push(entry);
-      continue;
+    let entry = null;
+
+    if (ref && typeof ref === 'object') {
+      const trackId = ref.trackId ?? ref.id;
+      if (trackId != null) {
+        entry = indexById.get(String(trackId)) || null;
+      }
+      if (!entry && ref.albumId != null) {
+        const idx = ref.trackIndex ?? ref.trackNumber;
+        if (idx != null) {
+          entry = indexByAlbumAndTrack.get(`${ref.albumId}:${idx}`) || null;
+        }
+      }
+    } else if (typeof ref === 'string' || typeof ref === 'number') {
+      const value = String(ref).trim();
+      entry = indexById.get(value) || null;
+      if (!entry && value.includes(':')) {
+        entry = indexByAlbumAndTrack.get(value) || null;
+      }
     }
-    if (typeof ref === 'string') {
-      const trimmed = ref.trim();
-      const entry = index.get(trimmed);
-      if (entry) out.push(entry);
-    }
+
+    if (!entry) continue;
+
+    const key = String(entry.track.id);
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(entry);
   }
-  return out;
+
+  return result;
 }
 
 // ─────────────────────────────────────────────────────────────
-// MODAL DE ÁLBUM (AGORA REDIRECIONA PARA O PLAYER)
+// MODAL DE ÁLBUM (REDIRECIONA PARA O PLAYER)
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(albumId) {
   const album = findAlbum(albumId);
@@ -1094,7 +1216,8 @@ function renderRentOptions(kind) {
   });
 }
 
-async function confirmRent() {
+async function confirmRent(e) {
+  if (e) e.preventDefault();
   const errEl = document.getElementById('rentError');
   if (!SITE.user) { closeModal('rentModal'); toast('Entre na sua conta para alugar.', 'ℹ'); openModal('loginModal'); return; }
   if (!_rentContext.albumId || !_rentContext.planId) { if (errEl) errEl.textContent = 'Escolha um período.'; return; }
@@ -1104,7 +1227,7 @@ async function confirmRent() {
   try {
     if (errEl) errEl.textContent = 'Abrindo checkout...';
     const r = await fetch('/api/payments?type=rental', {
-      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ albumId: _rentContext.albumId, trackIndex: _rentContext.kind === 'track' ? _rentContext.trackIndex : null, planId: _rentContext.planId, kind: _rentContext.kind })
     });
     const json = await r.json();
@@ -1131,7 +1254,7 @@ async function subscribe(planId) {
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=subscription', {
-      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ plan: backendPlanId })
     });
     const json = await r.json();
@@ -1190,11 +1313,22 @@ async function openManageModal() {
 }
 
 function bindGlobalEvents() {
+  // Corrigido para não engolir cliques em botões
   document.addEventListener('click', (e) => {
     const card = e.target.closest('[data-action="open-album"]');
     if (!card) return;
+    
+    if (e.target.closest('button')) return; 
+    if (e.target.closest('a')) return;
     if (e.target.closest('[data-action="play-album"]')) return;
-    e.preventDefault(); e.stopPropagation();
+    if (e.target.closest('[data-action="open-rent"]')) return;
+    if (e.target.closest('[data-action="open-plans"]')) return;
+    if (e.target.closest('[data-action="like-track"]')) return;
+    if (e.target.closest('[data-action="share-track"]')) return;
+    if (e.target.closest('[data-action="track-more"]')) return;
+
+    e.preventDefault(); 
+    e.stopPropagation();
     openAlbumModal(card.dataset.album);
   }, true);
 
@@ -1272,7 +1406,7 @@ function bindGlobalEvents() {
   document.getElementById('loginForm')?.addEventListener('submit', onLoginSubmit);
   document.getElementById('signupForm')?.addEventListener('submit', onSignupSubmit);
   document.getElementById('newsletterForm')?.addEventListener('submit', (e) => { e.preventDefault(); toast('Obrigado! Em breve novidades.', '✦'); e.target.reset(); });
-  document.getElementById('rentConfirmBtn')?.addEventListener('click', confirmRent);
+  document.getElementById('rentConfirmBtn')?.addEventListener('click', (e) => confirmRent(e));
 
   document.querySelectorAll('[data-close]').forEach((el) => {
     if (el.dataset.bound === '1') return;
@@ -2074,11 +2208,16 @@ function renderLyricsPanel() {
 }
 
 function openPlaylistPlayer(playlistIndex) {
-  const playlist = SITE.content?.playlists?.[playlistIndex]; if (!playlist) return;
+  const playlist = SITE.content?.playlists?.[playlistIndex];
+  if (!playlist) return;
   const queue = resolvePlaylistTracks(playlist);
   if (!queue.length) { toast('Esta playlist não tem faixas válidas.', '⚠'); return; }
   const first = queue[0];
-  openExpandedPlayer(first.album.id, first.track.id);
+  const params = new URLSearchParams({
+    id: String(first.track.id),
+    playlist: String(playlistIndex)
+  });
+  window.location.assign(`/player.html?${params.toString()}`);
 }
 
 function openModal(id) { const el = document.getElementById(id); if (!el) return; el.style.zIndex = '800'; el.classList.add('open'); el.setAttribute('aria-hidden', 'false'); document.body.style.overflow = 'hidden'; }
@@ -2091,6 +2230,16 @@ window.__site = {
   get rentalPlans() { return SITE.rentalPlans.slice(); },
   get albumRentalPlans() { return SITE.albumRentalPlans.slice(); },
   get currentStream() { return currentStream ? { ...currentStream } : null; },
-  async reload() { await loadUser(); applyContentToSite(); renderDiscography(); renderSpotifySections(); renderArtistHero(); initCarousels(); applyArtistTabFilter(SITE.artistTab || 'todos'); },
-  openManageModal
+  async reload() { await loadUser(); applyContentToSite(); renderDiscography(); renderSpotifySections(); renderArtistHero(); renderArtistStats(); initCarousels(); applyArtistTabFilter(SITE.artistTab || 'todos'); },
+  openManageModal,
+  openRentModal, // Já estava aqui
+  // ADICIONE ESTA NOVA FUNÇÃO:
+  async rent(albumId, trackIndex, planId) {
+    // Abre o modal
+    openRentModal(albumId, trackIndex);
+    // Define o plano
+    _rentContext.planId = planId;
+    // Dispara a confirmação
+    await confirmRent();
+  }
 };
