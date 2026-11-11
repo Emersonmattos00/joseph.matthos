@@ -1,92 +1,92 @@
-require('dotenv').config({ path: '.env.local' });
-const { neon } = require('@neondatabase/serverless');
-const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { execSync } = require('child_process');
-const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const fs = require('fs');
+const { execSync } = require('child_process');
+require('dotenv').config({ path: path.resolve(process.cwd(), '.env.local') });
 
-const sql = neon(process.env.DATABASE_URL);
-const client = new S3Client({
-  region: process.env.B2_MEDIA_REGION || 'us-east-005',
-  endpoint: process.env.B2_MEDIA_ENDPOINT || 'https://s3.us-east-005.backblazeb2.com',
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: process.env.B2_KEY_ID,
-    secretAccessKey: process.env.B2_APPLICATION_KEY
-  }
+const { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+
+// Credenciais (aceita R2_* ou B2_*)
+const accessKey = process.env.R2_ACCESS_KEY_ID || process.env.B2_KEY_ID;
+const secretKey = process.env.R2_SECRET_ACCESS_KEY || process.env.B2_APPLICATION_KEY;
+const endpointUrl = process.env.R2_ENDPOINT || process.env.B2_ENDPOINT;
+const bucket = process.env.B2_MEDIA_BUCKET || "josephmatthos";
+
+if (!accessKey || !secretKey || !endpointUrl) {
+  console.error("❌ ERRO: Credenciais não encontradas.");
+  process.exit(1);
+}
+
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: endpointUrl,
+  credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
 });
 
-const BUCKET = process.env.B2_AUDIO_BUCKET || 'josephmatthos';
+const TMP_DIR = path.join(__dirname, 'tmp_previews');
+if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
 
-function slugify(str) {
-  return String(str || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-}
+async function gerarPreviews() {
+  console.log("🔍 Buscando áudios completos no R2...");
+  let ContinuationToken;
+  let totalGerados = 0;
 
-async function main() {
-  const tracks = await sql`SELECT id, title, stream_key FROM tracks WHERE preview_key IS NULL`;
-  console.log(`Gerando previews para ${tracks.length} músicas...\n`);
+  do {
+    const list = await s3.send(new ListObjectsV2Command({
+      Bucket: bucket,
+      Prefix: "premium/", // Pasta onde estão os áudios completos
+      ContinuationToken
+    }));
 
-  let gerados = 0;
+    if (!list.Contents || list.Contents.length === 0) break;
 
-  for (const track of tracks) {
-    if (!track.stream_key) {
-      console.log(`⚠️  ${track.title}: sem stream_key`);
-      continue;
-    }
+    for (const obj of list.Contents) {
+      const key = obj.Key;
+      // Ignora pastas ou arquivos que não são de áudio
+      if (key.endsWith('/') || !key.match(/\.(mp3|wav|m4a)$/i)) continue;
 
-    const slug = slugify(track.title);
-    const previewKey = `previews/${slug}-${Date.now()}.mp3`;
-    const tmpInput = path.join(os.tmpdir(), `input-${Date.now()}.mp3`);
-    const tmpOutput = path.join(os.tmpdir(), `preview-${Date.now()}.mp3`);
+      const fileName = path.basename(key);
+      const localPath = path.join(TMP_DIR, fileName);
+      const previewKey = `previews/${fileName}`;
 
-    try {
-      // 1. Baixa o áudio completo do B2
-      const keyToFetch = track.stream_key.startsWith('josephmatthos/') 
-        ? track.stream_key 
-        : `josephmatthos/${track.stream_key}`;
+      console.log(`\n🎵 Processando: ${fileName}`);
 
-      console.log(`⬇️  Baixando: ${track.title}`);
-      const s3Res = await client.send(new GetObjectCommand({ Bucket: BUCKET, Key: keyToFetch }));
-      
-      const chunks = [];
-      for await (const chunk of s3Res.Body) chunks.push(chunk);
-      fs.writeFileSync(tmpInput, Buffer.concat(chunks));
+      // 1. Baixar o áudio original
+      console.log("   ⬇️ Baixando...");
+      const getCmd = new GetObjectCommand({ Bucket: bucket, Key: key });
+      const response = await s3.send(getCmd);
+      const bodyContents = await response.Body.transformToByteArray();
+      fs.writeFileSync(localPath, bodyContents);
 
-      // 2. Corta os primeiros 30s com ffmpeg
-      console.log(`✂️  Cortando 30s...`);
-      execSync(`ffmpeg -y -i "${tmpInput}" -t 30 -c copy "${tmpOutput}"`, { stdio: 'ignore' });
+      // 2. Cortar 30 segundos com FFmpeg
+      console.log("   ✂️ Cortando 30s...");
+      const tempPreviewPath = path.join(TMP_DIR, `preview_${fileName}`);
+      // -ss 0: começa do início, -t 30: 30 segundos, -acodec copy: copia o áudio sem perder qualidade
+      execSync(`ffmpeg -y -i "${localPath}" -ss 0 -t 30 -acodec copy "${tempPreviewPath}"`, { stdio: 'ignore' });
 
-      // 3. Faz upload do preview para o B2
-      console.log(`⬆️  Enviando preview...`);
-      const previewBuffer = fs.readFileSync(tmpOutput);
-      await client.send(new PutObjectCommand({
-        Bucket: BUCKET,
+      // 3. Fazer upload do preview para o R2
+      console.log("   ⬆️ Enviando para previews/...");
+      const fileStream = fs.createReadStream(tempPreviewPath);
+      const putCmd = new PutObjectCommand({
+        Bucket: bucket,
         Key: previewKey,
-        Body: previewBuffer,
-        ContentType: 'audio/mpeg'
-      }));
+        Body: fileStream,
+        ContentType: "audio/mpeg",
+      });
+      await s3.send(putCmd);
 
-      // 4. Atualiza o banco
-      await sql`UPDATE tracks SET preview_key = ${previewKey} WHERE id = ${track.id}`;
-      console.log(`✅ ${track.title} → ${previewKey}\n`);
-      gerados++;
+      // Limpar arquivos temporários
+      fs.unlinkSync(localPath);
+      fs.unlinkSync(tempPreviewPath);
 
-    } catch (err) {
-      console.error(`❌ Erro em ${track.title}:`, err.message, '\n');
-    } finally {
-      // Limpa arquivos temporários
-      if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput);
-      if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput);
+      totalGerados++;
+      console.log("   ✅ Preview gerado!");
     }
-  }
+    ContinuationToken = list.NextContinuationToken;
+  } while (ContinuationToken);
 
-  console.log(`\n🎉 Concluído! ${gerados} previews gerados.`);
+  console.log(`\n🎉 Concluído! ${totalGerados} previews gerados e enviados.`);
 }
 
-main().catch(console.error);
+gerarPreviews().catch(err => {
+  console.error("❌ Erro:", err.message);
+});

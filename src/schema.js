@@ -1,6 +1,4 @@
 // src/schema.js
-// Versão CJS pura — espelha EXATAMENTE o banco de produção.
-// Não rode `drizzle-kit push` sem este arquivo bater com o banco.
 'use strict';
 
 const {
@@ -17,10 +15,7 @@ const subscriptionStatus = pgEnum('SubscriptionStatus', ['PENDING', 'ACTIVE', 'P
 const trackStatus = pgEnum('TrackStatus', ['DRAFT', 'PUBLISHED', 'ARCHIVED']);
 const userRole = pgEnum('UserRole', ['CUSTOMER', 'ADMIN']);
 
-// ─── _prisma_migrations (gerenciada pelo Prisma) ─────
-// Espelhada para o Drizzle não tentar apagá-la.
-// Ela tem 8 colunas reais: id, checksum, finished_at, migration_name,
-// logs, rolled_back_at, started_at, applied_steps_count.
+// ─── _prisma_migrations ─────────────────────────────
 const prismaMigrations = pgTable('_prisma_migrations', {
   id: text().primaryKey(),
   checksum: text().notNull(),
@@ -41,7 +36,8 @@ const users = pgTable('users', {
   role: userRole().default('CUSTOMER').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
-  emailVerified: timestamp('email_verified', { withTimezone: true, mode: 'string' })
+  emailVerified: timestamp('email_verified', { withTimezone: true, mode: 'string' }),
+  sessionVersion: integer('session_version').default(0).notNull()
 }, (t) => [uniqueIndex('users_email_key').on(t.email)]);
 
 // ─── Artists ──────────────────────────────────────────
@@ -239,9 +235,6 @@ const paymentsEvents = pgTable('payments_events', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
 });
 
-// ─── Payment Events (legado — outra tabela, não confundir) ────
-// Existe no banco mas o código atual usa paymentsEvents.
-// Espelhada aqui para o Drizzle não tentar apagá-la.
 const paymentEventsLegacy = pgTable('payment_events', {
   id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
   provider: text().default('mercadopago').notNull(),
@@ -280,7 +273,10 @@ const orders = pgTable('orders', {
   preferenceInitPoint: text('preference_init_point'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull(),
   paidAt: timestamp('paid_at', { withTimezone: true, mode: 'string' })
-}, (t) => [uniqueIndex('orders_idempotency_key_key').on(t.idempotencyKey), index('orders_user_id_idx').on(t.userId)]);
+}, (t) => [
+  uniqueIndex('orders_idempotency_key_key').on(t.idempotencyKey),
+  index('orders_user_id_idx').on(t.userId)
+]);
 
 const orderItems = pgTable('order_items', {
   id: uuid().primaryKey().defaultRandom(),
@@ -291,18 +287,20 @@ const orderItems = pgTable('order_items', {
   unitPriceCents: integer('unit_price_cents').notNull()
 });
 
-// ─── Tokens e compatibilidade ──────────────────────
-
+// ─── Tokens ──────────────────────────────────────
 const refreshTokens = pgTable('refresh_tokens', {
   id: uuid().primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   tokenHash: text('token_hash').notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
   revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+  sessionId: uuid('session_id'),
+  replacedAt: timestamp('replaced_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).default(sql`CURRENT_TIMESTAMP`).notNull()
 }, (t) => [
   uniqueIndex('refresh_tokens_hash_key').on(t.tokenHash),
-  index('refresh_tokens_user_idx').on(t.userId)
+  index('refresh_tokens_user_idx').on(t.userId),
+  index('refresh_tokens_session_idx').on(t.sessionId)
 ]);
 
 const passwordResetTokens = pgTable('password_reset_tokens', {

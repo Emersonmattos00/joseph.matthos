@@ -23,7 +23,7 @@ import { renderSales, invalidateSalesCache } from './sales.js';
 import { bindUpload } from './uploads.js';
 import { renderFrasesEditor } from './editors/frases.js';
 import { renderAlbumsEditor } from './editors/albums.js';
-import { renderPlaylistsEditor, bindPlaylistsAddButton } from './editors/playlists.js';
+import { renderPlaylistsEditor } from './editors/playlists.js';
 import { renderPlansEditor } from './editors/plans.js';
 import { renderSocialEditor, bindSocialsAddButton } from './editors/socials.js';
 import { getByPath, setByPath } from './ui/dom.js';
@@ -41,7 +41,7 @@ const TAB_TITLES = {
   sobre: 'Sobre',
   filosofia: 'Filosofia',
   discografia: 'Discografia',
-  playlists: 'Playlists',      // ★ ADICIONADO
+  playlists: 'Playlists',
   vendas: 'Vendas',
   planos: 'Planos',
   contato: 'Contato',
@@ -186,7 +186,7 @@ async function onClickNavButton(event) {
       renderSocialEditor(AdminState.content);
     } else if (tab === 'discografia') {
       renderAlbumsEditor(AdminState.content);
-    } else if (tab === 'playlists') {     // ★ ADICIONADO
+    } else if (tab === 'playlists') {
       renderPlaylistsEditor(AdminState.content);
     }
   } catch (err) {
@@ -290,7 +290,7 @@ function bindContentInputs() {
 // Botões dos editores
 // ─────────────────────────────────────────────────────────────
 function bindEditorButtons() {
-  try { bindPlaylistsAddButton(); } catch (e) { console.warn(e); }
+  // bindPlaylistsAddButton removido — não existe em editors/playlists.js
   try { bindSocialsAddButton(); } catch (e) { console.warn(e); }
 
   const addFraseBtn = document.getElementById('addFraseBtn');
@@ -338,7 +338,6 @@ function bindUploadZones() {
     });
   });
 
-  // Imagem de fundo
   try {
     bindUpload('bgUpload', ({ url }) => {
       if (!url) return;
@@ -351,7 +350,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // Imagem do vinil
   try {
     bindUpload('vinylUpload', ({ url }) => {
       if (!url) return;
@@ -365,7 +363,6 @@ function bindUploadZones() {
     }, 'image');
   } catch (e) { console.warn(e); }
 
-  // Imagem Sobre
   try {
     bindUpload('sobreUpload', ({ url }) => {
       if (!url) return;
