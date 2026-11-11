@@ -1,58 +1,40 @@
 const path = require('path');
-// Força o carregamento do .env.local da raiz do projeto
 require('dotenv').config({ path: path.resolve(process.cwd(), '.env.local') });
-
 const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = require("@aws-sdk/client-s3");
 
-// Verifica se as variáveis foram carregadas
-if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID) {
-  console.error("❌ ERRO: Variáveis de ambiente do R2 não encontradas no .env.local");
-  console.log("Verifique se o arquivo .env.local está na raiz e contém R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.");
+const accessKey = process.env.R2_ACCESS_KEY_ID || process.env.B2_KEY_ID;
+const secretKey = process.env.R2_SECRET_ACCESS_KEY || process.env.B2_APPLICATION_KEY;
+const endpointUrl = process.env.R2_ENDPOINT || process.env.B2_ENDPOINT;
+
+if (!accessKey || !secretKey || !endpointUrl) {
+  console.error("❌ ERRO: Credenciais não encontradas.");
   process.exit(1);
 }
 
 const s3 = new S3Client({
   region: "auto",
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
+  endpoint: endpointUrl,
+  credentials: { accessKeyId: accessKey, secretAccessKey: secretKey },
 });
 
 async function limpar() {
-  console.log("✅ Credenciais carregadas. Listando arquivos na pasta previews/...");
+  console.log("Limpando pasta previews/...");
   let ContinuationToken;
-  let totalApagados = 0;
-
+  let total = 0;
   do {
     const list = await s3.send(new ListObjectsV2Command({
-      Bucket: "josephmatthos", // Confirme se é esse o nome do bucket
+      Bucket: process.env.B2_MEDIA_BUCKET || "josephmatthos",
       Prefix: "previews/",
       ContinuationToken
     }));
-
-    if (!list.Contents || list.Contents.length === 0) {
-      console.log("Nenhum arquivo encontrado na pasta previews/.");
-      break;
-    }
-
-    const objectsToDelete = list.Contents.map(obj => ({ Key: obj.Key }));
-    
-    console.log(`Apagando ${objectsToDelete.length} arquivos...`);
+    if (!list.Contents || list.Contents.length === 0) break;
     await s3.send(new DeleteObjectsCommand({
-      Bucket: "josephmatthos",
-      Delete: { Objects: objectsToDelete }
+      Bucket: process.env.B2_MEDIA_BUCKET || "josephmatthos",
+      Delete: { Objects: list.Contents.map(o => ({ Key: o.Key })) }
     }));
-    
-    totalApagados += objectsToDelete.length;
+    total += list.Contents.length;
     ContinuationToken = list.NextContinuationToken;
   } while (ContinuationToken);
-
-  console.log(`✅ Total de arquivos apagados: ${totalApagados}`);
+  console.log(`✅ ${total} arquivos apagados.`);
 }
-
-limpar().catch(err => {
-  console.error("❌ Erro ao apagar:", err.message);
-  process.exit(1);
-});
+limpar().catch(e => console.error(e.message));

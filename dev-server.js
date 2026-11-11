@@ -1,8 +1,7 @@
-process.loadEnvFile('.env.local'); // dotenv removido — usando --env-file nativo
+process.loadEnvFile('.env.local');
 const express = require('express');
 const path = require('path');
 
-// Pasta onde estão os arquivos estáticos (index.html, css, js)
 const STATIC_DIR = path.join(__dirname, 'public');
 
 const app = express();
@@ -16,7 +15,7 @@ app.use((req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// SERVIDOR ESTÁTICO SEGURO
+// ORDEM CRÍTICA: static ANTES das rotas de API e do SPA fallback
 // ─────────────────────────────────────────────────────────────
 app.use(express.static(STATIC_DIR, {
   extensions: ['html'],
@@ -27,17 +26,11 @@ app.use(express.static(STATIC_DIR, {
   }
 }));
 
-// Rota explícita para o Service Worker
-app.get('/sw.js', (req, res) => {
-  res.sendFile(path.join(STATIC_DIR, 'sw.js'));
-});
-
 // ─────────────────────────────────────────────────────────────
-// ROTAS DA API (capturando query strings)
+// ROTAS DA API
 // ─────────────────────────────────────────────────────────────
 const apiFiles = ['public', 'auth', 'stream', 'payments', 'admin'];
 
-// Carrega os handlers
 const handlers = {};
 for (const name of apiFiles) {
   try {
@@ -52,17 +45,12 @@ for (const name of apiFiles) {
   }
 }
 
-// Middleware único que intercepta qualquer /api/*
 app.use('/api', async (req, res, next) => {
-  // Extrai o nome do recurso (ex: /api/payments?type=rental -> "payments")
-  // O req.path já ignora a query string
   const parts = req.path.split('/').filter(Boolean);
   const name = parts[0];
-
   if (!name) return next();
 
   const handler = handlers[name];
-
   if (!handler) {
     try {
       const module = await import('./api/' + name + '.js');
@@ -85,18 +73,19 @@ app.use('/api', async (req, res, next) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// FALLBACK (SPA)
+// FALLBACK SPA (DEVE SER O ÚLTIMO)
 // ─────────────────────────────────────────────────────────────
 app.get('*', (req, res, next) => {
   if (req.url.startsWith('/api/')) return next();
   if (path.basename(req.path).startsWith('.')) {
     return res.status(403).send('Acesso negado');
   }
+  // Se não for um arquivo existente em public/, devolve index.html
   res.sendFile(path.join(STATIC_DIR, 'index.html'));
 });
 
 // ─────────────────────────────────────────────────────────────
-// START SERVER
+// START
 // ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {

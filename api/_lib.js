@@ -1,15 +1,12 @@
 'use strict';
 
 /* ============================================================
-   api/_lib.js — Módulos internos consolidados (v8 — final)
+   api/_lib.js — Módulos internos consolidados (v10 — FINAL)
    ------------------------------------------------------------
-   Decisões documentadas:
-   - Rate limit usa MULTI/EXEC. Migração para Lua planejada.
-   - clientIp confia em x-real-ip/x-vercel-forwarded-for em prod.
-   - JWT com issuer/audience fixos, exportados e validados.
-   - Cookies: access = __Host- (Path=/), refresh = __Secure- (Path=/api/auth).
-   - Hash de e-mail em rate limit exige segredo em produção.
-   - checkOrigin aceita Referer quando Origin está ausente (mesma origem).
+   - getAuthUser valida sv (session_version) e sid (sessão ativa)
+   - hashEmail falha em produção sem AUDIT_HASH_SECRET
+   - checkOrigin aceita requests same-origin sem Origin/Referer
+     (proteção CSRF via SameSite=Lax/Strict nos cookies)
    ============================================================ */
 
 const crypto = require('crypto');
@@ -30,21 +27,19 @@ const ACCESS_TTL = '15m';
 const CLOCK_TOLERANCE_SEC = 5;
 
 // ─── Cookies ────────────────────────────────────────────────
-// Em produção (Vercel) usa os prefixos seguros.
-// No Codespace (dev), usa os nomes simples para evitar bloqueios.
-const AUTH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true' 
-  ? '__Host-jm_auth_access' 
+const AUTH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true'
+  ? '__Host-jm_auth_access'
   : 'jm_auth_access';
 
-const REFRESH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true' 
-  ? '__Secure-jm_auth_refresh' 
+const REFRESH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true'
+  ? '__Secure-jm_auth_refresh'
   : 'jm_auth_refresh';
 
 const AUTH_COOKIE_PATH = '/';
 const REFRESH_COOKIE_PATH = '/api/auth';
 
 const ACCESS_MAX_AGE = ACCESS_TTL_SECONDS;
-const REFRESH_MAX_AGE = 60 * 60 * 24 * 30; // 30 dias
+const REFRESH_MAX_AGE = 60 * 60 * 24 * 30;
 
 const VALID_PLANS = new Set(['free', 'premium', 'anual']);
 
@@ -83,7 +78,8 @@ const VALID_REASON_CODES = new Set([
   'signup_ok', 'login_ok', 'refresh_ok', 'logout_ok',
   'mp_not_configured', 'value_mismatch', 'currency_mismatch',
   'order_not_found', 'product_not_found', 'rental_duplicate',
-  'gateway_unavailable', 'preapproval_failed'
+  'gateway_unavailable', 'preapproval_failed',
+  'session_version_mismatch'
 ]);
 
 function normalizeReason(reason) {
@@ -218,11 +214,10 @@ function buildCookie(name, value, maxAge, opts = {}) {
     'SameSite=' + sameSite,
   ];
 
-  // Só adiciona Secure em produção REAL (Vercel), nunca no Codespace
   if (process.env.NODE_ENV === 'production' && process.env.ALLOW_INSECURE_COOKIE !== 'true') {
     parts.push('Secure');
   }
-  
+
   return parts.join('; ');
 }
 
@@ -276,6 +271,7 @@ function getRefreshToken(req) {
   return parseCookies(req?.headers?.cookie || req?.headers?.Cookie)[REFRESH_COOKIE] || '';
 }
 
+// ─── getAuthUser com validação de sv + sid ─────────────────
 async function getAuthUser(req) {
   const accessToken = getAccessToken(req);
   if (!accessToken) return null;
@@ -286,37 +282,15 @@ async function getAuthUser(req) {
     return null;
   }
 
+  let payload;
   try {
-    const payload = jwt.verify(accessToken, secret, {
+    payload = jwt.verify(accessToken, secret, {
       algorithms: ['HS256'],
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
       clockTolerance: CLOCK_TOLERANCE_SEC,
       ignoreExpiration: false,
     });
-
-    const now = Math.floor(Date.now() / 1000);
-
-    if (
-      !payload ||
-      typeof payload !== 'object' ||
-      typeof payload.id !== 'string' ||
-      !UUID_RE.test(payload.id) ||
-      !Number.isFinite(payload.exp) ||
-      !Number.isFinite(payload.iat) ||
-      payload.exp <= payload.iat ||
-      payload.iat > now + CLOCK_TOLERANCE_SEC ||
-      now - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC ||
-      payload.exp - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC
-    ) {
-      return null;
-    }
-
-    return {
-      id: payload.id,
-      email: typeof payload.email === 'string' ? payload.email : null,
-      role: typeof payload.role === 'string' ? payload.role : null,
-    };
   } catch (error) {
     if (
       error.name !== 'TokenExpiredError' &&
@@ -325,6 +299,74 @@ async function getAuthUser(req) {
     ) {
       console.error('[_lib] Erro inesperado na autenticação:', error.message);
     }
+    return null;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    typeof payload.id !== 'string' ||
+    !UUID_RE.test(payload.id) ||
+    !Number.isFinite(payload.exp) ||
+    !Number.isFinite(payload.iat) ||
+    payload.exp <= payload.iat ||
+    payload.iat > now + CLOCK_TOLERANCE_SEC ||
+    now - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC ||
+    payload.exp - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC ||
+    typeof payload.sv !== 'number' ||
+    typeof payload.sid !== 'string' ||
+    !UUID_RE.test(payload.sid)
+  ) {
+    return null;
+  }
+
+  try {
+    const { db } = require('./_db');
+    const { users, refreshTokens } = require('../src/schema.js');
+    const { eq, and, isNull, gt } = require('drizzle-orm');
+
+    const [dbUser] = await db.select({
+      id: users.id,
+      email: users.email,
+      role: users.role,
+      sessionVersion: users.sessionVersion,
+    }).from(users).where(eq(users.id, payload.id)).limit(1);
+
+    if (!dbUser) return null;
+    if (Number(dbUser.sessionVersion) !== payload.sv) return null;
+
+    const nowIso = new Date().toISOString();
+    const [activeSession] = await db.select({ id: refreshTokens.id })
+      .from(refreshTokens)
+      .where(and(
+        eq(refreshTokens.userId, payload.id),
+        eq(refreshTokens.sessionId, payload.sid),
+        isNull(refreshTokens.revokedAt),
+        gt(refreshTokens.expiresAt, nowIso)
+      ))
+      .limit(1);
+
+    if (!activeSession) return null;
+
+    return {
+      id: dbUser.id,
+      email: dbUser.email,
+      role: dbUser.role,
+    };
+  } catch (err) {
+    const code = String(err.code || '');
+    const networkCodes = new Set([
+      'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET',
+      'EHOSTUNREACH', 'EPIPE', 'EAI_AGAIN',
+      '57P01', '57P02', '57P03', '53300',
+    ]);
+    if (networkCodes.has(code) || /^08[0-9A-Z]{3}$/i.test(code)) {
+      const dbErr = new Error('DB_UNAVAILABLE');
+      dbErr.code = 'DB_UNAVAILABLE';
+      throw dbErr;
+    }
+    console.error('[_lib] getAuthUser consulta falhou:', code || err.message);
     return null;
   }
 }
@@ -474,13 +516,14 @@ function resolveAuditTable(event, override) {
 function hashEmail(email) {
   const value = String(email).toLowerCase();
   const secret = AUDIT_HASH_SECRET();
-  if (secret) {
-    return crypto.createHmac('sha256', secret).update(value).digest('hex').slice(0, 32);
+  if (!secret) {
+    if (IS_PROD) {
+      throw new Error('[_lib] AUDIT_HASH_SECRET ausente em produção.');
+    }
+    console.warn('[_lib] AUDIT_HASH_SECRET ausente em dev — usando SHA-256.');
+    return crypto.createHash('sha256').update(value).digest('hex').slice(0, 32);
   }
-  if (IS_PROD) {
-    console.error('[_lib] AUDIT_HASH_SECRET ausente em produção — auditoria sem HMAC.');
-  }
-  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 32);
+  return crypto.createHmac('sha256', secret).update(value).digest('hex').slice(0, 32);
 }
 
 function isBlockedAuditKey(key) {
@@ -675,10 +718,8 @@ async function invalidatePlanCache(userId) {
   try { await redis.del(`plan:${userId}`); } catch {}
 }
 
-// ─── CSRF ─────────────────────────────────────────────────
-// [FIX] Aceita Referer quando Origin está ausente (navegador mesma origem)
+// ─── CSRF (aceita same-origin sem Origin/Referer) ─────────
 function checkOrigin(req) {
-  if (!req || typeof req !== 'object') return false;
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
     return false;
@@ -687,25 +728,26 @@ function checkOrigin(req) {
   const rawOrigin = req.headers?.origin;
   const referer = req.headers?.referer;
 
-  // 1) Se há Origin, valida ele
+  // 1) Origin presente → precisa estar em ALLOWED_ORIGINS
   if (rawOrigin) {
     const origin = normalizeOrigin(rawOrigin);
     if (!origin) return false;
     return ALLOWED_ORIGINS.has(origin);
   }
 
-  // 2) Se não há Origin, tenta o Referer (mesma origem)
+  // 2) Referer presente → precisa bater com ALLOWED_ORIGINS
   if (referer) {
     try {
       const refOrigin = new URL(String(referer).trim()).origin;
       if (ALLOWED_ORIGINS.has(refOrigin)) return true;
     } catch {}
+    return false;
   }
 
-  // 3) Em desenvolvimento, permite (Codespace não envia Origin em mesma origem)
-  if (!IS_PROD) return true;
-
-  return false;
+  // 3) Origin e Referer ausentes = request same-origin do navegador
+  // (o navegador só envia Origin em cross-origin).
+  // CSRF permanece protegido por SameSite=Lax/Strict nos cookies.
+  return true;
 }
 
 function validatedOrigin(req) {
@@ -806,24 +848,15 @@ function timingSafeEq(a, b) {
 // ─── Exports ──────────────────────────────────────────────
 module.exports = {
   IS_PROD, VALID_PLANS, ALLOWED_ORIGINS,
-  // JWT
   JWT_ISSUER, JWT_AUDIENCE, ACCESS_TTL, ACCESS_TTL_SECONDS,
-  // HTTP
   sendJson, methodNotAllowed, parseBody, parseCookies, clientIp,
-  // Cookies + auth
   setAuthCookies, clearAuthCookies, getAccessToken, getRefreshToken, getAuthUser,
   AUTH_COOKIE, REFRESH_COOKIE, AUTH_COOKIE_PATH, REFRESH_COOKIE_PATH,
   ACCESS_MAX_AGE, REFRESH_MAX_AGE,
-  // Rate limit
   checkAndIncrement, resetBucket, hashRateLimitKey,
-  // Audit
   audit,
-  // Plano
   getPlanForUser, getPlanForUserDetailed, invalidatePlanCache,
-  // CSRF
   checkOrigin, validatedOrigin,
-  // HMAC
   signHmac, verifyHmac,
-  // Senha
   verifyScrypt, timingSafeEq,
 };

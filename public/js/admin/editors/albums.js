@@ -375,7 +375,7 @@ function triggerDownload(url, filename) {
   // Item 12: Restringe URLs ao Backblaze (evita redirecionamento malicioso)
   try {
     const u = new URL(url);
-    if (!u.hostname.endsWith('backblazeb2.com')) {
+    if (!u.hostname.endsWith('r2.cloudflarestorage.com') && !u.hostname.endsWith('josephmatthos.com.br')) {
       throw new Error('Domínio de download inválido.');
     }
   } catch {
