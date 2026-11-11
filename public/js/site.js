@@ -554,7 +554,7 @@ function renderArtistHero() {
   const c = SITE.content;
 
   if (avatar) {
-    const imageUrl = 'https://f005.backblazeb2.com/file/joseph.matthos/assets/img/avatarjm.jpg';
+    const imageUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev/assets/img/avatarjm.webp';
     const safe = safeMediaUrl(imageUrl);
 
     if (safe) {
