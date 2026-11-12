@@ -698,11 +698,19 @@ async function handleReorderTracks(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
+      // 1. Valida se todas as faixas pertencem ao álbum
       const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
       if (rows.length !== ids.size) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
       for (const r of rows) {
         if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
       }
+
+      // 2. ETAPA 1: Move temporariamente todas as faixas para números negativos para evitar conflito de unicidade
+      for (const item of order) {
+        await tx.update(tracks).set({ trackNumber: -1 }).where(eq(tracks.id, item.id));
+      }
+
+      // 3. ETAPA 2: Aplica a nova ordem definitiva
       for (const item of order) {
         await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
       }
@@ -710,6 +718,10 @@ async function handleReorderTracks(req, res, session) {
   } catch (err) {
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
+    // Se for um erro de constraint do banco, retorna uma mensagem mais amigável
+    if (err.cause && err.cause.code === '23505') {
+      return sendJson(res, 409, { ok: false, error: 'Conflito de ordem. Tente novamente.' });
+    }
     throw err;
   }
 
