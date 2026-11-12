@@ -120,6 +120,12 @@ module.exports = async function handler(req, res) {
   }
 
   const action = parseAction(req.query);
+
+  console.log('[admin] --- NOVA REQUISIÇÃO ---');
+  console.log('[admin] action:', action);
+  console.log('[admin] method:', method);
+  console.log('[admin] origin:', req.headers.origin);
+  console.log('[admin] cookies:', req.headers.cookie ? 'presente' : 'ausente');
   if (!action) return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
 
   const method = (req.method || 'GET').toUpperCase();
