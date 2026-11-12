@@ -264,12 +264,13 @@ export function deleteTrack(trackId) {
 
 /**
  * Reordena faixas de um álbum.
- * @param {Array<{ id: number, track_index: number }>} order
+ * @param {string} albumId — ID do álbum
+ * @param {Array<{ id: string, track_number: number }>} order
  */
-export function reorderTracks(order) {
+export function reorderTracks(albumId, order) {
   return apiFetch('track-order', {
     method: 'PATCH',
-    body: { order }
+    body: { albumId, order }
   });
 }
 
@@ -278,7 +279,7 @@ export function reorderTracks(order) {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Pede uma URL assinada de PUT para o Supabase Storage.
+ * Pede uma URL assinada de PUT para o Cloudflare R2.
  * O browser faz o PUT direto, sem passar pela Vercel.
  *
  * @param {object} payload — { kind, filename, contentType, size }
