@@ -1,10 +1,5 @@
 /* ============================================================
    api/admin.js — Painel administrativo (Versão Final Definitiva)
-   ============================================================
-   - Uploads e storage alinhados (Cloudflare R2)
-   - Transações seguras em banco de dados
-   - Reordenação de faixas com log detalhado de erros reais
-   - Controle otimista de versão no siteContent
    ============================================================ */
 
 'use strict';
@@ -728,7 +723,6 @@ async function handleReorderTracks(req, res, session) {
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
     
-    // Retorna a mensagem REAL do erro, sem mascarar como 409
     return sendJson(res, 500, { ok: false, error: `Erro no banco: ${err.message}` });
   }
 
