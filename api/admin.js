@@ -1,7 +1,7 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (Versão Final Absoluta)
+   api/admin.js — Painel administrativo (Versão Final R2)
    ============================================================
-   - Uploads e storage alinhados (B2 + prefixos)
+   - Uploads e storage alinhados (Cloudflare R2 + prefixos)
    - Transações seguras em banco de dados
    - Validação de segurança no payload do siteContent (socials, frases, planos)
    - Tratamento de campos legados no update de Álbum e Faixa
@@ -22,11 +22,17 @@ const { db, eq, and, asc, desc, drizzleSql, inArray } = require('./_db');
 const schema = require('./_db').schema;
 const { tracks, albums, artists, orders, adminAudit } = schema;
 
+// ─────────────────────────────────────────────────────────────
+// IMPORTAÇÃO CORRIGIDA PARA O R2 (sem apelidos b2...)
+// ─────────────────────────────────────────────────────────────
 const {
-  uploadObject, createSignedUploadUrl: b2CreateSignedUploadUrl,
-  createSignedDownloadUrl: b2CreateSignedDownloadUrl,
-  getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists,
-  getObjectMetadata: b2GetObjectMetadata, buildPathForKind
+  uploadObject,
+  createSignedUploadUrl,
+  createSignedDownloadUrl,
+  getPublicUrl,
+  objectExists,
+  getObjectMetadata,
+  buildPathForKind
 } = require('./_storage');
 
 // ─────────────────────────────────────────────────────────────
@@ -334,7 +340,7 @@ async function handleUpload(req, res, session) {
 
   try {
     await uploadObject(path, validation.buffer, validation.mime);
-    const publicUrl = b2GetPublicUrl(path);
+    const publicUrl = getPublicUrl(path);
     await audit('upload.direct', { actor: session.user, metadata: { kind, path, size: validation.buffer.length } });
     return sendJson(res, 200, { ok: true, url: publicUrl, path });
   } catch (err) {
@@ -354,7 +360,7 @@ async function handleUploadSign(req, res, session) {
   const path = buildPathForKind(kind, uniqueName);
 
   try {
-    const signed = await b2CreateSignedUploadUrl(path, validation.mime, SIGNED_UPLOAD_TTL_SEC);
+    const signed = await createSignedUploadUrl(path, validation.mime, SIGNED_UPLOAD_TTL_SEC);
 
     if (schema.uploadIntents) {
       const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MS).toISOString();
@@ -396,10 +402,10 @@ async function handleUploadConfirm(req, res, session) {
   }
 
   try {
-    const exists = await b2ObjectExists(path);
+    const exists = await objectExists(path);
     if (!exists) return sendJson(res, 400, { ok: false, error: 'Arquivo não encontrado no Storage.' });
 
-    const meta = await b2GetObjectMetadata(path);
+    const meta = await getObjectMetadata(path);
     if (meta && meta.contentLength > MAX_BYTES_BY_KIND[kind]) return sendJson(res, 413, { ok: false, error: 'Arquivo excede o limite.' });
   } catch (err) {
     return sendJson(res, 502, { ok: false, error: 'Falha ao validar no Storage.' });
@@ -414,12 +420,12 @@ async function handleUploadConfirm(req, res, session) {
 
     if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
     await audit('upload.confirm', { actor: session.user, metadata: { kind, path, albumId, trackIndex } });
-    return sendJson(res, 200, { ok: true, url: b2GetPublicUrl(path), path, track: updated[0] });
+    return sendJson(res, 200, { ok: true, url: getPublicUrl(path), path, track: updated[0] });
   }
 
   if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
   await audit('upload.confirm', { actor: session.user, metadata: { kind, path } });
-  return sendJson(res, 200, { ok: true, path, url: b2GetPublicUrl(path) });
+  return sendJson(res, 200, { ok: true, path, url: getPublicUrl(path) });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -635,7 +641,7 @@ async function handleUpdateTrack(req, res, session) {
     if (fullP !== undefined) {
       const p = String(fullP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'fullPath vazio.' });
-      const exists = await b2ObjectExists(p).catch(() => true); // Assume válido se o B2 falhar
+      const exists = await objectExists(p).catch(() => true); // Assume válido se o R2 falhar
       if (!exists) return sendJson(res, 400, { ok: false, error: 'fullPath inválido no Storage.' });
       patch.fullPath = p; patch.streamKey = p;
     }
@@ -644,7 +650,7 @@ async function handleUpdateTrack(req, res, session) {
     if (previewP !== undefined) {
       const p = String(previewP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'previewPath vazio.' });
-      const exists = await b2ObjectExists(p).catch(() => true);
+      const exists = await objectExists(p).catch(() => true);
       if (!exists) return sendJson(res, 400, { ok: false, error: 'previewPath inválido no Storage.' });
       patch.previewPath = p; patch.previewKey = p;
     }
@@ -741,7 +747,7 @@ async function handleDownloadUrl(req, res, session) {
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
 
   try {
-    const url = await b2CreateSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
+    const url = await createSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
     await audit('download.single', { actor: session.user, target: trackId });
     return sendJson(res, 200, { ok: true, url, filename: `${sanitizeFilename(track.title)}.mp3` });
   } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar link.' }); }
@@ -755,7 +761,7 @@ async function handleDownloadAlbum(req, res, session) {
   try {
     const urls = await Promise.all(rows.map(async t => {
       if (!t.fullPath) return { id: t.id, title: t.title, url: null };
-      const url = await b2CreateSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
+      const url = await createSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
       return { id: t.id, title: t.title, url, filename: `${sanitizeFilename(t.title)}.mp3` };
     }));
     await audit('download.album', { actor: session.user, target: albumId, metadata: { count: urls.length } });
