@@ -1,12 +1,11 @@
 'use strict';
 
 /* ============================================================
-   api/_storage.js — Backblaze B2 via S3 API
+   api/_storage.js — Cloudflare R2 via S3 API (MIGRADO)
    ------------------------------------------------------------
-   - Um bucket físico (B2_MEDIA_BUCKET), prefixos por tipo
-   - Validação estrita de MIME, extensão e tamanho
+   - Adaptado para o Cloudflare R2 (substitui Backblaze B2)
+   - Mesmas funções exportadas para compatibilidade
    - URLs assinadas com prazo curto
-   - Compatível com admin.js (buildPathForKind) e stream.js (getPlaybackUrl)
    ============================================================ */
 
 const {
@@ -20,30 +19,36 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 let client;
 let _configCache = null;
 
-// ─────────────────────────────────────────────────────────────
-// CONFIGURAÇÃO (cacheada)
-// ─────────────────────────────────────────────────────────────
 function getStorageConfig() {
   if (_configCache) return _configCache;
 
-  const region = String(process.env.B2_REGION || '').trim();
+  // R2 usa "auto" como região
+  const region = String(process.env.B2_REGION || 'auto').trim();
   const keyId = String(process.env.B2_KEY_ID || '').trim();
   const applicationKey = String(process.env.B2_APPLICATION_KEY || '').trim();
   const mediaBucket = String(process.env.B2_MEDIA_BUCKET || 'josephmatthos').trim();
 
-  if (!region || !keyId || !applicationKey) {
-    const err = new Error('Backblaze B2 não configurado.');
+  if (!keyId || !applicationKey) {
+    const err = new Error('Cloudflare R2 não configurado (B2_KEY_ID e B2_APPLICATION_KEY).');
     err.code = 'NOT_CONFIGURED';
     throw err;
   }
 
+  // A URL pública do R2 (ex: https://pub-xxx.r2.dev ou cdn.josephmatthos.com.br)
   const publicBaseUrl = String(
-    process.env.B2_PUBLIC_BASE_URL || `https://f005.backblazeb2.com/file`
+    process.env.B2_PUBLIC_BASE_URL || ''
   ).trim().replace(/\/+$/, '');
 
+  // Endpoint do R2 (ex: https://<account_id>.r2.cloudflarestorage.com)
   const endpoint = String(
-    process.env.B2_ENDPOINT || `https://s3.${region}.backblazeb2.com`
+    process.env.B2_ENDPOINT || ''
   ).trim().replace(/\/+$/, '');
+
+  if (!endpoint) {
+    const err = new Error('B2_ENDPOINT não configurado para o R2.');
+    err.code = 'NOT_CONFIGURED';
+    throw err;
+  }
 
   _configCache = { region, keyId, applicationKey, mediaBucket, publicBaseUrl, endpoint };
   return _configCache;
@@ -53,9 +58,9 @@ function getS3Client() {
   if (!client) {
     const config = getStorageConfig();
     client = new S3Client({
-      region: config.region,
+      region: config.region, // "auto" para R2
       endpoint: config.endpoint,
-      forcePathStyle: true,
+      // forcePathStyle: false (R2 usa virtual-hosted-style)
       credentials: { accessKeyId: config.keyId, secretAccessKey: config.applicationKey }
     });
   }
@@ -69,12 +74,12 @@ function getPrefixForKind(kind) {
   switch (kind) {
     case 'image':
     case 'site-assets':
-      return String(process.env.B2_BUCKET_SITE_ASSETS || 'images').replace(/^\/|\/$/g, '');
+      return String(process.env.B2_BUCKET_SITE_ASSETS || 'assets/img').replace(/^\/|\/$/g, '');
     case 'audio-preview':
-      return String(process.env.B2_BUCKET_AUDIO_PREVIEW || 'preview').replace(/^\/|\/$/g, '');
+      return String(process.env.B2_BUCKET_AUDIO_PREVIEW || 'previews').replace(/^\/|\/$/g, '');
     case 'audio-full':
     case 'audio-premium':
-      return String(process.env.B2_BUCKET_AUDIO_PREMIUM || 'audio').replace(/^\/|\/$/g, '');
+      return String(process.env.B2_BUCKET_AUDIO_PREMIUM || 'premium').replace(/^\/|\/$/g, '');
     default:
       return null;
   }
@@ -138,21 +143,19 @@ function validateExtForKind(kind, filename) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// URL PÚBLICA
+// URL PÚBLICA (R2)
 // ─────────────────────────────────────────────────────────────
 function getPublicUrl(key) {
   if (!key) throw new Error('Caminho é obrigatório.');
   validateObjectKey(key);
 
-  const { publicBaseUrl, mediaBucket } = getStorageConfig();
-  const customImageUrl = String(process.env.B2_IMAGE_PUBLIC_URL || '').trim().replace(/\/+$/, '');
-  const imagePrefix = getPrefixForKind('image');
-
-  if (customImageUrl && key.startsWith(imagePrefix + '/')) {
-    return `${customImageUrl}/${encodeKey(key)}`;
+  const { publicBaseUrl } = getStorageConfig();
+  if (!publicBaseUrl) {
+    throw new Error('B2_PUBLIC_BASE_URL não configurado para o R2.');
   }
 
-  return `${publicBaseUrl}/${encodeURIComponent(mediaBucket)}/${encodeKey(key)}`;
+  // No R2, a URL pública é direta: https://pub-xxx.r2.dev/caminho/do/arquivo
+  return `${publicBaseUrl}/${encodeKey(key)}`;
 }
 
 function encodeKey(key) {
