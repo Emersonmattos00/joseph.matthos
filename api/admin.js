@@ -1,10 +1,9 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (Versão Final Absoluta)
+   api/admin.js — Painel administrativo (Versão Final Definitiva)
    ============================================================
    - Uploads e storage alinhados (Cloudflare R2)
    - Transações seguras em banco de dados
-   - Validação de segurança no payload do siteContent
-   - Reordenação de faixas com log detalhado de erros
+   - Reordenação de faixas com log detalhado de erros reais
    - Controle otimista de versão no siteContent
    ============================================================ */
 
@@ -120,12 +119,6 @@ module.exports = async function handler(req, res) {
   }
 
   const action = parseAction(req.query);
-
-  console.log('[admin] --- NOVA REQUISIÇÃO ---');
-  console.log('[admin] action:', action);
-  console.log('[admin] method:', method);
-  console.log('[admin] origin:', req.headers.origin);
-  console.log('[admin] cookies:', req.headers.cookie ? 'presente' : 'ausente');
   if (!action) return sendJson(res, 400, { ok: false, error: 'Ação inválida.' });
 
   const method = (req.method || 'GET').toUpperCase();
@@ -288,7 +281,6 @@ async function handlePutContent(req, res, session) {
     await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
     return sendJson(res, 200, { ok: true, version: newVersion });
   } catch (err) {
-    if (err.code === 'VERSION_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Conteúdo foi alterado por outra sessão. Recarregue.' });
     throw err;
   }
 }
@@ -680,7 +672,7 @@ async function handleDeleteTrack(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// REORDENAÇÃO DE FAIXAS (CORRIGIDA)
+// REORDENAÇÃO DE FAIXAS (SEM MASCARAR ERRO 409)
 // ─────────────────────────────────────────────────────────────
 async function handleReorderTracks(req, res, session) {
   const body = parseBody(req);
@@ -689,6 +681,8 @@ async function handleReorderTracks(req, res, session) {
 
   const albumId = String(body.albumId || req.query.albumId || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
+
+  console.log('[admin] reorder payload:', JSON.stringify({ albumId, order }));
 
   const ids = new Set();
   const numbers = new Set();
@@ -699,6 +693,7 @@ async function handleReorderTracks(req, res, session) {
     const n = Number(item?.track_number !== undefined ? item.track_number : item.trackNumber);
     
     if (!isUuid(id) || !Number.isInteger(n) || n < 1) {
+      console.error('[admin] reorder item inválido:', { item, id, n });
       return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
     }
     if (ids.has(id) || numbers.has(n)) {
@@ -713,31 +708,27 @@ async function handleReorderTracks(req, res, session) {
     await db.transaction(async (tx) => {
       const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
       if (rows.length !== ids.size) {
+        console.error('[admin] reorder: faixas não encontradas', { esperado: ids.size, encontrado: rows.length });
         const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
       }
       for (const r of rows) {
-        if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
+        if (r.albumId !== albumId) {
+          console.error('[admin] reorder: faixa de outro álbum', { trackId: r.id, albumId: r.albumId, esperado: albumId });
+          const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err;
+        }
       }
 
-      // ETAPA 1: Move todas as faixas para números temporários negativos
-      // Isso evita o conflito de unicidade (se existir) durante a atualização
-      for (let i = 0; i < normalizedOrder.length; i++) {
-        await tx.update(tracks)
-          .set({ trackNumber: -(i + 1) }) // -1, -2, -3...
-          .where(eq(tracks.id, normalizedOrder[i].id));
-      }
-
-      // ETAPA 2: Aplica a ordem final
       for (const item of normalizedOrder) {
-        await tx.update(tracks)
-          .set({ trackNumber: item.trackNumber })
-          .where(eq(tracks.id, item.id));
+        await tx.update(tracks).set({ trackNumber: item.trackNumber }).where(eq(tracks.id, item.id));
       }
     });
   } catch (err) {
-    console.error('[admin] reorder error:', err);
+    console.error('[admin] reorder error (detalhes):', JSON.stringify(err, null, 2));
+    
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
+    
+    // Retorna a mensagem REAL do erro, sem mascarar como 409
     return sendJson(res, 500, { ok: false, error: `Erro no banco: ${err.message}` });
   }
 
