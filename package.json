@@ -25,7 +25,7 @@
     "express": "^4.22.3",
     "howler": "^2.2.4",
     "jsonwebtoken": "^9.0.3",
-    "music-metadata": "^12.2.3",
+    "music-metadata": "^12.4.0",
     "resend": "^6.32.1",
     "sigv4-lite": "^1.0.1",
     "ws": "^8.22.2"
