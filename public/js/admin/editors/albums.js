@@ -461,13 +461,29 @@ function cleanupDrag(scope) {
 async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   try {
     reorderTableRows(tbody, order);
-    // Envia albumId e UUIDs (String)
-    const res = await apiFetch('track-order', { method: 'PATCH', body: { albumId, order } });
+    
+    // GARANTE que o albumId seja uma string válida
+    const payload = {
+      albumId: String(albumId),
+      order: order.map(item => ({
+        id: String(item.id),
+        track_number: Number(item.track_number)
+      }))
+    };
+    
+    console.log('[albums] enviando track-order:', payload); // LOG para debug
+
+    const res = await apiFetch('track-order', { 
+      method: 'PATCH', 
+      body: payload 
+    });
+    
     if (!res?.ok) throw new Error(res?.error || 'Falha ao reordenar.');
     toast('Ordem atualizada.', '✓');
     await loadTracksForAlbum(albumId);
     repaint();
   } catch (err) {
+    console.error('[albums] erro ao reordenar:', err);
     toast(err?.message || 'Falha ao reordenar.', '⚠');
     tbody.innerHTML = originalHtml;
     bindTrackDragDrop(scope);
