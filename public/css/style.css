@@ -6564,3 +6564,4 @@ body:has(.player-modal-overlay.open) {
 .playlist-track-item__info { flex: 1; }
 .playlist-track-item__title { color: #fff; font-size: 0.9rem; }
 .playlist-track-item__meta { color: #888; font-size: 0.75rem; }
+
