@@ -689,43 +689,55 @@ async function handleReorderTracks(req, res, session) {
   const albumId = String(body.albumId || req.query.albumId || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
 
-  // LOG PARA DEBUG: Vamos ver o que está chegando
-  console.log('[admin] reorder payload:', JSON.stringify({ albumId, order }));
-
-  // Validação
+  // Valida e normaliza a ordem
   const ids = new Set();
   const numbers = new Set();
+  const normalizedOrder = [];
+
   for (const item of order) {
     const id = String(item?.id || '');
-    const n = Number(item?.track_number);
+    // O frontend envia track_number (snake_case). O banco pode esperar trackNumber (camelCase).
+    // Vamos aceitar ambos.
+    const n = Number(item?.track_number !== undefined ? item.track_number : item.trackNumber);
+    
     if (!isUuid(id) || !Number.isInteger(n) || n < 1) {
-      console.error('[admin] reorder inválido:', { item, id, n });
+      console.error('[admin] reorder item inválido:', { item, id, n });
       return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
     }
-    if (ids.has(id) || numbers.has(n)) return sendJson(res, 400, { ok: false, error: 'Itens duplicados na ordem.' });
-    ids.add(id); numbers.add(n);
+    if (ids.has(id) || numbers.has(n)) {
+      return sendJson(res, 400, { ok: false, error: 'Itens duplicados na ordem.' });
+    }
+    ids.add(id); 
+    numbers.add(n);
+    normalizedOrder.push({ id, trackNumber: n });
   }
 
   try {
     await db.transaction(async (tx) => {
+      // 1. Valida se todas as faixas pertencem ao álbum
       const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
-      if (rows.length !== ids.size) { 
+      if (rows.length !== ids.size) {
         console.error('[admin] reorder: faixas não encontradas', { esperado: ids.size, encontrado: rows.length });
-        const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; 
+        const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
       }
       for (const r of rows) {
-        if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
+        if (r.albumId !== albumId) {
+          console.error('[admin] reorder: faixa de outro álbum', { trackId: r.id, albumId: r.albumId, esperado: albumId });
+          const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err;
+        }
       }
 
-      // Atualiza a ordem
-      for (const item of order) {
-        await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
+      // 2. Atualiza a ordem
+      for (const item of normalizedOrder) {
+        // Usa o nome da coluna do Drizzle (camelCase) e o valor normalizado
+        await tx.update(tracks).set({ trackNumber: item.trackNumber }).where(eq(tracks.id, item.id));
       }
     });
   } catch (err) {
     console.error('[admin] reorder error:', err);
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
+    // Se for um erro do Drizzle/Postgres, retorna a mensagem exata para o frontend
     return sendJson(res, 500, { ok: false, error: err.message || 'Erro ao reordenar.' });
   }
 
