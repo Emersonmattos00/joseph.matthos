@@ -462,7 +462,6 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   try {
     reorderTableRows(tbody, order);
     
-    // GARANTE que o albumId seja uma string válida
     const payload = {
       albumId: String(albumId),
       order: order.map(item => ({
@@ -471,7 +470,7 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
       }))
     };
     
-    console.log('[albums] enviando track-order:', payload); // LOG para debug
+    console.log('[albums] enviando track-order:', payload);
 
     const res = await apiFetch('track-order', { 
       method: 'PATCH', 
