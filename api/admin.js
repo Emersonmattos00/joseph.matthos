@@ -684,8 +684,6 @@ async function handleReorderTracks(req, res, session) {
   const albumId = String(body.albumId || req.query.albumId || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
 
-  console.log('[admin] reorder payload:', JSON.stringify({ albumId, order }));
-
   const ids = new Set();
   const numbers = new Set();
   const normalizedOrder = [];
@@ -695,7 +693,6 @@ async function handleReorderTracks(req, res, session) {
     const n = Number(item?.track_number !== undefined ? item.track_number : item.trackNumber);
     
     if (!isUuid(id) || !Number.isInteger(n) || n < 1) {
-      console.error('[admin] reorder item inválido:', { item, id, n });
       return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
     }
     if (ids.has(id) || numbers.has(n)) {
@@ -710,26 +707,31 @@ async function handleReorderTracks(req, res, session) {
     await db.transaction(async (tx) => {
       const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
       if (rows.length !== ids.size) {
-        console.error('[admin] reorder: faixas não encontradas', { esperado: ids.size, encontrado: rows.length });
         const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
       }
       for (const r of rows) {
-        if (r.albumId !== albumId) {
-          console.error('[admin] reorder: faixa de outro álbum', { trackId: r.id, albumId: r.albumId, esperado: albumId });
-          const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err;
-        }
+        if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
       }
 
+      // ETAPA 1: Move todas as faixas para números temporários negativos
+      // Isso evita o conflito de unicidade (se existir) durante a atualização
+      for (let i = 0; i < normalizedOrder.length; i++) {
+        await tx.update(tracks)
+          .set({ trackNumber: -(i + 1) }) // -1, -2, -3...
+          .where(eq(tracks.id, normalizedOrder[i].id));
+      }
+
+      // ETAPA 2: Aplica a ordem final
       for (const item of normalizedOrder) {
-        await tx.update(tracks).set({ trackNumber: item.trackNumber }).where(eq(tracks.id, item.id));
+        await tx.update(tracks)
+          .set({ trackNumber: item.trackNumber })
+          .where(eq(tracks.id, item.id));
       }
     });
   } catch (err) {
-    console.error('[admin] reorder error (detalhes):', JSON.stringify(err, null, 2));
-    
+    console.error('[admin] reorder error:', err);
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
-    
     return sendJson(res, 500, { ok: false, error: `Erro no banco: ${err.message}` });
   }
 
