@@ -125,6 +125,9 @@ let parsedLyrics = [];
 let currentLyricIndex = -1;
 let currentTrackMeta = null;
 
+// NOVO: Contexto de reprodução (álbum ou playlist)
+let currentPlaybackContext = null; 
+
 let shuffleEnabled = false;
 let repeatMode = 'off';
 
@@ -311,6 +314,15 @@ window.abrirPlaylist = async (playlistId) => {
       return;
     }
 
+    // Define o contexto de reprodução como a playlist
+    currentPlaybackContext = {
+      type: 'playlist',
+      id: playlist.id,
+      name: playlist.name,
+      coverUrl: playlist.coverUrl,
+      tracks: validTracks
+    };
+
     currentTrackMeta = { 
       ...currentTrackMeta, 
       albumTracks: validTracks,
@@ -328,7 +340,7 @@ window.abrirPlaylist = async (playlistId) => {
   }
 };
 
-// ─── EDITAR CAPA ───
+// ─── EDITAR CAPA (URL) ───
 window.editarCapaPlaylist = (playlistId) => {
   const playlists = getPlaylists();
   const playlist = playlists.find(p => p.id === playlistId);
@@ -421,6 +433,15 @@ window.abrirAlbum = async (albumId) => {
 
     const album = data.album;
     const tracks = data.tracks || []; 
+
+    // Define o contexto de reprodução como o álbum
+    currentPlaybackContext = {
+      type: 'album',
+      id: album.id,
+      name: album.title,
+      coverUrl: album.coverUrl,
+      tracks: tracks
+    };
 
     currentTrackMeta = { ...album, albumTracks: tracks };
     
@@ -617,7 +638,7 @@ function setupMediaSessionHandlers() {
 }
 
 // ─── INIT PLAYER ───
-async function initPlayer(trackId, autoplay = true, keepPlaylistContext = false) {
+async function initPlayer(trackId, autoplay = true, keepContext = false) {
   trackId = normalizeTrackId(trackId);
   if (!trackId) return;
 
@@ -626,7 +647,6 @@ async function initPlayer(trackId, autoplay = true, keepPlaylistContext = false)
   playerAbortController = new AbortController();
 
   currentTrackId = trackId;
-  currentTrackMeta = null;
   currentLyricIndex = -1;
   parsedLyrics = [];
 
@@ -644,11 +664,13 @@ async function initPlayer(trackId, autoplay = true, keepPlaylistContext = false)
     const meta = await res.json();
     if (!meta.ok) throw new Error(meta.error || 'Erro ao carregar faixa.');
 
+    // Atualiza a meta da música atual (para exibir no player)
     currentTrackMeta = meta;
 
     if (els.title) els.title.textContent = meta.title;
     if (els.artist) els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
 
+    // Exibe a capa do ÁLBUM original da música no player principal
     if (meta.coverUrl) {
       if (els.cover) els.cover.src = meta.coverUrl;
       if (els.container) els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
@@ -658,35 +680,53 @@ async function initPlayer(trackId, autoplay = true, keepPlaylistContext = false)
     if (els.miniTitle) els.miniTitle.textContent = meta.title;
     if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    // Carrega faixas do álbum (se não estiver mantendo contexto de playlist)
-    const albumId = meta.albumId;
-    if (albumId && !keepPlaylistContext) {
-      try {
-        const albumRes = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { signal: playerAbortController.signal });
-        const albumData = await albumRes.json();
-        
-        if (albumData.ok && albumData.album) {
-          const tracks = albumData.tracks || [];
+    // Se NÃO estivermos mantendo o contexto (ex: clique na playlist), carrega o álbum.
+    // Se ESTIVERMOS mantendo o contexto (next/prev dentro da playlist), NÃO recarrega o álbum.
+    if (!keepContext) {
+      const albumId = meta.albumId;
+      if (albumId) {
+        try {
+          const albumRes = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { signal: playerAbortController.signal });
+          const albumData = await albumRes.json();
           
-          if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${albumData.album.coverUrl}')`;
-          if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = albumData.album.title;
-          if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = albumData.album.artist || 'Joseph Matthos';
-          if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
+          if (albumData.ok && albumData.album) {
+            const tracks = albumData.tracks || [];
+            
+            if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${albumData.album.coverUrl}')`;
+            if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = albumData.album.title;
+            if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = albumData.album.artist || 'Joseph Matthos';
+            if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
 
-          currentTrackMeta = { ...meta, albumTracks: tracks };
+            currentPlaybackContext = {
+              type: 'album',
+              id: albumData.album.id,
+              name: albumData.album.title,
+              coverUrl: albumData.album.coverUrl,
+              tracks: tracks
+            };
+
+            // Atualiza o currentTrackMeta para ser o álbum (para a lista de faixas)
+            currentTrackMeta = { ...meta, albumTracks: tracks };
+          }
+        } catch (albumErr) {
+          if (albumErr.name !== 'AbortError') console.warn('[player] Falha ao carregar faixas do álbum:', albumErr);
         }
-      } catch (albumErr) {
-        if (albumErr.name !== 'AbortError') console.warn('[player] Falha ao carregar faixas do álbum:', albumErr);
+      }
+    } else {
+      // Mantendo contexto: usa o currentPlaybackContext atual (playlist)
+      if (currentPlaybackContext && currentPlaybackContext.type === 'playlist') {
+        currentTrackMeta = {
+           ...meta,
+           albumTracks: currentPlaybackContext.tracks,
+           id: currentPlaybackContext.id,
+           title: currentPlaybackContext.name,
+           artist: 'Sua Playlist',
+           coverUrl: currentPlaybackContext.coverUrl
+        };
       }
     }
 
-    // Se estiver mantendo contexto de playlist, usa o currentTrackMeta existente
-    if (keepPlaylistContext && currentTrackMeta?.albumTracks) {
-      renderPlayerTrackList(currentTrackMeta, trackId);
-    } else {
-      renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks || [] }, trackId);
-    }
-
+    renderPlayerTrackList(currentTrackMeta, trackId);
     updateMediaSessionMetadata(meta);
 
     // Áudio seguro
@@ -757,9 +797,9 @@ window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   history.replaceState(null, '', `/player.html?id=${encodeURIComponent(id)}`);
   
-  // Se estamos em uma playlist, mantemos o contexto
-  const isPlaylist = currentTrackMeta?.artist === 'Sua Playlist';
-  await initPlayer(id, true, isPlaylist);
+  // Se o contexto atual for uma playlist, mantemos ele ao trocar de faixa
+  const isPlaylistContext = currentPlaybackContext?.type === 'playlist';
+  await initPlayer(id, true, isPlaylistContext);
 };
 
 // ─── SHUFFLE E REPEAT ───
