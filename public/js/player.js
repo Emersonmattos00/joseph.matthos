@@ -61,7 +61,7 @@ function savePlaylists(playlists) {
 
 function createPlaylist(name) {
   const playlists = getPlaylists();
-  const newPlaylist = { id: Date.now().toString(), name, tracks: [] };
+  const newPlaylist = { id: Date.now().toString(), name, tracks: [], coverUrl: '' };
   playlists.push(newPlaylist);
   savePlaylists(playlists);
   return newPlaylist;
@@ -251,7 +251,7 @@ window.deletarPlaylist = (id) => {
   }
 };
 
-// ─── ABRIR PLAYLIST (Versão Corrigida) ───
+// ─── ABRIR PLAYLIST (como um álbum) ───
 window.abrirPlaylist = async (playlistId) => {
   const playlists = getPlaylists();
   const playlist = playlists.find(p => p.id === playlistId);
@@ -267,7 +267,28 @@ window.abrirPlaylist = async (playlistId) => {
   const list = document.getElementById('musicList');
   const header = document.getElementById('albumTracklistHeader');
   
-  if (header) header.style.display = 'none';
+  if (header) {
+    header.style.display = 'flex';
+    if (els.albumHeaderCover) {
+      els.albumHeaderCover.style.backgroundImage = playlist.coverUrl ? `url('${playlist.coverUrl}')` : 'none';
+      els.albumHeaderCover.style.backgroundColor = '#333';
+    }
+    if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = playlist.name;
+    if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = 'Sua Playlist';
+    if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${playlist.tracks.length} faixas`;
+
+    // Adiciona botão de editar capa
+    const oldBtn = header.querySelector('.btn-subscribe-header');
+    if (oldBtn) oldBtn.remove();
+    let editBtn = header.querySelector('.btn-edit-cover');
+    if (!editBtn) {
+      editBtn = document.createElement('button');
+      editBtn.className = 'btn-edit-cover';
+      editBtn.textContent = 'Editar Capa';
+      editBtn.onclick = () => window.editarCapaPlaylist(playlistId);
+      header.appendChild(editBtn);
+    }
+  }
   
   if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Carregando faixas da playlist...</p>';
 
@@ -295,7 +316,8 @@ window.abrirPlaylist = async (playlistId) => {
       albumTracks: validTracks,
       id: playlist.id,
       title: playlist.name,
-      artist: 'Playlist'
+      artist: 'Sua Playlist',
+      coverUrl: playlist.coverUrl || '/assets/img/tema.webp'
     };
 
     renderPlayerTrackList(currentTrackMeta, currentTrackId);
@@ -306,7 +328,22 @@ window.abrirPlaylist = async (playlistId) => {
   }
 };
 
-// ─── ADICIONAR À PLAYLIST (do menu de opções) ───
+// ─── EDITAR CAPA ───
+window.editarCapaPlaylist = (playlistId) => {
+  const playlists = getPlaylists();
+  const playlist = playlists.find(p => p.id === playlistId);
+  if (!playlist) return;
+
+  const novaCapa = prompt('Cole a URL da imagem de capa (ou deixe em branco para remover):', playlist.coverUrl || '');
+  if (novaCapa !== null) {
+    playlist.coverUrl = novaCapa.trim();
+    savePlaylists(playlists);
+    showToast('Capa atualizada!');
+    window.abrirPlaylist(playlistId);
+  }
+};
+
+// ─── ADICIONAR À PLAYLIST (menu de opções) ───
 window.abrirModalAdicionarPlaylist = (trackId) => {
   document.getElementById('playlistModalOverlay')?.remove();
 
@@ -365,7 +402,13 @@ window.criarPlaylistEAdicionar = (trackId) => {
 window.abrirAlbum = async (albumId) => {
   const header = document.getElementById('albumTracklistHeader');
   const list = document.getElementById('musicList');
-  if (header) header.style.display = 'flex';
+  if (header) {
+    header.style.display = 'flex';
+    const oldBtn = header.querySelector('.btn-edit-cover');
+    if (oldBtn) oldBtn.remove();
+    const subBtn = header.querySelector('.btn-subscribe-header');
+    if (subBtn) subBtn.style.display = 'block';
+  }
   if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Carregando faixas...</p>';
 
   switchTab('music');
@@ -539,7 +582,7 @@ function openOptionsMenu(track, meta, index, anchorEl) {
   });
 }
 
-// ─── MEDIA SESSION (NOTIFICAÇÕES) ───
+// ─── MEDIA SESSION ───
 function updateMediaSessionMetadata(meta) {
   if (!('mediaSession' in navigator)) return;
   const cover = meta.coverUrl || '/assets/img/tema.webp';
@@ -574,7 +617,7 @@ function setupMediaSessionHandlers() {
 }
 
 // ─── INIT PLAYER ───
-async function initPlayer(trackId, autoplay = true) {
+async function initPlayer(trackId, autoplay = true, keepPlaylistContext = false) {
   trackId = normalizeTrackId(trackId);
   if (!trackId) return;
 
@@ -615,9 +658,9 @@ async function initPlayer(trackId, autoplay = true) {
     if (els.miniTitle) els.miniTitle.textContent = meta.title;
     if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    // Carrega as faixas do álbum da música
+    // Carrega faixas do álbum (se não estiver mantendo contexto de playlist)
     const albumId = meta.albumId;
-    if (albumId) {
+    if (albumId && !keepPlaylistContext) {
       try {
         const albumRes = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { signal: playerAbortController.signal });
         const albumData = await albumRes.json();
@@ -637,7 +680,13 @@ async function initPlayer(trackId, autoplay = true) {
       }
     }
 
-    renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks || [] }, trackId);
+    // Se estiver mantendo contexto de playlist, usa o currentTrackMeta existente
+    if (keepPlaylistContext && currentTrackMeta?.albumTracks) {
+      renderPlayerTrackList(currentTrackMeta, trackId);
+    } else {
+      renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks || [] }, trackId);
+    }
+
     updateMediaSessionMetadata(meta);
 
     // Áudio seguro
@@ -707,7 +756,10 @@ window.playerPrev = () => {
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   history.replaceState(null, '', `/player.html?id=${encodeURIComponent(id)}`);
-  await initPlayer(id);
+  
+  // Se estamos em uma playlist, mantemos o contexto
+  const isPlaylist = currentTrackMeta?.artist === 'Sua Playlist';
+  await initPlayer(id, true, isPlaylist);
 };
 
 // ─── SHUFFLE E REPEAT ───
