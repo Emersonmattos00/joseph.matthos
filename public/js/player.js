@@ -1,4 +1,4 @@
-// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Sem Conflitos)
+// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Áudio Seguro)
 
 'use strict';
 
@@ -175,7 +175,7 @@ window.abrirAlbum = async (albumId) => {
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
-    const tracks = album.tracks || []; 
+    const tracks = data.tracks || []; 
 
     currentTrackMeta = { ...album, albumTracks: tracks };
     
@@ -413,15 +413,34 @@ async function initPlayer(trackId, autoplay = true) {
     if (els.miniTitle) els.miniTitle.textContent = meta.title;
     if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
+    // ─── CORREÇÃO: Carrega as faixas do álbum da música ───
+    const albumId = meta.albumId;
+    if (albumId) {
+      try {
+        const albumRes = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { signal: playerAbortController.signal });
+        const albumData = await albumRes.json();
+        
+        if (albumData.ok && albumData.album) {
+          const tracks = albumData.tracks || [];
+          
+          if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${albumData.album.coverUrl}')`;
+          if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = albumData.album.title;
+          if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = albumData.album.artist || 'Joseph Matthos';
+          if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
+
+          currentTrackMeta = { ...meta, albumTracks: tracks };
+        }
+      } catch (albumErr) {
+        if (albumErr.name !== 'AbortError') console.warn('[player] Falha ao carregar faixas do álbum:', albumErr);
+      }
+    }
+    // ─────────────────────────────────────────────────────────
+
+    renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks || [] }, trackId);
     updateMediaSessionMetadata(meta);
 
     // ─── LÓGICA DEFINITIVA DE ÁUDIO (BACKEND DECIDE) ───
-    // O backend /api/stream verifica assinatura e entrega:
-    // - Para assinantes: link assinado do R2 (áudio completo)
-    // - Para não assinantes: link do CDN (prévia de 30s)
     audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
-
     console.log('[Player] Solicitando áudio seguro para o backend:', audio.src);
     
     audio.load();
