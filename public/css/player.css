@@ -214,3 +214,142 @@ body.immersive-mode .player-footer-actions { transform: translateY(150%) !import
 .music-item .play-hover { display: none; }
 .music-item:hover .num-text { display: none; }
 .music-item:hover .play-hover { display: inline; color: #36c761; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   NOVOS ESTILOS: ABAS, MINI-PLAYER, MENU DE OPÇÕES
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── ABA ÁLBUNS ─── */
+#tab-albums {
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  background: rgba(11, 10, 12, 0.98);
+  z-index: 10;
+}
+
+.albums-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+}
+
+.album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.album-card:hover { transform: scale(1.02); }
+
+.album-card img {
+  width: 100%;
+  aspect-ratio: 1/1;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.album-info .album-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.album-info .album-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* ─── MINI-PLAYER ─── */
+.mini-player {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 70px;
+  background: rgba(20, 20, 20, 0.95);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 9999;
+}
+
+.mini-cover {
+  width: 50px;
+  height: 50px;
+  border-radius: 8px;
+  background: #333;
+  background-size: cover;
+  background-position: center;
+  margin-right: 10px;
+}
+
+.mini-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.mini-title {
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.9rem;
+}
+
+.mini-artist {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.mini-controls {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.mini-controls button {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+
+/* ─── MENU DE OPÇÕES (3 PONTINHOS) ─── */
+.track-options-menu {
+  position: fixed;
+  background: #1e1e1e;
+  border-radius: 12px;
+  padding: 8px 0;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.track-options-menu button {
+  background: none;
+  border: none;
+  color: #fff;
+  padding: 12px 20px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.2s;
+}
+
+.track-options-menu button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Garante que o mini-player não cubra o conteúdo da lista */
+.music-list { padding-bottom: 80px; }
+#tab-lyrics .lyrics-scroll { padding-bottom: 80px; }

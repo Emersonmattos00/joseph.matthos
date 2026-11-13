@@ -1,23 +1,8 @@
-// js/player.js — versão final com ISRC/UPC
+// js/player.js — versão final com abas, mini-player e menu de opções
 
 'use strict';
 
-/* ============================================================
-   CORREÇÕES E ADIÇÕES APLICADAS:
-   - Exibe o ISRC ao lado de cada faixa
-   - Exibe o UPC no cabeçalho do álbum
-   - Modo Rádio (?radio=true) com fila do sessionStorage
-   - Concorrência: AbortController + requestId
-   - onerror: distingue 403 de erro real via format=json
-   - Ended: Respeita o modo rádio, repeat e shuffle
-   - Media Session: comandos play/pause corretos e setPositionState
-   - Ícones de ação na listagem de músicas (curtir, compartilhar, alugar, mais opções)
-   - Hover: ícone de Play aparece no lugar do número ao passar o mouse
-   - Toast elegante para feedback visual
-   - Compartilhamento nativo (navigator.share)
-   - Pré-carregamento de imagens para eliminar delay na exibição
-   ============================================================ */
-
+// ─── UTILS ───
 function formatTime(secs) {
   const value = Number(secs);
   if (!Number.isFinite(value) || value < 0) return '0:00';
@@ -60,15 +45,6 @@ function preloadImage(url) {
   img.src = url;
   imageCache.set(url, img);
 }
-function preloadAlbumCover(meta) {
-  if (!meta || !meta.coverUrl) return;
-  preloadImage(meta.coverUrl);
-  if (Array.isArray(meta.albumTracks)) {
-    meta.albumTracks.forEach(track => {
-      if (track.coverUrl) preloadImage(track.coverUrl);
-    });
-  }
-}
 
 const els = {
   container: document.getElementById('playerContainer'),
@@ -77,8 +53,6 @@ const els = {
   artist: document.getElementById('playerArtist'),
   playBtn: document.getElementById('playBtn'),
   playIcon: document.getElementById('playIcon'),
-  nextBtn: document.getElementById('nextBtn'),
-  prevBtn: document.getElementById('prevBtn'),
   progressBar: document.getElementById('progressBar'),
   progressFill: document.getElementById('progressFill'),
   currentTime: document.getElementById('currentTime'),
@@ -92,7 +66,14 @@ const els = {
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   shuffleBtn: document.getElementById('shuffleBtn'),
   repeatBtn: document.getElementById('repeatBtn'),
-  radioBadge: document.getElementById('radioBadge')
+  // Mini-Player
+  miniPlayer: document.getElementById('miniPlayer'),
+  miniCover: document.getElementById('miniCover'),
+  miniTitle: document.getElementById('miniTitle'),
+  miniArtist: document.getElementById('miniArtist'),
+  miniPlayBtn: document.getElementById('miniPlayBtn'),
+  miniNextBtn: document.getElementById('miniNextBtn'),
+  miniOpenBtn: document.getElementById('miniOpenBtn')
 };
 
 const audio = new Audio();
@@ -114,6 +95,7 @@ let isRadioMode = false;
 let radioQueue = [];
 let radioIndex = -1;
 
+// ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
 const tabContents = document.querySelectorAll('.tab-content');
 
@@ -130,7 +112,18 @@ function updateTabState(activeTab) {
     c.classList.toggle('active', on);
     c.hidden = !on;
   });
-  document.body.classList.remove('immersive-mode');
+
+  // Mostra o Mini-Player se não estiver na aba do player e houver áudio carregado
+  if (tabName !== 'player' && currentTrackId) {
+    els.miniPlayer.style.display = 'flex';
+  } else {
+    els.miniPlayer.style.display = 'none';
+  }
+
+  // Se abrir a aba de álbuns, carrega a lista
+  if (tabName === 'albums') {
+    renderAlbumsTab();
+  }
 }
 
 tabs.forEach(tab => tab.addEventListener('click', () => updateTabState(tab)));
@@ -140,90 +133,221 @@ function switchTab(tabName) {
   if (btn) updateTabState(btn);
 }
 
-function toggleModoImersivo() {
-  const playerTab = document.getElementById('tab-player');
-  if (!playerTab || !playerTab.classList.contains('active')) return;
-  if (!audio.src || audio.paused) return;
-  document.body.classList.toggle('immersive-mode');
+// ─── MINI-PLAYER ───
+els.miniPlayBtn?.addEventListener('click', () => window.playerPlay());
+els.miniNextBtn?.addEventListener('click', () => window.playerNext());
+els.miniOpenBtn?.addEventListener('click', () => switchTab('player'));
+
+// ─── RENDERIZAR ÁLBUNS ───
+async function renderAlbumsTab() {
+  const container = document.getElementById('albumsList');
+  if (!container) return;
+
+  container.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Carregando álbuns...</p>';
+
+  try {
+    const res = await fetch('/api/public?t=' + Date.now());
+    const data = await res.json();
+    if (!data.ok || !data.albums) throw new Error('Falha ao carregar álbuns.');
+
+    container.innerHTML = data.albums.map(album => `
+      <div class="album-card" onclick="window.abrirAlbum('${album.id}')">
+        <img src="${album.coverUrl}" alt="${album.title}">
+        <div class="album-info">
+          <div class="album-title">${esc(album.title)}</div>
+          <div class="album-sub">${album.tracks?.length || 0} faixas</div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
+  }
 }
 
-let touchStartTime = 0;
-if (els.container) {
-  els.container.addEventListener('touchstart', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    touchStartTime = Date.now();
-  }, { passive: true });
-  els.container.addEventListener('touchend', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    if (touchStartTime > 0 && Date.now() - touchStartTime < 300) toggleModoImersivo();
-    touchStartTime = 0;
-  }, { passive: true });
-  els.container.addEventListener('click', (e) => {
-    if (e.target.closest('button, .mobile-tab, .progress-bar')) return;
-    if (touchStartTime > 0) return;
-    toggleModoImersivo();
+// ─── ABRIR ÁLBUM (mostra as faixas do álbum) ───
+window.abrirAlbum = async (albumId) => {
+  const header = document.getElementById('albumTracklistHeader');
+  const list = document.getElementById('musicList');
+  if (header) header.style.display = 'flex';
+  if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Carregando faixas...</p>';
+
+  switchTab('music');
+
+  try {
+    const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`);
+    const data = await res.json();
+    if (!data.ok || !data.album) throw new Error('Álbum não encontrado.');
+
+    const album = data.album;
+    const tracks = album.tracks || [];
+
+    if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${album.coverUrl}')`;
+    if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = album.title;
+    if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = album.artist || 'Joseph Matthos';
+    if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
+
+    renderPlayerTrackList({ ...album, albumTracks: tracks }, currentTrackId);
+  } catch (err) {
+    if (list) list.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
+  }
+};
+
+// ─── LISTA DE MÚSICAS ───
+function renderPlayerTrackList(meta, currentId) {
+  if (!els.musicList) return;
+  els.musicList.replaceChildren();
+  if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
+
+  meta.albumTracks.forEach((track, index) => {
+    const item = document.createElement('div');
+    item.className = 'music-item';
+    if (String(track.id) === String(currentId)) item.classList.add('playing');
+
+    const number = document.createElement('div');
+    number.className = 'music-item-number';
+    number.innerHTML = `<span class="num-text">${index + 1}</span><span class="play-hover">▶</span>`;
+
+    const info = document.createElement('div');
+    info.className = 'music-item-info';
+
+    const title = document.createElement('div');
+    title.className = 'music-item-title';
+    title.textContent = track.title || 'Faixa sem título';
+
+    const artist = document.createElement('div');
+    artist.className = 'music-item-artist';
+    artist.innerHTML = `${esc(meta.artist || 'Joseph Matthos')} ${track.isrc ? `<span class="music-item-isrc">ISRC: ${esc(track.isrc)}</span>` : ''}`;
+
+    info.append(title, artist);
+
+    const actions = document.createElement('div');
+    actions.className = 'music-item-actions';
+
+    // Botão Curtir
+    const likeBtn = document.createElement('button');
+    likeBtn.className = 'action-icon';
+    const key = `jm_like_${meta.id}_${index}`;
+    const isLiked = localStorage.getItem(key) === '1';
+    likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    likeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const liked = localStorage.getItem(key) === '1';
+      localStorage.setItem(key, liked ? '0' : '1');
+      likeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${!liked ? '#1DB954' : 'none'}" stroke="${!liked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+      showToast(liked ? 'Removido dos curtidos' : 'Curtido!');
+    });
+    actions.appendChild(likeBtn);
+
+    // Botão Compartilhar
+    const shareBtn = document.createElement('button');
+    shareBtn.className = 'action-icon';
+    shareBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
+    shareBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+      const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}"`, url };
+      if (navigator.share) { try { await navigator.share(shareData); return; } catch {} }
+      try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); }
+      catch { showToast('Não foi possível compartilhar.'); }
+    });
+    actions.appendChild(shareBtn);
+
+    // Botão Alugar
+    const rentBtn = document.createElement('button');
+    rentBtn.className = 'action-icon';
+    rentBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>`;
+    rentBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
+    });
+    actions.appendChild(rentBtn);
+
+    // Duração
+    const duration = document.createElement('span');
+    duration.className = 'music-item-duration';
+    duration.textContent = track.locked ? '🔒' : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
+    actions.appendChild(duration);
+
+    // Menu 3 pontinhos
+    const moreBtn = document.createElement('button');
+    moreBtn.className = 'action-icon';
+    moreBtn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
+    moreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openOptionsMenu(track, meta, index, moreBtn);
+    });
+    actions.appendChild(moreBtn);
+
+    item.append(number, info, actions);
+    item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
+    els.musicList.appendChild(item);
   });
 }
 
-if (els.fullscreenBtn) {
-  els.fullscreenBtn.addEventListener('click', () => {
-    if (!document.fullscreenElement) {
-      const el = els.container;
-      if (el.requestFullscreen) el.requestFullscreen();
-      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen();
+// ─── MENU DE OPÇÕES (3 pontinhos) ───
+function openOptionsMenu(track, meta, index, anchorEl) {
+  document.getElementById('trackOptionsMenu')?.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'trackOptionsMenu';
+  menu.className = 'track-options-menu';
+  const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+
+  menu.innerHTML = `
+    <button data-action="share">🔗 Compartilhar</button>
+    <button data-action="copy">📋 Copiar link</button>
+    <button data-action="rent">🎫 Alugar</button>
+    <button data-action="playlist">➕ Adicionar à playlist</button>
+    <button data-action="go-album">💿 Ir para o álbum</button>
+    <button data-action="go-tracks">🎵 Ir para as faixas</button>
+  `;
+
+  document.body.appendChild(menu);
+
+  const rect = anchorEl.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const top = Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 10);
+  const left = Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 10);
+  menu.style.top = `${Math.max(10, top)}px`;
+  menu.style.left = `${Math.max(10, left)}px`;
+
+  const close = (ev) => {
+    if (!menu.contains(ev.target) && ev.target !== anchorEl) {
+      menu.remove();
+      document.removeEventListener('click', close);
     }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+
+  menu.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const action = btn.dataset.action;
+
+      if (action === 'share') {
+        if (navigator.share) { try { await navigator.share({ title: `${track.title} — Joseph Matthos`, url }); } catch {} }
+        else { await navigator.clipboard.writeText(url); showToast('Link copiado!'); }
+      } else if (action === 'copy') {
+        await navigator.clipboard.writeText(url);
+        showToast('Link copiado!');
+      } else if (action === 'rent') {
+        window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
+      } else if (action === 'playlist') {
+        showToast('Funcionalidade de playlist em breve.');
+      } else if (action === 'go-album') {
+        switchTab('albums');
+        window.abrirAlbum(meta.id);
+      } else if (action === 'go-tracks') {
+        switchTab('music');
+        renderPlayerTrackList(meta, track.id);
+      }
+
+      menu.remove();
+    });
   });
 }
 
-async function fetchMetadata(trackId, signal) {
-  const r = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, {
-    method: 'GET', credentials: 'same-origin', cache: 'no-store', signal
-  });
-  if (!r.ok) {
-    if (r.status === 404) throw new Error('Faixa não encontrada ou não publicada.');
-    throw new Error(`Erro ao consultar faixa: HTTP ${r.status}`);
-  }
-  const data = await r.json();
-  if (!data || typeof data !== 'object' || !data.id || !data.title || !Array.isArray(data.albumTracks)) {
-    throw new Error('A API retornou dados incompletos.');
-  }
-  return data;
-}
-
-async function diagnoseStreamError(trackId) {
-  try {
-    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}&format=json&t=${Date.now()}`, {
-      method: 'GET', credentials: 'same-origin', cache: 'no-store'
-    });
-    if (r.ok) return { status: 'ok' };
-    if (r.status === 403) return { status: 'forbidden', message: 'Prévia indisponível. Assine ou alugue.' };
-    if (r.status === 404) return { status: 'not_found', message: 'Áudio não configurado.' };
-    if (r.status === 503) return { status: 'unavailable', message: 'Serviço temporariamente indisponível.' };
-    if (r.status === 429) return { status: 'rate_limited', message: 'Muitas requisições.' };
-    return { status: 'error', message: `Erro HTTP ${r.status}.` };
-  } catch {
-    return { status: 'network', message: 'Verifique sua conexão.' };
-  }
-}
-
-function updateMediaSessionPosition() {
-  if (!('mediaSession' in navigator)) return;
-  if (typeof navigator.mediaSession.setPositionState !== 'function') return;
-  if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
-  if (!Number.isFinite(audio.currentTime)) return;
-  try {
-    navigator.mediaSession.setPositionState({
-      duration: audio.duration,
-      playbackRate: audio.playbackRate,
-      position: Math.min(audio.currentTime, audio.duration)
-    });
-  } catch (error) {
-    console.warn('[player] Posição Media Session:', error);
-  }
-}
-
+// ─── MEDIA SESSION (NOTIFICAÇÕES) ───
 function updateMediaSessionMetadata(meta) {
   if (!('mediaSession' in navigator)) return;
   const cover = meta.coverUrl || '/assets/img/tema.webp';
@@ -244,247 +368,23 @@ function updateMediaSessionMetadata(meta) {
 
 function setupMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
-  const actionHandlers = [
-    ['play', () => {
-      if (audio.src && audio.paused) audio.play().catch(err => console.warn('[player] Falha ao reproduzir:', err));
-      else if (!audio.src && currentTrackId) initPlayer(currentTrackId, true);
-    }],
+  const handlers = [
+    ['play', () => { if (audio.src && audio.paused) audio.play().catch(() => {}); }],
     ['pause', () => { if (!audio.paused) audio.pause(); }],
     ['nexttrack', () => window.playerNext()],
     ['previoustrack', () => window.playerPrev()],
-    ['seekbackward', (details) => {
-      if (!Number.isFinite(audio.duration)) return;
-      const offset = Number(details?.seekOffset) || 10;
-      audio.currentTime = Math.max(0, audio.currentTime - offset);
-    }],
-    ['seekforward', (details) => {
-      if (!Number.isFinite(audio.duration)) return;
-      const offset = Number(details?.seekOffset) || 10;
-      audio.currentTime = Math.min(audio.duration, audio.currentTime + offset);
-    }],
-    ['seekto', (details) => {
-      if (!Number.isFinite(audio.duration)) return;
-      const seekTime = Number(details?.seekTime);
-      if (!Number.isFinite(seekTime)) return;
-      const target = Math.max(0, Math.min(audio.duration, seekTime));
-      if (details?.fastSeek && typeof audio.fastSeek === 'function') audio.fastSeek(target);
-      else audio.currentTime = target;
-    }]
+    ['seekbackward', (d) => { audio.currentTime = Math.max(0, audio.currentTime - (Number(d.seekOffset) || 10)); }],
+    ['seekforward', (d) => { audio.currentTime = Math.min(audio.duration, audio.currentTime + (Number(d.seekOffset) || 10)); }]
   ];
-  for (const [action, handler] of actionHandlers) {
-    try { navigator.mediaSession.setActionHandler(action, handler); } 
-    catch (e) { console.warn(`Ação "${action}" não suportada.`); }
+  for (const [action, handler] of handlers) {
+    try { navigator.mediaSession.setActionHandler(action, handler); } catch {}
   }
 }
 
-function renderLyrics(lyricsArray) {
-  if (!els.lyricsContent) return;
-  if (!Array.isArray(lyricsArray) || !lyricsArray.length) {
-    els.lyricsContent.innerHTML = '<p class="lyrics-empty">Esta faixa não tem letra cadastrada.</p>';
-    parsedLyrics = [];
-    currentLyricIndex = -1;
-    return;
-  }
-  const validLyrics = lyricsArray.filter(line => line && typeof line === 'object' && Number.isFinite(Number(line.time)) && typeof line.text === 'string');
-  if (!validLyrics.length) {
-    els.lyricsContent.innerHTML = '<p class="lyrics-empty">Letra indisponível.</p>';
-    parsedLyrics = [];
-    currentLyricIndex = -1;
-    return;
-  }
-  els.lyricsContent.innerHTML = validLyrics.map((line, index) => `
-    <button class="lyric-line" data-index="${index}" data-time="${Number(line.time)}" type="button">${esc(line.text)}</button>
-  `).join('');
-
-  parsedLyrics = validLyrics.map((line, index) => ({
-    time: Number(line.time),
-    element: els.lyricsContent.querySelector(`[data-index="${index}"]`)
-  }));
-  currentLyricIndex = -1;
-
-  els.lyricsContent.querySelectorAll('.lyric-line').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (!audio.src || !Number.isFinite(audio.duration)) return;
-      audio.currentTime = Number(btn.dataset.time);
-      highlightLyricLine(Number(btn.dataset.index));
-    });
-  });
-}
-
-function highlightLyricLine(index) {
-  if (index < 0 || index >= parsedLyrics.length) return;
-  parsedLyrics.forEach((l, i) => l.element.classList.toggle('active', i === index));
-  const active = parsedLyrics[index].element;
-  if (active && document.getElementById('tab-lyrics').classList.contains('active')) {
-    const container = els.lyricsContent;
-    const scrollPos = active.offsetTop - (container.clientHeight / 2) + (active.clientHeight / 2);
-    container.scrollTo({ top: scrollPos, behavior: 'smooth' });
-  }
-}
-
-function syncLyrics() {
-  if (!audio || !parsedLyrics.length) return;
-  const seek = audio.currentTime || 0;
-  let newIndex = -1;
-  for (let i = 0; i < parsedLyrics.length; i++) {
-    if (parsedLyrics[i].time <= seek) newIndex = i;
-    else break;
-  }
-  if (newIndex !== currentLyricIndex) {
-    currentLyricIndex = newIndex;
-    highlightLyricLine(newIndex);
-  }
-}
-
-// ─── LISTA DE MÚSICAS (AGORA COM ISRC E UPC) ───
-function renderPlayerTrackList(meta, currentId) {
-  if (!els.musicList) return;
-  els.musicList.replaceChildren();
-  
-  // Adiciona o UPC ao cabeçalho do álbum
-  if (els.albumHeaderCount) {
-    els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
-  }
-  
-  meta.albumTracks.forEach((track, index) => {
-    const item = document.createElement('div');
-    item.className = 'music-item';
-    if (String(track.id) === String(currentId)) item.classList.add('playing');
-
-    const number = document.createElement('div');
-    number.className = 'music-item-number';
-    number.innerHTML = `<span class="num-text">${index + 1}</span><span class="play-hover">▶</span>`;
-
-    const info = document.createElement('div');
-    info.className = 'music-item-info';
-
-    const title = document.createElement('div');
-    title.className = 'music-item-title';
-    title.textContent = track.title || 'Faixa sem título';
-
-    const artist = document.createElement('div');
-    artist.className = 'music-item-artist';
-    // Adiciona o ISRC ao lado do artista
-    artist.innerHTML = `${esc(meta.artist || 'Joseph Matthos')} ${track.isrc ? `<span style="font-size:0.7rem;color:var(--text-dim);margin-left:0.5rem;">ISRC: ${esc(track.isrc)}</span>` : ''}`;
-
-    info.append(title, artist);
-
-    const actions = document.createElement('div');
-    actions.className = 'music-item-actions';
-
-    const atualizarIconeCurtir = (btn) => {
-      const key = `jm_like_${meta.id}_${index}`;
-      const isLiked = localStorage.getItem(key) === '1';
-      btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-    };
-
-    const likeBtn = document.createElement('button');
-    likeBtn.className = 'action-icon';
-    atualizarIconeCurtir(likeBtn);
-    likeBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const key = `jm_like_${meta.id}_${index}`;
-      const liked = localStorage.getItem(key) === '1';
-      localStorage.setItem(key, liked ? '0' : '1');
-      atualizarIconeCurtir(likeBtn);
-      showToast(liked ? 'Removido dos curtidos' : 'Curtido!');
-    });
-    actions.appendChild(likeBtn);
-
-    const shareBtn = document.createElement('button');
-    shareBtn.className = 'action-icon';
-    shareBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
-    shareBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-      const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}" de Joseph Matthos`, url };
-      if (navigator.share) { try { await navigator.share(shareData); return; } catch {} }
-      try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); }
-      catch { showToast('Não foi possível compartilhar.'); }
-    });
-    actions.appendChild(shareBtn);
-
-    const rentBtn = document.createElement('button');
-    rentBtn.className = 'action-icon';
-    rentBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/><path d="M9 10v4M15 10v4"/></svg>';
-    rentBtn.title = 'Alugar';
-    rentBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
-    });
-    actions.appendChild(rentBtn);
-
-    const duration = document.createElement('span');
-    duration.className = 'music-item-duration';
-    duration.textContent = track.locked ? '🔒' : track.durationSeconds ? formatTime(track.durationSeconds) : '--:--';
-    actions.appendChild(duration);
-
-    const moreBtn = document.createElement('button');
-    moreBtn.className = 'action-icon';
-    moreBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>';
-    moreBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.getElementById('playerTrackMenu')?.remove();
-      const menu = document.createElement('div');
-      menu.id = 'playerTrackMenu';
-      menu.className = 'track-more-menu';
-      menu.style.position = 'fixed';
-      menu.style.zIndex = '9999';
-      const liked = localStorage.getItem(`jm_like_${meta.id}_${index}`) === '1';
-      menu.innerHTML = `
-        <button type="button" data-menu-action="like"><svg viewBox="0 0 24 24" width="16" height="16" fill="${liked ? '#1DB954' : 'none'}" stroke="${liked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg><span>${liked ? 'Remover dos curtidos' : 'Curtir'}</span></button>
-        <button type="button" data-menu-action="share"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg><span>Compartilhar</span></button>
-        <button type="button" data-menu-action="rent"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2zm-4.42 4.8L13 14.62V17h-2v-6h2v2.38l2.58-2.18 1.42 1.4L14.42 15l2.58 2.4-1.42 1.4z"/></svg><span>Alugar</span></button>
-        <button type="button" data-menu-action="copy-link"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg><span>Copiar link</span></button>
-      `;
-      document.body.appendChild(menu);
-      const rect = moreBtn.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
-      const top = Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 10);
-      const left = Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 10);
-      menu.style.top = `${Math.max(10, top)}px`;
-      menu.style.left = `${Math.max(10, left)}px`;
-      const close = (ev) => { if (!menu.contains(ev.target) && ev.target !== moreBtn) { menu.remove(); document.removeEventListener('click', close); } };
-      setTimeout(() => document.addEventListener('click', close), 0);
-      menu.querySelectorAll('[data-menu-action]').forEach((btn) => {
-        btn.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          const act = btn.dataset.menuAction;
-          if (act === 'like') {
-            const key = `jm_like_${meta.id}_${index}`;
-            const isLiked = localStorage.getItem(key) === '1';
-            localStorage.setItem(key, isLiked ? '0' : '1');
-            atualizarIconeCurtir(likeBtn);
-            showToast(isLiked ? 'Removido dos curtidos' : 'Curtido!');
-          } else if (act === 'share') {
-            const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-            const shareData = { title: `${track.title} — Joseph Matthos`, text: `Ouça "${track.title}" de Joseph Matthos`, url };
-            if (navigator.share) { try { await navigator.share(shareData); return; } catch {} }
-            try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); }
-            catch { showToast('Não foi possível compartilhar.'); }
-          } else if (act === 'rent') {
-            window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
-          } else if (act === 'copy-link') {
-            const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-            await navigator.clipboard.writeText(url);
-            showToast('Link copiado!');
-          }
-          menu.remove();
-        });
-      });
-    });
-    actions.appendChild(moreBtn);
-
-    item.append(number, info, actions);
-    item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id)));
-    els.musicList.appendChild(item);
-  });
-}
-
-// ─── INIT ───
+// ─── INIT PLAYER ───
 async function initPlayer(trackId, autoplay = true) {
   trackId = normalizeTrackId(trackId);
-  if (!trackId) { if (els.title) els.title.textContent = 'Nenhuma faixa selecionada'; return; }
+  if (!trackId) return;
 
   const requestId = ++playerRequestId;
   if (playerAbortController) { try { playerAbortController.abort(); } catch {} }
@@ -496,356 +396,137 @@ async function initPlayer(trackId, autoplay = true) {
   parsedLyrics = [];
 
   clearInterval(updateInterval);
-  document.body.classList.remove('immersive-mode');
 
   audio.pause();
   audio.removeAttribute('src');
   audio.load();
 
-  if (els.title) els.title.textContent = 'Carregando faixa...';
+  if (els.title) els.title.textContent = 'Carregando...';
   if (els.artist) els.artist.textContent = 'Joseph Matthos';
-  if (els.currentTime) els.currentTime.textContent = '0:00';
-  if (els.duration) els.duration.textContent = '0:00';
-  if (els.progressFill) els.progressFill.style.width = '0%';
-  if (els.progressBar) els.progressBar.setAttribute('aria-valuenow', '0');
 
   try {
-    const meta = await fetchMetadata(trackId, playerAbortController.signal);
-    if (requestId !== playerRequestId) return;
-    currentTrackMeta = meta;
+    const res = await fetch(`/api/public?track=${encodeURIComponent(trackId)}`, { signal: playerAbortController.signal });
+    const meta = await res.json();
+    if (!meta.ok) throw new Error(meta.error || 'Erro ao carregar faixa.');
 
-    preloadAlbumCover(meta);
+    currentTrackMeta = meta;
 
     if (els.title) els.title.textContent = meta.title;
     if (els.artist) els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
 
     if (meta.coverUrl) {
-      if (els.cover) {
-        if (els.cover.tagName === 'IMG') els.cover.src = meta.coverUrl;
-        else els.cover.style.backgroundImage = `url('${meta.coverUrl}')`;
-      }
+      if (els.cover) els.cover.src = meta.coverUrl;
       if (els.container) els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
-      if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${meta.coverUrl}')`;
-    } else {
-      if (els.cover) {
-        if (els.cover.tagName === 'IMG') els.cover.removeAttribute('src');
-        else els.cover.style.backgroundImage = '';
-      }
-      if (els.container) els.container.style.removeProperty('--player-bg');
-      if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = '';
     }
 
-    renderLyrics(meta.lyrics);
-    if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = meta.albumTitle || 'Álbum';
-    if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = meta.artist || 'Joseph Matthos';
-    if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
+    // Mini-player
+    if (els.miniCover) els.miniCover.style.backgroundImage = `url('${meta.coverUrl}')`;
+    if (els.miniTitle) els.miniTitle.textContent = meta.title;
+    if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    renderPlayerTrackList(meta, trackId);
+    // Lista de faixas do álbum
+    renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
+
+    // Media Session
     updateMediaSessionMetadata(meta);
 
-    const streamUrl = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
-    audio.src = streamUrl;
+    // Carrega o áudio
+    audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
     audio.load();
 
-    if (requestId !== playerRequestId) return;
-
     if (autoplay) {
-      try { await audio.play(); }
-      catch (err) {
-        if (requestId !== playerRequestId) return;
-        if (err?.name === 'NotAllowedError') showToast('Toque em reproduzir para iniciar a música.');
-        else if (err?.name !== 'AbortError') { console.warn('[player] Falha na reprodução:', err); showToast('Não foi possível iniciar o áudio. Tente novamente.'); }
+      try { await audio.play(); } catch (err) {
+        if (err.name === 'NotAllowedError') showToast('Toque em play para iniciar.');
       }
     }
-  } catch (error) {
-    if (error.name === 'AbortError') return;
-    if (requestId !== playerRequestId) return;
-    console.error('[player] Erro ao carregar faixa:', error);
-    currentTrackMeta = null;
-    currentTrackId = null;
-    if (els.title) els.title.textContent = 'Não foi possível carregar a faixa';
-    if (els.artist) els.artist.textContent = error.message || 'Tente novamente.';
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.error('[player] Erro:', err);
+    if (els.title) els.title.textContent = 'Erro ao carregar';
+    if (els.artist) els.artist.textContent = err.message;
   }
 }
 
-function bindAudioEvents() {
-  audio.addEventListener('play', () => {
-    if (els.playIcon) els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-    clearInterval(updateInterval);
-    updateInterval = setInterval(() => {
-      const seek = audio.currentTime || 0;
-      const duration = audio.duration || 0;
-      const percent = duration > 0 && Number.isFinite(duration) ? Math.min(100, (seek / duration) * 100) : 0;
-      if (els.progressFill) els.progressFill.style.width = `${percent}%`;
-      if (els.progressBar) {
-        els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
-        els.progressBar.setAttribute('aria-valuetext', `${formatTime(seek)} de ${formatTime(duration)}`);
-      }
-      if (els.currentTime) els.currentTime.textContent = formatTime(seek);
-      syncLyrics();
-    }, 250);
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-  });
-
-  audio.addEventListener('pause', () => {
-    if (els.playIcon) els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-    clearInterval(updateInterval);
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-  });
-
-  audio.addEventListener('loadedmetadata', () => {
-    if (els.duration) els.duration.textContent = formatTime(audio.duration);
-    updateMediaSessionPosition();
-  });
-
-  audio.addEventListener('timeupdate', updateMediaSessionPosition);
-  audio.addEventListener('seeked', updateMediaSessionPosition);
-  audio.addEventListener('ratechange', updateMediaSessionPosition);
-
-  audio.addEventListener('error', async () => {
-    const error = audio.error;
-    console.error('[player] Erro no áudio:', { code: error?.code, message: error?.message, source: audio.currentSrc });
-    if (!currentTrackId) return;
-    const trackId = currentTrackId;
-
-    if (error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-      if (els.title) els.title.textContent = 'Erro ao carregar áudio';
-      if (els.artist) els.artist.textContent = 'Verificando disponibilidade...';
-      const diag = await diagnoseStreamError(trackId);
-      if (trackId !== currentTrackId) return;
-
-      if (diag.status === 'forbidden') { if (els.title) els.title.textContent = 'Prévia indisponível'; if (els.artist) els.artist.textContent = 'Assine o Premium ou alugue para ouvir esta faixa.'; }
-      else if (diag.status === 'not_found') { if (els.title) els.title.textContent = 'Áudio não configurado'; if (els.artist) els.artist.textContent = 'Esta faixa ainda não tem arquivo de áudio.'; }
-      else if (diag.status === 'ok') { if (els.title) els.title.textContent = 'Formato não suportado'; if (els.artist) els.artist.textContent = 'O navegador não consegue reproduzir este arquivo.'; }
-      else { if (els.title) els.title.textContent = 'Erro ao carregar áudio'; if (els.artist) els.artist.textContent = diag.message || 'Tente novamente.'; }
-    } else if (error?.code === MediaError.MEDIA_ERR_NETWORK) {
-      if (els.title) els.title.textContent = 'Erro de rede';
-      if (els.artist) els.artist.textContent = 'Verifique sua conexão ou tente novamente.';
-    } else if (error?.code === MediaError.MEDIA_ERR_DECODE) {
-      if (els.title) els.title.textContent = 'Arquivo corrompido';
-      if (els.artist) els.artist.textContent = 'Não foi possível decodificar o áudio.';
-    } else {
-      if (els.title) els.title.textContent = 'Erro ao carregar áudio';
-      if (els.artist) els.artist.textContent = 'Tente novamente.';
-    }
-  });
-
-  audio.addEventListener('ended', () => {
-    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
-
-    if (isRadioMode) {
-      if (!radioQueue.length) { showToast('A rádio não possui mais faixas.'); return; }
-      const nextIndex = (radioIndex + 1) % radioQueue.length;
-      playRadioIndex(nextIndex);
-      return;
-    }
-
-    if (repeatMode === 'one') {
-      audio.currentTime = 0;
-      audio.play().catch(error => { console.error('[player] Erro ao repetir faixa:', error); showToast('Não foi possível repetir a música.'); });
-      return;
-    }
-
-    if (!currentTrackMeta?.albumTracks) return;
-    const tracks = currentTrackMeta.albumTracks;
-    const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
-    if (index < 0) return;
-
-    let nextIndex;
-    if (shuffleEnabled) nextIndex = getRandomTrackIndex(tracks, index);
-    else if (index < tracks.length - 1) nextIndex = index + 1;
-    else if (repeatMode === 'all') nextIndex = 0;
-    else return;
-
-    const next = tracks[nextIndex];
-    if (next?.id) window.tocarMusicaDaLista(String(next.id));
-  });
-}
-
-function getRandomTrackIndex(tracks, currentIndex) {
-  if (!Array.isArray(tracks) || tracks.length <= 1) return currentIndex;
-  let nextIndex;
-  do { nextIndex = Math.floor(Math.random() * tracks.length); } while (nextIndex === currentIndex);
-  return nextIndex;
-}
-
-if (els.progressBar) {
-  els.progressBar.addEventListener('keydown', (e) => {
-    if (!audio.duration || !Number.isFinite(audio.duration)) return;
-    const step = 5;
-    let newTime = audio.currentTime;
-    switch (e.key) {
-      case 'ArrowLeft':  newTime -= step; break;
-      case 'ArrowRight': newTime += step; break;
-      case 'Home':       newTime = 0; break;
-      case 'End':        newTime = audio.duration; break;
-      default: return;
-    }
-    e.preventDefault();
-    audio.currentTime = Math.max(0, Math.min(audio.duration, newTime));
-  });
-}
-
+// ─── CONTROLES ───
 window.playerPlay = () => {
-  if (!audio.src) {
-    if (currentTrackId) initPlayer(currentTrackId, true);
-    return;
-  }
-  if (audio.paused) audio.play().catch(err => console.error('[player] play() falhou:', err));
+  if (!audio.src) { if (currentTrackId) initPlayer(currentTrackId); return; }
+  if (audio.paused) audio.play().catch(() => {});
   else audio.pause();
 };
 
-function loadRadioQueue() {
-  try {
-    const raw = sessionStorage.getItem('radio_queue');
-    if (!raw) return { queue: [], index: 0 };
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error('Formato de fila inválido.');
-    const queue = parsed
-      .filter(item => item && item.trackId != null && item.albumId != null && String(item.trackId).trim() !== '')
-      .map(item => ({ albumId: String(item.albumId), trackId: String(item.trackId), trackIndex: item.trackIndex ?? null }));
-    const storedIndex = Number(sessionStorage.getItem('radio_index'));
-    const index = Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < queue.length ? storedIndex : 0;
-    return { queue, index };
-  } catch (error) {
-    console.error('[player] Erro na fila da rádio:', error);
-    return { queue: [], index: 0 };
-  }
-}
-
-function saveRadioIndex() {
-  try { sessionStorage.setItem('radio_index', String(radioIndex)); }
-  catch (error) { console.warn('[player] Não foi possível salvar índice da rádio:', error); }
-}
-
-function playRadioIndex(index) {
-  if (!Array.isArray(radioQueue) || !radioQueue.length) { showToast('A fila da rádio está vazia.'); return false; }
-  if (!Number.isInteger(index) || index < 0 || index >= radioQueue.length) return false;
-  const track = radioQueue[index];
-  if (!track?.trackId) { showToast('Faixa inválida na fila da rádio.'); return false; }
-  radioIndex = index;
-  saveRadioIndex();
-  window.tocarMusicaDaLista(String(track.trackId));
-  return true;
-}
-
 window.playerNext = () => {
-  if (isRadioMode) {
-    if (!radioQueue.length) return;
-    const nextIndex = (radioIndex + 1) % radioQueue.length;
-    playRadioIndex(nextIndex);
-    return;
-  }
-
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
-  if (!tracks.length) return;
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
-
-  const nextIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index < tracks.length - 1 ? index + 1 : 0);
-  const next = tracks[nextIndex];
+  const next = tracks[(index + 1) % tracks.length];
   if (next?.id) window.tocarMusicaDaLista(String(next.id));
 };
 
 window.playerPrev = () => {
-  if (isRadioMode) {
-    if (!radioQueue.length) return;
-    const previousIndex = (radioIndex - 1 + radioQueue.length) % radioQueue.length;
-    playRadioIndex(previousIndex);
-    return;
-  }
-
-  if (!currentTrackMeta?.albumTracks) return;
   if (audio.currentTime > 3) { audio.currentTime = 0; return; }
+  if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
-  if (!tracks.length) return;
   const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
   if (index < 0) return;
-
-  const prevIndex = shuffleEnabled ? getRandomTrackIndex(tracks, index) : (index > 0 ? index - 1 : tracks.length - 1);
-  const prev = tracks[prevIndex];
+  const prev = tracks[(index - 1 + tracks.length) % tracks.length];
   if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
 };
 
-if (els.progressBar) {
-  els.progressBar.addEventListener('click', (e) => {
-    if (!audio.duration || !Number.isFinite(audio.duration)) return;
-    const rect = els.progressBar.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    audio.currentTime = audio.duration * Math.max(0, Math.min(1, pos));
-  });
-}
-
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
-  const safeId = String(id);
-  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(safeId)}${isRadioMode ? '&radio=true' : ''}`);
+  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(id)}`);
   switchTab('player');
-  if (currentTrackMeta && currentTrackMeta.albumTracks) {
-    const track = currentTrackMeta.albumTracks.find(t => String(t.id) === safeId);
-    if (track && track.coverUrl) preloadImage(track.coverUrl);
-  }
-  await initPlayer(safeId);
+  await initPlayer(id);
 };
 
-if (els.shuffleBtn) {
-  els.shuffleBtn.addEventListener('click', () => {
-    if (isRadioMode) return;
-    shuffleEnabled = !shuffleEnabled;
-    els.shuffleBtn.setAttribute('aria-pressed', String(shuffleEnabled));
-    els.shuffleBtn.classList.toggle('active', shuffleEnabled);
+// ─── EVENTOS DE ÁUDIO ───
+function bindAudioEvents() {
+  audio.addEventListener('play', () => {
+    if (els.playIcon) els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
+    if (els.miniPlayBtn) els.miniPlayBtn.textContent = '⏸';
+    clearInterval(updateInterval);
+    updateInterval = setInterval(() => {
+      const seek = audio.currentTime || 0;
+      const duration = audio.duration || 0;
+      const percent = duration > 0 ? Math.min(100, (seek / duration) * 100) : 0;
+      if (els.progressFill) els.progressFill.style.width = `${percent}%`;
+      if (els.currentTime) els.currentTime.textContent = formatTime(seek);
+      if (els.duration) els.duration.textContent = formatTime(duration);
+    }, 250);
+  });
+
+  audio.addEventListener('pause', () => {
+    if (els.playIcon) els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+    if (els.miniPlayBtn) els.miniPlayBtn.textContent = '▶';
+    clearInterval(updateInterval);
+  });
+
+  audio.addEventListener('loadedmetadata', () => {
+    if (els.duration) els.duration.textContent = formatTime(audio.duration);
+  });
+
+  audio.addEventListener('ended', () => {
+    if (repeatMode === 'one') {
+      audio.currentTime = 0;
+      audio.play();
+    } else {
+      window.playerNext();
+    }
   });
 }
 
-if (els.repeatBtn) {
-  els.repeatBtn.addEventListener('click', () => {
-    if (isRadioMode) return;
-    const order = ['off', 'all', 'one'];
-    repeatMode = order[(order.indexOf(repeatMode) + 1) % order.length];
-    els.repeatBtn.setAttribute('aria-pressed', String(repeatMode !== 'off'));
-    els.repeatBtn.classList.toggle('active', repeatMode !== 'off');
-    els.repeatBtn.dataset.mode = repeatMode;
-    els.repeatBtn.setAttribute('aria-label',
-      repeatMode === 'off' ? 'Repetir: desligado' :
-      repeatMode === 'all' ? 'Repetir: todas' : 'Repetir: uma'
-    );
-  });
-}
-
-window.abrirModalAssinatura = () => { window.location.href = '/#planos'; };
-window.abrirModalAluguel = () => { if (!currentTrackId) return; window.location.href = `/?rent=${encodeURIComponent(currentTrackId)}`; };
-
+// ─── BOOT ───
 window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
   setupMediaSessionHandlers();
 
   const params = new URLSearchParams(window.location.search);
-  isRadioMode = params.get('radio') === 'true';
   const trackId = params.get('id');
 
-  if (isRadioMode) {
-    if (els.radioBadge) els.radioBadge.style.display = 'flex';
-    if (els.shuffleBtn) els.shuffleBtn.style.display = 'none';
-    if (els.repeatBtn) els.repeatBtn.style.display = 'none';
-
-    const { queue, index } = loadRadioQueue();
-    radioQueue = queue;
-    radioIndex = index;
-
-    if (!radioQueue.length) { if (els.title) els.title.textContent = 'Fila da rádio vazia'; return; }
-
-    const initialTrack = trackId || radioQueue[radioIndex]?.trackId;
-    if (initialTrack) await initPlayer(initialTrack);
-    return;
+  if (trackId) {
+    await initPlayer(trackId);
+  } else {
+    if (els.title) els.title.textContent = 'Nenhuma faixa selecionada';
   }
-
-  if (!trackId) { if (els.title) els.title.textContent = 'Nenhuma faixa selecionada'; return; }
-  await initPlayer(trackId);
-});
-
-window.addEventListener('popstate', () => {
-  const params = new URLSearchParams(window.location.search);
-  const trackId = params.get('id');
-  if (trackId && trackId !== currentTrackId) initPlayer(trackId);
 });
