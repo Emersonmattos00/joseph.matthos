@@ -261,9 +261,51 @@ window.abrirPlaylist = async (playlistId) => {
     return;
   }
 
-  const firstTrackId = playlist.tracks[0];
-  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(firstTrackId)}`);
-  await initPlayer(firstTrackId);
+  switchTab('music');
+
+  const list = document.getElementById('musicList');
+  const header = document.getElementById('albumTracklistHeader');
+  
+  if (header) header.style.display = 'none'; // Esconde o header do álbum
+  
+  if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Carregando faixas da playlist...</p>';
+
+  try {
+    // Busca os metadados de todas as músicas da playlist
+    const trackPromises = playlist.tracks.map(id => 
+      fetch(`/api/public?track=${encodeURIComponent(id)}`).then(r => r.json())
+    );
+    const results = await Promise.all(trackPromises);
+    
+    const validTracks = results.filter(r => r.ok).map(r => ({
+      id: r.id,
+      title: r.title,
+      artist: r.artist || 'Joseph Matthos',
+      albumTitle: r.albumTitle,
+      durationSeconds: r.durationSeconds
+    }));
+
+    if (validTracks.length === 0) {
+      if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Não foi possível carregar as faixas desta playlist.</p>';
+      return;
+    }
+
+    // Atualiza o currentTrackMeta para que as funções de Next/Prev funcionem
+    currentTrackMeta = { 
+      ...currentTrackMeta, 
+      albumTracks: validTracks,
+      id: playlist.id,
+      title: playlist.name,
+      artist: 'Playlist'
+    };
+
+    // Renderiza a lista
+    renderPlayerTrackList(currentTrackMeta, currentTrackId);
+
+  } catch (err) {
+    if (list) list.innerHTML = `<p style="color:var(--danger);text-align:center;">Erro ao carregar a playlist.</p>`;
+    console.error('[Playlist] Erro:', err);
+  }
 };
 
 // ─── ADICIONAR À PLAYLIST (do menu de opções) ───
