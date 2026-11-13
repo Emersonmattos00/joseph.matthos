@@ -21,10 +21,7 @@ const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
-const CDN_BASE = String(
-  process.env.CDN_BASE_URL ||
-  'https://josephmatthos-cdn.emerson-mattos00.workers.dev'
-).trim().replace(/\/+$/, '');
+const CDN_BASE = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
