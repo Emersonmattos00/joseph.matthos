@@ -109,14 +109,32 @@ function updateTabState(activeTab) {
     c.hidden = !on;
   });
 
+  // Mini-player
   if (tabName !== 'player' && currentTrackId) {
     els.miniPlayer.style.display = 'flex';
   } else {
     els.miniPlayer.style.display = 'none';
   }
 
+  // Se abrir a aba de Álbuns, carrega a lista de álbuns
   if (tabName === 'albums') {
     renderAlbumsTab();
+  }
+
+  // CORREÇÃO: Se abrir a aba de Músicas, mostra as faixas do álbum atual
+  // (Não tenta buscar na API, usa o que já está carregado)
+  if (tabName === 'music' && currentTrackMeta) {
+    const header = document.getElementById('albumTracklistHeader');
+    if (header) header.style.display = 'flex';
+    
+    // Atualiza o cabeçalho do álbum
+    if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${currentTrackMeta.coverUrl}')`;
+    if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = currentTrackMeta.albumTitle;
+    if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = currentTrackMeta.artist || 'Joseph Matthos';
+    if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${currentTrackMeta.albumTracks.length} faixas`;
+    
+    // Renderiza a lista de faixas
+    renderPlayerTrackList(currentTrackMeta, currentTrackId);
   }
 }
 
