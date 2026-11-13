@@ -12,29 +12,22 @@
 <body class="player-page">
 
   <div class="music-player--fullscreen" id="playerContainer">
-
-    <!-- CABEÇALHO -->
     <header class="player-top" id="playerHeader">
       <button class="player-icon-btn" type="button" onclick="window.location.href='/'">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
-
       <nav class="mobile-tabs" role="tablist">
         <button class="mobile-tab active" data-tab="player" id="tab-button-player">Player</button>
         <button class="mobile-tab" data-tab="albums" id="tab-button-albums">Álbuns</button>
         <button class="mobile-tab" data-tab="music" id="tab-button-music">Músicas</button>
         <button class="mobile-tab" data-tab="lyrics" id="tab-button-lyrics">Letra</button>
       </nav>
-
       <button class="player-icon-btn" id="fullscreenBtn" type="button" title="Tela cheia">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
       </button>
     </header>
 
-    <!-- CONTEÚDO -->
     <main class="player-grid" id="playerContent">
-
-      <!-- ABA PLAYER -->
       <section class="tab-content active" id="tab-player" role="tabpanel">
         <div class="player-col--cover">
           <div class="player-cover-wrap">
@@ -65,12 +58,10 @@
         </div>
       </section>
 
-      <!-- ABA ÁLBUNS -->
       <section class="tab-content" id="tab-albums" role="tabpanel" hidden>
         <div class="albums-list" id="albumsList"></div>
       </section>
 
-      <!-- ABA MÚSICAS -->
       <section class="tab-content" id="tab-music" role="tabpanel" hidden>
         <div class="album-tracklist-header" id="albumTracklistHeader" style="display: none;">
           <div class="album-tracklist-cover" id="albumHeaderCover"></div>
@@ -85,17 +76,14 @@
         <div class="music-list" id="musicList"></div>
       </section>
 
-      <!-- ABA LETRA -->
       <section class="tab-content" id="tab-lyrics" role="tabpanel" hidden>
         <div class="lyrics-scroll" id="lyricsContent">
           <p class="lyrics-empty">Nenhuma letra sincronizada.</p>
         </div>
       </section>
-
     </main>
   </div>
 
-  <!-- MINI-PLAYER -->
   <div id="miniPlayer" class="mini-player" style="display: none;">
     <div class="mini-cover" id="miniCover"></div>
     <div class="mini-info">
