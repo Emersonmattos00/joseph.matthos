@@ -310,10 +310,7 @@ function openOptionsMenu(track, meta, index, anchorEl) {
     <button data-action="share">🔗 Compartilhar</button>
     <button data-action="copy">📋 Copiar link</button>
     <button data-action="rent">🎫 Alugar</button>
-    <button data-action="playlist">➕ Adicionar à playlist</button>
-    <button data-action="go-album">💿 Ir para o álbum</button>
-    <button data-action="go-tracks">🎵 Ir para as faixas</button>
-  `;
+    <button data-action="playlist">➕ Adicionar à playlist</button>  `;
 
   document.body.appendChild(menu);
 
@@ -484,7 +481,7 @@ window.playerPrev = () => {
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   history.replaceState(null, '', `/player.html?id=${encodeURIComponent(id)}`);
-  switchTab('player');
+  // REMOVIDO: switchTab('player'); <-- Isso forçava a mudança de aba
   await initPlayer(id);
 };
 
