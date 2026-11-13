@@ -271,3 +271,47 @@ body.player-page {
 .music-item .play-hover { display: none; }
 .music-item:hover .num-text { display: none; }
 .music-item:hover .play-hover { display: inline; color: #36c761; }
+
+/* ─── ABA ÁLBUNS ─── */
+#tab-albums {
+  padding: 1rem 1.5rem;
+  overflow-y: auto;
+  background: rgba(11, 10, 12, 0.98);
+  z-index: 10;
+}
+
+.albums-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+}
+
+.album-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.album-card:hover { transform: scale(1.02); }
+
+.album-card img {
+  width: 100%;
+  aspect-ratio: 1/1;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.album-info .album-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.album-info .album-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}

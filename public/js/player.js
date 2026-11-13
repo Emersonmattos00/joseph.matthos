@@ -66,7 +66,6 @@ const els = {
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   shuffleBtn: document.getElementById('shuffleBtn'),
   repeatBtn: document.getElementById('repeatBtn'),
-  // Mini-Player
   miniPlayer: document.getElementById('miniPlayer'),
   miniCover: document.getElementById('miniCover'),
   miniTitle: document.getElementById('miniTitle'),
@@ -142,7 +141,6 @@ async function renderAlbumsTab() {
   container.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Carregando álbuns...</p>';
 
   try {
-    // Busca a lista completa de álbuns
     const res = await fetch('/api/public?t=' + Date.now());
     const data = await res.json();
     if (!data.ok || !data.albums) throw new Error('Falha ao carregar álbuns.');
@@ -171,7 +169,6 @@ window.abrirAlbum = async (albumId) => {
   switchTab('music');
 
   try {
-    // A API pública espera o parâmetro "album" para buscar as faixas
     const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`);
     const data = await res.json();
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
