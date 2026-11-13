@@ -171,10 +171,12 @@ window.abrirAlbum = async (albumId) => {
   try {
     const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { cache: 'no-store' });
     const data = await res.json();
+    
+    // Se o backend retornar a lista de faixas, renderiza
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
-    const tracks = album.tracks || [];
+    const tracks = album.tracks || []; // Garante que tracks seja um array
 
     currentTrackMeta = { ...album, albumTracks: tracks };
     
@@ -183,6 +185,13 @@ window.abrirAlbum = async (albumId) => {
     if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = album.artist || 'Joseph Matthos';
     if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
 
+    // Se não houver faixas, avisa na tela
+    if (tracks.length === 0) {
+      if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Este álbum ainda não tem faixas cadastradas no banco de dados.</p>';
+      return;
+    }
+
+    // Renderiza a lista normalmente
     renderPlayerTrackList(currentTrackMeta, currentTrackId);
   } catch (err) {
     if (list) list.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
