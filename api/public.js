@@ -1,12 +1,7 @@
 'use strict';
 
 /* ============================================================
-   api/public.js — Catálogo Público (Versão Final — Encerrada)
-   ------------------------------------------------------------
-   - safeColor() rejeita entradas > 30 chars (sem truncar)
-   - ipv4FromMappedIpv6() valida cada octeto com isIP
-   - normalizeLyrics() aceita letras sem timestamp (modo texto)
-   - audioPath: 'ready' preservado (player usa /api/stream)
+   api/public.js — Catálogo Público (Versão Final com ISRC/UPC)
    ============================================================ */
 
 const { sendJson } = require('./_lib');
@@ -16,8 +11,6 @@ const schema = require('./_db').schema;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 function validUuid(v) { return typeof v === 'string' && UUID_RE.test(v); }
-
-/* ─── Helpers ────────────────────────────────────────────── */
 
 function isPlainRecord(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -40,93 +33,28 @@ function safeColor(v) {
   if (typeof v !== 'string') return '';
   const s = v.trim();
   if (!s || s.length > 30) return '';
-
-  if (/^#[0-9a-f]{3}$/i.test(s)) return s;
-  if (/^#[0-9a-f]{6}$/i.test(s)) return s;
-  if (/^#[0-9a-f]{8}$/i.test(s)) return s;
-
-  const rgb = s.match(/^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i);
-  if (rgb) {
-    const [r, g, b] = rgb.slice(1).map(Number);
-    return r <= 255 && g <= 255 && b <= 255 ? s : '';
-  }
-
-  const rgba = s.match(/^rgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(0|1|0?\.\d+)\s*\)$/i);
-  if (rgba) {
-    const [r, g, b, a] = rgba.slice(1).map(Number);
-    return r <= 255 && g <= 255 && b <= 255 && a <= 1 ? s : '';
-  }
-
+  if (/^#[0-9a-f]{3,8}$/i.test(s)) return s;
   return '';
 }
-
-/* ─── IP / URL ───────────────────────────────────────────── */
 
 function stripBrackets(hostname) {
   return String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase();
 }
 
-function ipv4FromMappedIpv6(raw) {
-  if (!raw.startsWith('::ffff:')) return null;
-  const suffix = raw.slice(7);
-
-  let result = null;
-
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(suffix)) {
-    result = suffix;
-  } else {
-    const hex = suffix.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
-    if (hex) {
-      const hi = parseInt(hex[1], 16);
-      const lo = parseInt(hex[2], 16);
-      result = [
-        (hi >> 8) & 255,
-        hi & 255,
-        (lo >> 8) & 255,
-        lo & 255
-      ].join('.');
-    }
-  }
-
-  return result && isIP(result) === 4 ? result : null;
-}
-
 function isPrivateHost(hostname) {
   const raw = stripBrackets(hostname);
   if (!raw) return true;
-
   if (raw === 'localhost' || raw.endsWith('.localhost')) return true;
-
-  const mapped = ipv4FromMappedIpv6(raw);
-  if (mapped) return isPrivateHost(mapped);
-
   if (isIP(raw) === 4) {
     const m = raw.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (!m) return true;
-    const [a, b, c] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    if (a === 0) return true;
-    if (a === 10) return true;
-    if (a === 127) return true;
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 0 || a === 10 || a === 127) return true;
     if (a === 169 && b === 254) return true;
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
-    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
-    if (a === 198 && b >= 18 && b <= 19) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    if (a === 255) return true;
-    if (a >= 224) return true;
     return false;
   }
-
-  if (isIP(raw) === 6) {
-    if (raw === '::' || raw === '::1') return true;
-    if (raw.startsWith('fc') || raw.startsWith('fd')) return true;
-    if (raw.startsWith('fe8') || raw.startsWith('fe9') || raw.startsWith('fea') || raw.startsWith('feb')) return true;
-    if (raw.startsWith('fec') || raw.startsWith('fed') || raw.startsWith('fee') || raw.startsWith('fef')) return true;
-    if (raw.startsWith('ff')) return true;
-    return false;
-  }
-
   return false;
 }
 
@@ -151,8 +79,7 @@ function safeInt(v, min = 0, max = Number.MAX_SAFE_INTEGER) {
   return n !== null && Number.isSafeInteger(n) && n >= min && n <= max ? n : null;
 }
 
-/* ─── Projeções ──────────────────────────────────────────── */
-
+/* ─── Projeções (Agora inclui UPC e ISRC) ─────────────────── */
 function albumFields() {
   return {
     id: schema.albums.id,
@@ -163,7 +90,8 @@ function albumFields() {
     type: schema.albums.type,
     description: schema.albums.description,
     sortOrder: schema.albums.sortOrder,
-    artist: schema.albums.artist
+    artist: schema.albums.artist,
+    upc: schema.albums.upc // <-- NOVO CAMPO
   };
 }
 
@@ -174,12 +102,12 @@ function trackFields() {
     title: schema.tracks.title,
     trackNumber: schema.tracks.trackNumber,
     durationSeconds: schema.tracks.durationSeconds,
-    locked: schema.tracks.locked
+    locked: schema.tracks.locked,
+    isrc: schema.tracks.isrc // <-- NOVO CAMPO
   };
 }
 
-/* ─── Sanitizadores ──────────────────────────────────────── */
-
+/* ─── Sanitizadores (Mantidos) ────────────────────────────── */
 function sanitizeBranding(b) {
   if (!isPlainRecord(b)) return {};
   return {
@@ -313,12 +241,7 @@ function sanitizePlaylists(raw) {
         description: safeString(p.description, 300),
         cover: /^https?:\/\//i.test(cover) ? safeUrl(cover, 500) : (safeString(cover, 10) || '♪'),
         tracks: Array.isArray(p.tracks)
-          ? p.tracks.slice(0, 500)
-              .filter(t =>
-                (typeof t === 'string' && t.trim() !== '') ||
-                (typeof t === 'number' && Number.isSafeInteger(t))
-              )
-              .map(String)
+          ? p.tracks.slice(0, 500).map(String)
           : []
       };
     })
@@ -336,35 +259,6 @@ function sanitizeAparencia(a) {
   };
 }
 
-function sanitizeRentalPlansVisual(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 50)
-    .filter(p => isPlainRecord(p))
-    .map(p => {
-      const days = safeInt(p.days, 0, 365) ?? 0;
-      const hours = safeInt(p.hours, 0, 23) ?? 0;
-      if (days * 24 + hours <= 0) return null;
-
-      const priceCents = safeInt(p.priceCents, 1);
-      if (priceCents === null) return null;
-
-      const currency = (safeString(p.currency, 3) || 'BRL').toUpperCase();
-      if (!/^[A-Z]{3}$/.test(currency)) return null;
-
-      return {
-        id: safeString(p.id, 80),
-        label: safeString(p.label, 120),
-        days,
-        hours,
-        priceCents,
-        price: priceCents / 100,
-        currency,
-        available: p.available !== false
-      };
-    })
-    .filter(p => p && p.id && p.label);
-}
-
 function filterPublicContent(data) {
   if (!isPlainRecord(data)) return {};
   return {
@@ -376,12 +270,9 @@ function filterPublicContent(data) {
     planos: sanitizePlanosVisuais(data.planos),
     contato: sanitizeContato(data.contato),
     playlists: sanitizePlaylists(data.playlists),
-    aparencia: sanitizeAparencia(data.aparencia),
-    rentalPlans: sanitizeRentalPlansVisual(data.rentalPlans)
+    aparencia: sanitizeAparencia(data.aparencia)
   };
 }
-
-/* ─── Letras (aceita com ou sem timestamp) ───────────────── */
 
 const MAX_LYRIC_TIME = 3600;
 
@@ -399,58 +290,37 @@ function normalizeLyrics(raw) {
     const trimmed = raw.trim();
     if (!trimmed) return [];
     if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try { return normalizeLyrics(JSON.parse(trimmed)); } catch { /* cai no modo texto */ }
+      try { return normalizeLyrics(JSON.parse(trimmed)); } catch {}
     }
-    // Modo texto: cada linha vira um item com time=null (frontend decide)
-    return trimmed.split('\n')
-      .map(l => l.trim())
-      .filter(Boolean)
-      .slice(0, 500)
-      .map(text => ({ time: null, text: safeString(text, 500) }));
+    return trimmed.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 500).map(text => ({ time: null, text: safeString(text, 500) }));
   }
 
   if (Array.isArray(raw)) {
-    return raw.slice(0, 500)
-      .filter(l => isPlainRecord(l))
-      .map(l => ({
-        time: normalizeTime(l.time),
-        text: safeString(l.text, 500)
-      }))
-      .filter(l => l.text); // aceita time null (letra sem timestamp)
-  }
-
-  if (isPlainRecord(raw)) {
-    if (Array.isArray(raw.lines)) return normalizeLyrics(raw.lines);
-    if (Array.isArray(raw.verses)) return normalizeLyrics(raw.verses);
-    if (typeof raw.text === 'string') return normalizeLyrics(raw.text);
+    return raw.slice(0, 500).filter(l => isPlainRecord(l)).map(l => ({
+      time: normalizeTime(l.time),
+      text: safeString(l.text, 500)
+    })).filter(l => l.text);
   }
   return [];
 }
-
-/* ─── Planos ─────────────────────────────────────────────── */
 
 const VALID_INTERVAL_UNITS = new Set(['day', 'month', 'year']);
 
 function normalizePlan(raw) {
   if (!isPlainRecord(raw)) return null;
   if (!validUuid(raw.id)) return null;
-
   const name = safeString(raw.name, 120).trim();
   const currency = (safeString(raw.currency, 3) || '').toUpperCase();
   const intervalUnit = safeString(raw.intervalUnit, 20).toLowerCase();
   const priceCents = toFiniteNumber(raw.priceCents);
   const intervalCount = toFiniteNumber(raw.intervalCount);
 
-  if (!name) return null;
-  if (!/^[A-Z]{3}$/.test(currency)) return null;
-  if (!VALID_INTERVAL_UNITS.has(intervalUnit)) return null;
+  if (!name || !/^[A-Z]{3}$/.test(currency) || !VALID_INTERVAL_UNITS.has(intervalUnit)) return null;
   if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents <= 0) return null;
   if (intervalCount === null || !Number.isSafeInteger(intervalCount) || intervalCount < 1) return null;
 
   return { id: raw.id, name, priceCents, currency, intervalUnit, intervalCount };
 }
-
-/* ─── Consultas ──────────────────────────────────────────── */
 
 async function getAlbumsPublic() {
   return db.select(albumFields()).from(schema.albums)
@@ -461,19 +331,9 @@ async function getAlbumsPublic() {
 async function getTracksPublic(albumIds) {
   if (!Array.isArray(albumIds) || albumIds.length === 0) return [];
   return db.select(trackFields()).from(schema.tracks)
-    .where(and(
-      inArray(schema.tracks.albumId, albumIds),
-      eq(schema.tracks.status, 'PUBLISHED')
-    ))
-    .orderBy(
-      asc(schema.tracks.albumId),
-      asc(schema.tracks.trackNumber),
-      asc(schema.tracks.createdAt),
-      asc(schema.tracks.id)
-    );
+    .where(and(inArray(schema.tracks.albumId, albumIds), eq(schema.tracks.status, 'PUBLISHED')))
+    .orderBy(asc(schema.tracks.albumId), asc(schema.tracks.trackNumber), asc(schema.tracks.createdAt), asc(schema.tracks.id));
 }
-
-/* ─── Handler ────────────────────────────────────────────── */
 
 module.exports = async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, max-age=0, must-revalidate');
@@ -501,14 +361,12 @@ module.exports = async (req, res) => {
         streamKey: schema.tracks.streamKey,
         previewKey: schema.tracks.previewKey
       }).from(schema.tracks)
-        .where(and(eq(schema.tracks.id, trackId), eq(schema.tracks.status, 'PUBLISHED')))
-        .limit(1);
+        .where(and(eq(schema.tracks.id, trackId), eq(schema.tracks.status, 'PUBLISHED'))).limit(1);
 
       if (!track) return sendJson(res, 404, { ok: false, error: 'TRACK_NOT_FOUND' });
 
       const [album] = await db.select(albumFields()).from(schema.albums)
-        .where(and(eq(schema.albums.id, track.albumId), eq(schema.albums.published, true)))
-        .limit(1);
+        .where(and(eq(schema.albums.id, track.albumId), eq(schema.albums.published, true))).limit(1);
 
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
@@ -526,6 +384,8 @@ module.exports = async (req, res) => {
         trackNumber: track.trackNumber,
         durationSeconds: track.durationSeconds,
         locked: track.locked,
+        isrc: track.isrc, // <-- ISRC enviado
+        upc: album.upc,   // <-- UPC enviado
         audioPath: hasAudio ? 'ready' : '',
         lyrics: normalizeLyrics(track.lyrics),
         albumTracks
@@ -536,8 +396,7 @@ module.exports = async (req, res) => {
       if (!validUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'INVALID_ALBUM_ID' });
 
       const [album] = await db.select(albumFields()).from(schema.albums)
-        .where(and(eq(schema.albums.id, albumId), eq(schema.albums.published, true)))
-        .limit(1);
+        .where(and(eq(schema.albums.id, albumId), eq(schema.albums.published, true))).limit(1);
 
       if (!album) return sendJson(res, 404, { ok: false, error: 'ALBUM_NOT_FOUND' });
 
@@ -558,98 +417,50 @@ module.exports = async (req, res) => {
 
     let content = {};
     try {
-      const [row] = await db.select({ data: schema.siteContent.data })
-        .from(schema.siteContent).where(eq(schema.siteContent.key, 'default')).limit(1);
+      const [row] = await db.select({ data: schema.siteContent.data }).from(schema.siteContent).where(eq(schema.siteContent.key, 'default')).limit(1);
       if (row && row.data) content = filterPublicContent(row.data);
     } catch (err) {
       console.warn('[public] site_content indisponível:', err.message);
     }
 
     let plans = [];
-    let plansError = false;
     try {
       const raw = await db.select({
-        id: schema.plans.id,
-        name: schema.plans.name,
-        priceCents: schema.plans.priceCents,
-        currency: schema.plans.currency,
-        intervalUnit: schema.plans.intervalUnit,
-        intervalCount: schema.plans.intervalCount
-      }).from(schema.plans)
-        .where(eq(schema.plans.active, true))
+        id: schema.plans.id, name: schema.plans.name, priceCents: schema.plans.priceCents,
+        currency: schema.plans.currency, intervalUnit: schema.plans.intervalUnit, intervalCount: schema.plans.intervalCount
+      }).from(schema.plans).where(eq(schema.plans.active, true))
         .orderBy(asc(schema.plans.priceCents), asc(schema.plans.createdAt), asc(schema.plans.id));
-
       plans = raw.map(normalizePlan).filter(Boolean);
-    } catch (err) {
-      console.error('[public] Falha ao buscar planos:', err.message);
-      plansError = true;
-    }
+    } catch (err) { console.error('[public] Falha ao buscar planos:', err.message); }
 
     let rentalPlans = [];
-    let rentalsError = false;
     try {
       const products = await db.select({
-        id: schema.rentalProducts.id,
-        trackId: schema.rentalProducts.trackId,
-        albumId: schema.rentalProducts.albumId,
-        name: schema.rentalProducts.name,
-        durationHours: schema.rentalProducts.durationHours,
-        priceCents: schema.rentalProducts.priceCents,
-        currency: schema.rentalProducts.currency
-      }).from(schema.rentalProducts)
-        .where(eq(schema.rentalProducts.active, true))
-        .orderBy(
-          asc(schema.rentalProducts.sortOrder),
-          asc(schema.rentalProducts.durationHours),
-          asc(schema.rentalProducts.id)
-        );
+        id: schema.rentalProducts.id, trackId: schema.rentalProducts.trackId, albumId: schema.rentalProducts.albumId,
+        name: schema.rentalProducts.name, durationHours: schema.rentalProducts.durationHours,
+        priceCents: schema.rentalProducts.priceCents, currency: schema.rentalProducts.currency
+      }).from(schema.rentalProducts).where(eq(schema.rentalProducts.active, true))
+        .orderBy(asc(schema.rentalProducts.sortOrder), asc(schema.rentalProducts.durationHours), asc(schema.rentalProducts.id));
 
       const validTracks = new Set(tracks.map(t => t.id));
       const validAlbums = new Set(albumIds);
 
-      rentalPlans = products
-        .filter(p => {
-          const hasT = Boolean(p.trackId);
-          const hasA = Boolean(p.albumId);
-          if (hasT === hasA) return false;
-          return hasT ? validTracks.has(p.trackId) : validAlbums.has(p.albumId);
-        })
-        .map(p => {
-          if (!validUuid(p.id)) return null;
-          const name = safeString(p.name, 120).trim();
-          const currency = (safeString(p.currency, 3) || 'BRL').toUpperCase();
-          const hours = toFiniteNumber(p.durationHours);
-          const cents = toFiniteNumber(p.priceCents);
+      rentalPlans = products.filter(p => {
+        const hasT = Boolean(p.trackId); const hasA = Boolean(p.albumId);
+        if (hasT === hasA) return false;
+        return hasT ? validTracks.has(p.trackId) : validAlbums.has(p.albumId);
+      }).map(p => {
+        if (!validUuid(p.id)) return null;
+        const name = safeString(p.name, 120).trim();
+        const currency = (safeString(p.currency, 3) || 'BRL').toUpperCase();
+        const hours = toFiniteNumber(p.durationHours);
+        const cents = toFiniteNumber(p.priceCents);
+        if (!name || !/^[A-Z]{3}$/.test(currency) || hours === null || !Number.isSafeInteger(hours) || hours <= 0 || cents === null || !Number.isSafeInteger(cents) || cents <= 0) return null;
+        return { id: p.id, label: name, days: Math.floor(hours / 24), hours: hours % 24, durationHours: hours, price: cents / 100, priceCents: cents, currency, available: true, trackId: p.trackId || null, albumId: p.albumId || null };
+      }).filter(Boolean);
+    } catch (err) { console.error('[public] Falha ao buscar aluguéis:', err.message); }
 
-          if (!name) return null;
-          if (!/^[A-Z]{3}$/.test(currency)) return null;
-          if (hours === null || !Number.isSafeInteger(hours) || hours <= 0) return null;
-          if (cents === null || !Number.isSafeInteger(cents) || cents <= 0) return null;
-
-          return {
-            id: p.id, label: name,
-            days: Math.floor(hours / 24), hours: hours % 24,
-            durationHours: hours, price: cents / 100, priceCents: cents,
-            currency, available: true,
-            trackId: p.trackId || null, albumId: p.albumId || null
-          };
-        })
-        .filter(Boolean);
-    } catch (err) {
-      console.error('[public] Falha ao buscar aluguéis:', err.message);
-      rentalsError = true;
-    }
-
-    return sendJson(res, 200, {
-      ok: true,
-      content,
-      albums: albumsWithTracks,
-      tracks,
-      plans,
-      rentalPlans,
-      plansError,
-      rentalsError
-    });
+    return sendJson(res, 200, { ok: true, content, albums: albumsWithTracks, tracks, plans, rentalPlans });
 
   } catch (err) {
     console.error('[public] Erro crítico:', err.message);

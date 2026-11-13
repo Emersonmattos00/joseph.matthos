@@ -1,13 +1,13 @@
 'use strict';
 
 /* ============================================================
-   api/stream.js — Entrega segura de áudio (Versão Final)
+   api/stream.js — Entrega segura de áudio (Versão Final R2)
    ------------------------------------------------------------
    - Validação de status (tracks.status === 'PUBLISHED')
    - Autorização Premium / Aluguel (com startsAt e expiresAt)
    - Rate limit diferenciado (429 excesso / 503 indisponível)
-   - URL assinada do B2 para áudio completo
-   - CDN pública para prévias
+   - URL assinada do R2 para áudio completo
+   - CDN pública (R2) para prévias
    - CORS restrito a ALLOWED_ORIGINS
    - Proteção contra chaves inválidas
    ============================================================ */
@@ -21,9 +21,10 @@ const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
+// Base URL para as prévias (Agora aponta para o R2)
 const CDN_BASE = String(
-  process.env.CDN_BASE_URL ||
-  'https://josephmatthos-cdn.emerson-mattos00.workers.dev'
+  process.env.B2_PUBLIC_BASE_URL || 
+  'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev'
 ).trim().replace(/\/+$/, '');
 
 const UUID_RE =
@@ -49,7 +50,6 @@ function encodeObjectKey(key) {
 
 function getAllowedOrigin(req) {
   const origin = req.headers.origin;
-  // Requisições sem Origin podem ser de players nativos ou testes internos.
   if (!origin) return true;
   return ALLOWED_ORIGINS.has(origin);
 }
@@ -181,9 +181,13 @@ module.exports = async (req, res) => {
     }
 
     /* 8. Objeto correto */
-    const objectKey = accessLevel === 'full'
-      ? (track.streamKey || track.fullPath)
-      : (track.previewKey || track.previewPath);
+    let objectKey = null;
+    if (accessLevel === 'full') {
+      objectKey = track.streamKey || track.fullPath;
+    } else {
+      // Fallback seguro para prévias
+      objectKey = track.previewKey || track.previewPath;
+    }
 
     if (!objectKey || typeof objectKey !== 'string') {
       if (accessLevel === 'preview') {
@@ -199,7 +203,7 @@ module.exports = async (req, res) => {
       return sendError(res, 500, 'INVALID_STORAGE_KEY');
     }
 
-    /* 9. Áudio completo → URL assinada do B2 */
+    /* 9. Áudio completo → URL assinada do R2 */
     if (accessLevel === 'full') {
       try {
         const signedUrl = await getPlaybackUrl(cleanKey, true);
@@ -214,7 +218,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    /* 10. Prévia → CDN pública */
+    /* 10. Prévia → R2 CDN pública */
     if (!CDN_BASE || !CDN_BASE.startsWith('https://')) {
       return sendError(res, 503, 'CDN_UNAVAILABLE');
     }

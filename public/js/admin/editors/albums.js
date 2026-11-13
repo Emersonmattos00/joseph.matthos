@@ -1,5 +1,5 @@
 /* ============================================================
-   js/admin/editors/albums.js — v8 (Aderente ao Backend & Schema)
+   js/admin/editors/albums.js — v9 (Versão Final Consolidada)
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -14,13 +14,13 @@ const State = {
   expandedAlbumIds: new Set(),
   loading: false,
   error: null,
-  loadReqId: 0 // Para controle de concorrência (Item 12)
+  loadReqId: 0
 };
 
 let _dragState = null;
 
 // ─────────────────────────────────────────────────────────────
-// parseLyricsInput — Versão Estrita (Item 10)
+// parseLyricsInput
 // ─────────────────────────────────────────────────────────────
 function parseLyricsInput(raw) {
   if (!raw || typeof raw !== 'string') return [];
@@ -32,11 +32,10 @@ function parseLyricsInput(raw) {
     try {
       entries = JSON.parse(trimmed);
     } catch {
-      return null; // JSON inválido
+      return null;
     }
     if (!Array.isArray(entries)) return null;
   } else {
-    // Texto puro: distribui 4s por linha
     entries = trimmed.split('\n').map((text, index) => ({ time: index * 4, text }));
   }
 
@@ -49,7 +48,6 @@ function parseLyricsInput(raw) {
     const time = Number(item.time);
     const text = String(item.text || '').trim();
 
-    // Validações: número finito, >= 0, texto presente, ordem crescente
     if (!Number.isFinite(time) || time < 0 || !text || time < previousTime) {
       return null;
     }
@@ -113,7 +111,6 @@ async function loadAlbums() {
   const body = document.querySelector('[data-albums-body]');
   if (!body) return;
 
-  // Controle de concorrência (Item 12)
   const currentReq = ++State.loadReqId;
   State.loading = true;
   State.error = null;
@@ -121,7 +118,7 @@ async function loadAlbums() {
 
   try {
     const res = await apiFetch('albums', { method: 'GET' });
-    if (currentReq !== State.loadReqId) return; // Requisição obsoleta
+    if (currentReq !== State.loadReqId) return;
 
     State.albums = Array.isArray(res?.albums) ? res.albums : [];
 
@@ -147,7 +144,6 @@ async function loadTracksForAlbum(albumId) {
     State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
   } catch (err) {
     console.warn(`[albums] falha faixas ${albumId}:`, err);
-    // Preserva o erro em vez de fingir que o álbum está vazio (Item 12)
     State.tracks.set(albumId, { error: err?.message || 'Erro ao carregar' });
   }
 }
@@ -194,7 +190,7 @@ function paintBody(body) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind direto dos botões de álbum
+// Bind de botões
 // ─────────────────────────────────────────────────────────────
 function bindAlbumButtons(scope) {
   scope.querySelectorAll('[data-album-toggle]').forEach((btn) => {
@@ -228,7 +224,6 @@ function bindAlbumButtons(scope) {
       const albumId = btn.dataset.albumDelete;
       const album = State.albums.find((a) => a.id === albumId);
 
-      // Mostra o título real (Item 12)
       if (!confirm(`Excluir o álbum "${album?.title || albumId}"? As faixas também serão removidas.`)) return;
 
       try {
@@ -258,9 +253,6 @@ function bindAlbumButtons(scope) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Bind direto dos botões de faixa (UUIDs como String)
-// ─────────────────────────────────────────────────────────────
 function bindTrackButtons(scope) {
   scope.querySelectorAll('[data-track-edit]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -306,7 +298,7 @@ function bindTrackButtons(scope) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Download — faixa individual
+// Downloads
 // ─────────────────────────────────────────────────────────────
 async function downloadTrack(trackId, titleHint) {
   if (!trackId) return;
@@ -327,9 +319,6 @@ async function downloadTrack(trackId, titleHint) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Download — álbum completo (Honesto)
-// ─────────────────────────────────────────────────────────────
 async function downloadAlbum(albumId) {
   if (!albumId) return;
   const album = State.albums.find((a) => a.id === albumId);
@@ -350,7 +339,6 @@ async function downloadAlbum(albumId) {
     const valid = res.tracks.filter((t) => t.url);
     if (!valid.length) return toast('Este álbum não tem áudios completos.', '⚠');
 
-    // Item 11: Mensagem honesta
     toast(`Disparando ${valid.length} download(s)...`, '⬇');
     let failures = 0;
 
@@ -368,11 +356,7 @@ async function downloadAlbum(albumId) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Helpers de download (Validação de Origem)
-// ─────────────────────────────────────────────────────────────
 function triggerDownload(url, filename) {
-  // Item 12: Restringe URLs ao Backblaze (evita redirecionamento malicioso)
   try {
     const u = new URL(url);
     if (!u.hostname.endsWith('r2.cloudflarestorage.com') && !u.hostname.endsWith('josephmatthos.com.br')) {
@@ -396,7 +380,7 @@ function triggerDownload(url, filename) {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // ─────────────────────────────────────────────────────────────
-// Drag & Drop
+// Drag & Drop (CORRIGIDO)
 // ─────────────────────────────────────────────────────────────
 function bindTrackDragDrop(scope) {
   const bodies = scope.querySelectorAll('[data-tracks-body]');
@@ -461,13 +445,28 @@ function cleanupDrag(scope) {
 async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   try {
     reorderTableRows(tbody, order);
-    // Envia albumId e UUIDs (String)
-    const res = await apiFetch('track-order', { method: 'PATCH', body: { albumId, order } });
+    
+    const payload = {
+      albumId: String(albumId),
+      order: order.map(item => ({
+        id: String(item.id),
+        track_number: Number(item.track_number)
+      }))
+    };
+    
+    console.log('[albums] enviando track-order:', payload);
+
+    const res = await apiFetch('track-order', { 
+      method: 'PATCH', 
+      body: payload 
+    });
+    
     if (!res?.ok) throw new Error(res?.error || 'Falha ao reordenar.');
     toast('Ordem atualizada.', '✓');
     await loadTracksForAlbum(albumId);
     repaint();
   } catch (err) {
+    console.error('[albums] erro ao reordenar:', err);
     toast(err?.message || 'Falha ao reordenar.', '⚠');
     tbody.innerHTML = originalHtml;
     bindTrackDragDrop(scope);
@@ -588,7 +587,7 @@ function renderTrackRow(albumId, track, idx) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal — Álbum
+// Modais
 // ─────────────────────────────────────────────────────────────
 function openAlbumModal(album) {
   const isNew = !album;
@@ -637,9 +636,6 @@ function openAlbumModal(album) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Modal — Faixa
-// ─────────────────────────────────────────────────────────────
 function openTrackModal(albumId, track) {
   const isNew = !track;
   const t = track || { id: null, title: '', duration: '', priceCents: 499, status: 'DRAFT', previewPath: null, fullPath: null, lyrics: [] };
@@ -706,12 +702,11 @@ function openTrackModal(albumId, track) {
       let savedTrackId = t.id;
       if (isNew) {
         const res = await apiFetch('tracks', { method: 'POST', body: { ...payload, albumId: albumId } });
-        savedTrackId = res.track.id; // Pega o UUID gerado
+        savedTrackId = res.track.id;
       } else {
         await apiFetch('track', { method: 'PATCH', query: { id: t.id }, body: payload });
       }
 
-      // Integração com o endpoint de letras (Item 3)
       await apiFetch('update-lyrics', { method: 'PATCH', query: { id: savedTrackId }, body: { lyrics } });
 
       toast('Faixa salva.', '🎵');
@@ -752,14 +747,12 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, kind, uploadFn, field,
 
       if (!result?.path) throw new Error('Upload não retornou path.');
 
-      // O campo agora usa camelCase ('previewPath' ou 'fullPath')
       await apiFetch('track', { method: 'PATCH', query: { id: track.id }, body: { [field]: result.path } });
       track[field] = result.path;
 
       if (statusEl) statusEl.innerHTML = `<span class="audio-chip">✓ ${esc(result.path)}</span>`;
       toast('Áudio associado.', '✓');
 
-      // Item 5: Aguardar o load antes de repintar
       await loadTracksForAlbum(albumId);
       repaint();
 

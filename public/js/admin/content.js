@@ -98,7 +98,7 @@ export async function saveContent(data, options = {}) {
   try {
     result = await apiFetch('content', {
       method: 'PUT',
-      body: { data: normalized, baseVersion }
+      body: { data: normalized, version: baseVersion } // <-- MUDANÇA AQUI
     });
   } catch (err) {
     if (err && err.status === 409) {

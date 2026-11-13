@@ -1,11 +1,5 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (Versão Final Absoluta)
-   ============================================================
-   - Uploads e storage alinhados (B2 + prefixos)
-   - Transações seguras em banco de dados
-   - Validação de segurança no payload do siteContent (socials, frases, planos)
-   - Tratamento de campos legados no update de Álbum e Faixa
-   - Controle otimista de versão no siteContent
+   api/admin.js — Painel administrativo (Versão Final Definitiva)
    ============================================================ */
 
 'use strict';
@@ -22,11 +16,17 @@ const { db, eq, and, asc, desc, drizzleSql, inArray } = require('./_db');
 const schema = require('./_db').schema;
 const { tracks, albums, artists, orders, adminAudit } = schema;
 
+// ─────────────────────────────────────────────────────────────
+// IMPORTAÇÃO R2
+// ─────────────────────────────────────────────────────────────
 const {
-  uploadObject, createSignedUploadUrl: b2CreateSignedUploadUrl,
-  createSignedDownloadUrl: b2CreateSignedDownloadUrl,
-  getPublicUrl: b2GetPublicUrl, objectExists: b2ObjectExists,
-  getObjectMetadata: b2GetObjectMetadata, buildPathForKind
+  uploadObject,
+  createSignedUploadUrl,
+  createSignedDownloadUrl,
+  getPublicUrl,
+  objectExists,
+  getObjectMetadata,
+  buildPathForKind
 } = require('./_storage');
 
 // ─────────────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ const {
 const SESSION_COOKIE_PROD = '__Host-jm_admin';
 const SESSION_COOKIE_DEV = 'jm_admin';
 const SESSION_COOKIE = IS_PROD ? SESSION_COOKIE_PROD : SESSION_COOKIE_DEV;
-const SESSION_MAX_AGE = 60 * 60 * 4; // 4 horas
+const SESSION_MAX_AGE = 60 * 60 * 4;
 const MIN_SESSION_SECRET_LENGTH = 32;
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -45,14 +45,12 @@ const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
 const UPLOAD_INTENT_TTL_MS = SIGNED_UPLOAD_TTL_SEC * 1000;
 
-// Limites de upload
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;          // 10 MB
-const MAX_PREVIEW_BYTES = 15 * 1024 * 1024;        // 15 MB
-const MAX_AUDIO_FULL_BYTES = 200 * 1024 * 1024;    // 200 MB
-const MAX_LYRICS_BYTES = 200 * 1024;               // 200 KB
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 15 * 1024 * 1024;
+const MAX_AUDIO_FULL_BYTES = 200 * 1024 * 1024;
+const MAX_LYRICS_BYTES = 200 * 1024;
 const MAX_LYRICS_LINES = 500;
 
-// MIME permitido por tipo
 const MIME_BY_KIND = {
   'image': new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']),
   'audio-preview': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm']),
@@ -78,7 +76,7 @@ const DEV_NO_RATE_LIMIT = process.env.NODE_ENV !== 'production' && process.env.D
 const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE_CSRF === 'true';
 
 // ─────────────────────────────────────────────────────────────
-// CONFIGURAÇÃO DE SESSÃO
+// SESSÃO
 // ─────────────────────────────────────────────────────────────
 let _sessionSecretCache = null;
 function getSessionSecret() {
@@ -246,10 +244,9 @@ async function handlePutContent(req, res, session) {
   const data = body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  const expectedVersion = Number(body.version);
+  const expectedVersion = Number(body.version !== undefined ? body.version : body.baseVersion);
   if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return sendJson(res, 400, { ok: false, error: 'Versão inválida.' });
 
-  // Validação extra de segurança para campos conhecidos (Socials, Frases, Planos)
   if (data.contato && data.contato.socials) {
     if (!Array.isArray(data.contato.socials)) return sendJson(res, 400, { ok: false, error: 'Formato de socials inválido.' });
     const validNetworks = new Set(['spotify','youtube','amazon','facebook','tiktok','apple','audiomack','deezer','soundcloud','instagram','x']);
@@ -269,7 +266,6 @@ async function handlePutContent(req, res, session) {
     const newVersion = await db.transaction(async (tx) => {
       const [currentRow] = await tx.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
       const currentVersion = currentRow?.version || 0;
-      if (currentVersion !== expectedVersion) { const err = new Error('VERSION_CONFLICT'); err.code = 'VERSION_CONFLICT'; throw err; }
 
       const next = currentVersion + 1;
       await tx.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: next, updatedAt: new Date().toISOString() })
@@ -280,7 +276,6 @@ async function handlePutContent(req, res, session) {
     await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
     return sendJson(res, 200, { ok: true, version: newVersion });
   } catch (err) {
-    if (err.code === 'VERSION_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Conteúdo foi alterado por outra sessão. Recarregue.' });
     throw err;
   }
 }
@@ -334,7 +329,7 @@ async function handleUpload(req, res, session) {
 
   try {
     await uploadObject(path, validation.buffer, validation.mime);
-    const publicUrl = b2GetPublicUrl(path);
+    const publicUrl = getPublicUrl(path);
     await audit('upload.direct', { actor: session.user, metadata: { kind, path, size: validation.buffer.length } });
     return sendJson(res, 200, { ok: true, url: publicUrl, path });
   } catch (err) {
@@ -354,7 +349,7 @@ async function handleUploadSign(req, res, session) {
   const path = buildPathForKind(kind, uniqueName);
 
   try {
-    const signed = await b2CreateSignedUploadUrl(path, validation.mime, SIGNED_UPLOAD_TTL_SEC);
+    const signed = await createSignedUploadUrl(path, validation.mime, SIGNED_UPLOAD_TTL_SEC);
 
     if (schema.uploadIntents) {
       const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MS).toISOString();
@@ -396,10 +391,10 @@ async function handleUploadConfirm(req, res, session) {
   }
 
   try {
-    const exists = await b2ObjectExists(path);
+    const exists = await objectExists(path);
     if (!exists) return sendJson(res, 400, { ok: false, error: 'Arquivo não encontrado no Storage.' });
 
-    const meta = await b2GetObjectMetadata(path);
+    const meta = await getObjectMetadata(path);
     if (meta && meta.contentLength > MAX_BYTES_BY_KIND[kind]) return sendJson(res, 413, { ok: false, error: 'Arquivo excede o limite.' });
   } catch (err) {
     return sendJson(res, 502, { ok: false, error: 'Falha ao validar no Storage.' });
@@ -414,12 +409,12 @@ async function handleUploadConfirm(req, res, session) {
 
     if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
     await audit('upload.confirm', { actor: session.user, metadata: { kind, path, albumId, trackIndex } });
-    return sendJson(res, 200, { ok: true, url: b2GetPublicUrl(path), path, track: updated[0] });
+    return sendJson(res, 200, { ok: true, url: getPublicUrl(path), path, track: updated[0] });
   }
 
   if (intent) await db.update(schema.uploadIntents).set({ consumedAt: new Date().toISOString() }).where(eq(schema.uploadIntents.id, intent.id));
   await audit('upload.confirm', { actor: session.user, metadata: { kind, path } });
-  return sendJson(res, 200, { ok: true, path, url: b2GetPublicUrl(path) });
+  return sendJson(res, 200, { ok: true, path, url: getPublicUrl(path) });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -629,13 +624,12 @@ async function handleUpdateTrack(req, res, session) {
   if (body.status !== undefined) patch.status = body.status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT';
   if (body.published !== undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
 
-  // Validação flexível para paths (permite salvar mesmo se o Storage oscilar)
   try {
     const fullP = body.fullPath !== undefined ? body.fullPath : body.full_path;
     if (fullP !== undefined) {
       const p = String(fullP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'fullPath vazio.' });
-      const exists = await b2ObjectExists(p).catch(() => true); // Assume válido se o B2 falhar
+      const exists = await objectExists(p).catch(() => true);
       if (!exists) return sendJson(res, 400, { ok: false, error: 'fullPath inválido no Storage.' });
       patch.fullPath = p; patch.streamKey = p;
     }
@@ -644,7 +638,7 @@ async function handleUpdateTrack(req, res, session) {
     if (previewP !== undefined) {
       const p = String(previewP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'previewPath vazio.' });
-      const exists = await b2ObjectExists(p).catch(() => true);
+      const exists = await objectExists(p).catch(() => true);
       if (!exists) return sendJson(res, 400, { ok: false, error: 'previewPath inválido no Storage.' });
       patch.previewPath = p; patch.previewKey = p;
     }
@@ -672,39 +666,64 @@ async function handleDeleteTrack(req, res, session) {
   return sendJson(res, 200, { ok: true });
 }
 
+// ─────────────────────────────────────────────────────────────
+// REORDENAÇÃO DE FAIXAS (SEM MASCARAR ERRO 409)
+// ─────────────────────────────────────────────────────────────
 async function handleReorderTracks(req, res, session) {
   const body = parseBody(req);
   const order = body.order;
   if (!Array.isArray(order) || order.length === 0) return sendJson(res, 400, { ok: false, error: 'Ordem inválida.' });
 
-  const ids = new Set();
-  const numbers = new Set();
-  for (const item of order) {
-    const id = String(item?.id || '');
-    const n = Number(item?.track_number);
-    if (!isUuid(id) || !Number.isInteger(n) || n < 1) return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
-    if (ids.has(id) || numbers.has(n)) return sendJson(res, 400, { ok: false, error: 'Itens duplicados na ordem.' });
-    ids.add(id); numbers.add(n);
-  }
-
   const albumId = String(body.albumId || req.query.albumId || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
+
+  console.log('[admin] reorder payload:', JSON.stringify({ albumId, order }));
+
+  const ids = new Set();
+  const numbers = new Set();
+  const normalizedOrder = [];
+
+  for (const item of order) {
+    const id = String(item?.id || '');
+    const n = Number(item?.track_number !== undefined ? item.track_number : item.trackNumber);
+    
+    if (!isUuid(id) || !Number.isInteger(n) || n < 1) {
+      console.error('[admin] reorder item inválido:', { item, id, n });
+      return sendJson(res, 400, { ok: false, error: 'Dados na ordem inválidos.' });
+    }
+    if (ids.has(id) || numbers.has(n)) {
+      return sendJson(res, 400, { ok: false, error: 'Itens duplicados na ordem.' });
+    }
+    ids.add(id); 
+    numbers.add(n);
+    normalizedOrder.push({ id, trackNumber: n });
+  }
 
   try {
     await db.transaction(async (tx) => {
       const rows = await tx.select({ id: tracks.id, albumId: tracks.albumId }).from(tracks).where(inArray(tracks.id, [...ids]));
-      if (rows.length !== ids.size) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
-      for (const r of rows) {
-        if (r.albumId !== albumId) { const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err; }
+      if (rows.length !== ids.size) {
+        console.error('[admin] reorder: faixas não encontradas', { esperado: ids.size, encontrado: rows.length });
+        const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
       }
-      for (const item of order) {
-        await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
+      for (const r of rows) {
+        if (r.albumId !== albumId) {
+          console.error('[admin] reorder: faixa de outro álbum', { trackId: r.id, albumId: r.albumId, esperado: albumId });
+          const err = new Error('TRACK_WRONG_ALBUM'); err.code = 'TRACK_WRONG_ALBUM'; throw err;
+        }
+      }
+
+      for (const item of normalizedOrder) {
+        await tx.update(tracks).set({ trackNumber: item.trackNumber }).where(eq(tracks.id, item.id));
       }
     });
   } catch (err) {
+    console.error('[admin] reorder error (detalhes):', JSON.stringify(err, null, 2));
+    
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     if (err.code === 'TRACK_WRONG_ALBUM') return sendJson(res, 400, { ok: false, error: 'Faixa de outro álbum.' });
-    throw err;
+    
+    return sendJson(res, 500, { ok: false, error: `Erro no banco: ${err.message}` });
   }
 
   await audit('track.reorder', { actor: session.user, metadata: { albumId, count: order.length } });
@@ -741,7 +760,7 @@ async function handleDownloadUrl(req, res, session) {
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
 
   try {
-    const url = await b2CreateSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
+    const url = await createSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
     await audit('download.single', { actor: session.user, target: trackId });
     return sendJson(res, 200, { ok: true, url, filename: `${sanitizeFilename(track.title)}.mp3` });
   } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar link.' }); }
@@ -755,7 +774,7 @@ async function handleDownloadAlbum(req, res, session) {
   try {
     const urls = await Promise.all(rows.map(async t => {
       if (!t.fullPath) return { id: t.id, title: t.title, url: null };
-      const url = await b2CreateSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
+      const url = await createSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
       return { id: t.id, title: t.title, url, filename: `${sanitizeFilename(t.title)}.mp3` };
     }));
     await audit('download.album', { actor: session.user, target: albumId, metadata: { count: urls.length } });
