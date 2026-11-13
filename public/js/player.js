@@ -109,14 +109,12 @@ function updateTabState(activeTab) {
     c.hidden = !on;
   });
 
-  // CORREÇÃO: Se estiver em uma aba que não é o player, mostra o mini-player
   if (tabName !== 'player' && currentTrackId) {
     els.miniPlayer.style.display = 'flex';
   } else {
     els.miniPlayer.style.display = 'none';
   }
 
-  // Se abrir a aba de Álbuns, carrega a lista
   if (tabName === 'albums') {
     renderAlbumsTab();
   }
@@ -412,9 +410,28 @@ async function initPlayer(trackId, autoplay = true) {
     renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
     updateMediaSessionMetadata(meta);
 
+    // ─── LÓGICA DEFINITIVA DA URL DO ÁUDIO ───
+    // Força o uso do R2 e garante que a pasta previews esteja presente apenas uma vez
     const baseUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
-    // meta.previewKey já contém o caminho (ex: "previews/ser-nao-ser.mp3")
-    audio.src = `${baseUrl}/${meta.previewKey || 'previews/' + trackId + '.mp3'}`;
+    let arquivo = meta.previewKey || '';
+    
+    // Se o previewKey não vier, usa o ID como fallback
+    if (!arquivo) {
+      arquivo = `${trackId}.mp3`;
+    }
+    
+    // Garante que o caminho comece com "previews/"
+    if (!arquivo.startsWith('previews/')) {
+      arquivo = 'previews/' + arquivo;
+    }
+    
+    // Remove barras duplicadas no final, se houver
+    arquivo = arquivo.replace(/\/+/g, '/').replace(/^previews\/previews\//, 'previews/');
+
+    audio.src = `${baseUrl}/${arquivo}`;
+    
+    console.log('[Player] URL final do áudio:', audio.src);
+    
     audio.load();
 
     if (autoplay) {
@@ -495,6 +512,12 @@ function bindAudioEvents() {
     } else {
       window.playerNext();
     }
+  });
+  
+  // Adicionado para capturar erros de carregamento do áudio
+  audio.addEventListener('error', (e) => {
+    console.error('[Audio] Erro ao carregar o áudio:', audio.error);
+    showToast('Erro ao carregar o áudio. Verifique o console.');
   });
 }
 
