@@ -1,4 +1,4 @@
-// js/player.js — Versão Final com Mini-Player, Abas e Opções
+// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Sem Conflitos)
 
 'use strict';
 
