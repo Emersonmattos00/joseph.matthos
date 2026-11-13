@@ -487,34 +487,43 @@ function renderPlayerTrackList(meta, currentId) {
     item.className = 'music-item';
     if (String(track.id) === String(currentId)) item.classList.add('playing');
 
-    // Container do número com a capa do álbum
+    // Container com número (antes) e capa (depois)
     const numberContainer = document.createElement('div');
     numberContainer.className = 'music-item-number';
     numberContainer.style.display = 'flex';
     numberContainer.style.alignItems = 'center';
-    numberContainer.style.gap = '8px';
-
-    const coverImg = document.createElement('img');
-    coverImg.src = track.coverUrl || '/assets/img/tema.webp';
-    coverImg.alt = track.title;
-    coverImg.style.width = '32px';
-    coverImg.style.height = '32px';
-    coverImg.style.borderRadius = '4px';
-    coverImg.style.objectFit = 'cover';
-    coverImg.style.flexShrink = '0';
+    numberContainer.style.gap = '12px';
+    numberContainer.style.width = 'auto';
+    numberContainer.style.minWidth = '60px';
 
     const number = document.createElement('span');
     number.className = 'num-text';
     number.textContent = index + 1;
-    
+    number.style.width = '20px';
+    number.style.textAlign = 'center';
+
     const playHover = document.createElement('span');
     playHover.className = 'play-hover';
     playHover.textContent = '▶';
+    playHover.style.width = '20px';
+    playHover.style.textAlign = 'center';
 
-    numberContainer.append(coverImg, number, playHover);
+    const coverImg = document.createElement('img');
+    coverImg.src = track.coverUrl || '/assets/img/tema.webp';
+    coverImg.alt = track.title;
+    coverImg.style.width = '40px';
+    coverImg.style.height = '40px';
+    coverImg.style.borderRadius = '4px';
+    coverImg.style.objectFit = 'cover';
+    coverImg.style.flexShrink = '0';
+    coverImg.onerror = () => { coverImg.src = '/assets/img/tema.webp'; };
+
+    // Adiciona na ordem: Número, Hover, Capa
+    numberContainer.append(number, playHover, coverImg);
 
     const info = document.createElement('div');
     info.className = 'music-item-info';
+    info.style.paddingLeft = '0'; 
 
     const title = document.createElement('div');
     title.className = 'music-item-title';
@@ -706,7 +715,6 @@ async function initPlayer(trackId, autoplay = true, keepContext = false) {
     if (els.title) els.title.textContent = meta.title;
     if (els.artist) els.artist.textContent = `${meta.artist || 'Joseph Matthos'} · ${meta.albumTitle || ''}`;
 
-    // Exibe a capa do ÁLBUM original da música no player principal
     if (meta.coverUrl) {
       if (els.cover) els.cover.src = meta.coverUrl;
       if (els.container) els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
