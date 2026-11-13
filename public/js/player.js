@@ -172,11 +172,10 @@ window.abrirAlbum = async (albumId) => {
     const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { cache: 'no-store' });
     const data = await res.json();
     
-    // Se o backend retornar a lista de faixas, renderiza
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
-    const tracks = album.tracks || []; // Garante que tracks seja um array
+    const tracks = album.tracks || []; 
 
     currentTrackMeta = { ...album, albumTracks: tracks };
     
@@ -185,13 +184,11 @@ window.abrirAlbum = async (albumId) => {
     if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = album.artist || 'Joseph Matthos';
     if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
 
-    // Se não houver faixas, avisa na tela
     if (tracks.length === 0) {
       if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Este álbum ainda não tem faixas cadastradas no banco de dados.</p>';
       return;
     }
 
-    // Renderiza a lista normalmente
     renderPlayerTrackList(currentTrackMeta, currentTrackId);
   } catch (err) {
     if (list) list.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
@@ -419,22 +416,13 @@ async function initPlayer(trackId, autoplay = true) {
     renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
     updateMediaSessionMetadata(meta);
 
-    // ─── LÓGICA DEFINITIVA DA URL DO ÁUDIO ───
-    const baseUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
-    
-    // Cria o nome do arquivo a partir do título da música
-    // Ex: "Meio do Tempo" -> "meio-do-tempo.mp3"
-    let nomeArquivo = (meta.title || '')
-      .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove acentos
-      .replace(/[^a-z0-9]+/g, '-') // Substitui espaços e símbolos por hífen
-      .replace(/^-+|-+$/g, '') // Remove hífens do início e fim
-      + '.mp3';
+    // ─── LÓGICA DEFINITIVA DE ÁUDIO (BACKEND DECIDE) ───
+    // O backend /api/stream verifica assinatura e entrega:
+    // - Para assinantes: link assinado do R2 (áudio completo)
+    // - Para não assinantes: link do CDN (prévia de 30s)
+    audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
 
-    // Monta a URL final absoluta
-    audio.src = `${baseUrl}/previews/${nomeArquivo}`;
-
-    console.log('[Player] URL final do áudio (baseada no título):', audio.src);
+    console.log('[Player] Solicitando áudio seguro para o backend:', audio.src);
     
     audio.load();
 
@@ -518,7 +506,6 @@ function bindAudioEvents() {
     }
   });
   
-  // Adicionado para capturar erros de carregamento do áudio
   audio.addEventListener('error', (e) => {
     console.error('[Audio] Erro ao carregar o áudio:', audio.error);
     showToast('Erro ao carregar o áudio. Verifique o console.');
