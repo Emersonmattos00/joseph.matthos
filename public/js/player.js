@@ -187,19 +187,26 @@ window.abrirAlbum = async (albumId) => {
   switchTab('music');
 
   try {
-    const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`);
+    // Força a API a não usar cache com cache: 'no-store' e timestamp
+    const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`, { cache: 'no-store' });
     const data = await res.json();
+    
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
     const tracks = album.tracks || [];
 
+    // Limpa o estado global para o novo álbum
+    currentTrackMeta = { ...album, albumTracks: tracks };
+    
     if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${album.coverUrl}')`;
     if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = album.title;
     if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = album.artist || 'Joseph Matthos';
     if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
 
-    renderPlayerTrackList({ ...album, albumTracks: tracks }, currentTrackId);
+    // Renderiza a lista de faixas do álbum clicado
+    renderPlayerTrackList(currentTrackMeta, currentTrackId);
+    
   } catch (err) {
     if (list) list.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
   }
@@ -209,7 +216,12 @@ window.abrirAlbum = async (albumId) => {
 function renderPlayerTrackList(meta, currentId) {
   if (!els.musicList) return;
   els.musicList.replaceChildren();
-  if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
+  
+  // Atualiza o cabeçalho apenas se o álbum clicado for o mesmo que está tocando
+  // ou se for uma renderização explícita de um álbum novo.
+  if (els.albumHeaderCount && meta.id) {
+    els.albumHeaderCount.textContent = `${meta.albumTracks.length} faixas`;
+  }
 
   meta.albumTracks.forEach((track, index) => {
     const item = document.createElement('div');
