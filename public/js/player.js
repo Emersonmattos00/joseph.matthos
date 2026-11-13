@@ -1,4 +1,4 @@
-// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Áudio Seguro)
+// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Áudio Seguro, Shuffle/Repeat)
 
 'use strict';
 
@@ -468,26 +468,80 @@ window.playerPlay = () => {
 window.playerNext = () => {
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
-  const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
-  if (index < 0) return;
-  const next = tracks[(index + 1) % tracks.length];
-  if (next?.id) window.tocarMusicaDaLista(String(next.id));
+  
+  // Se o modo repeat for "one", ele não deve avançar manualmente, apenas no "ended"
+  // Mas se o usuário clicar em "Próximo", ele deve ir para a próxima.
+  
+  let nextIndex;
+  const currentIndex = tracks.findIndex(t => String(t.id) === String(currentTrackId));
+
+  if (shuffleEnabled && tracks.length > 1) {
+    // Modo aleatório: escolhe uma música diferente da atual
+    do {
+      nextIndex = Math.floor(Math.random() * tracks.length);
+    } while (nextIndex === currentIndex);
+  } else {
+    // Modo normal
+    nextIndex = (currentIndex + 1) % tracks.length;
+  }
+
+  const nextTrack = tracks[nextIndex];
+  if (nextTrack?.id) window.tocarMusicaDaLista(String(nextTrack.id));
 };
 
 window.playerPrev = () => {
   if (audio.currentTime > 3) { audio.currentTime = 0; return; }
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
-  const index = tracks.findIndex(t => String(t.id) === String(currentTrackId));
-  if (index < 0) return;
-  const prev = tracks[(index - 1 + tracks.length) % tracks.length];
-  if (prev?.id) window.tocarMusicaDaLista(String(prev.id));
+  const currentIndex = tracks.findIndex(t => String(t.id) === String(currentTrackId));
+
+  let prevIndex;
+  if (shuffleEnabled && tracks.length > 1) {
+    do {
+      prevIndex = Math.floor(Math.random() * tracks.length);
+    } while (prevIndex === currentIndex);
+  } else {
+    prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
+  }
+
+  const prevTrack = tracks[prevIndex];
+  if (prevTrack?.id) window.tocarMusicaDaLista(String(prevTrack.id));
 };
 
 window.tocarMusicaDaLista = async (id) => {
   if (!id) return;
   history.replaceState(null, '', `/player.html?id=${encodeURIComponent(id)}`);
   await initPlayer(id);
+};
+
+// ─── SHUFFLE E REPEAT ───
+window.toggleShuffle = () => {
+  shuffleEnabled = !shuffleEnabled;
+  const btn = document.getElementById('shuffleBtn');
+  if (btn) {
+    btn.style.color = shuffleEnabled ? 'var(--green)' : 'var(--text-dim)';
+  }
+  showToast(shuffleEnabled ? 'Modo Aleatório Ativado' : 'Modo Aleatório Desativado');
+};
+
+window.toggleRepeat = () => {
+  // Ciclo: off -> all -> one -> off
+  if (repeatMode === 'off') repeatMode = 'all';
+  else if (repeatMode === 'all') repeatMode = 'one';
+  else repeatMode = 'off';
+
+  const btn = document.getElementById('repeatBtn');
+  if (btn) {
+    btn.style.color = repeatMode !== 'off' ? 'var(--green)' : 'var(--text-dim)';
+    // Adiciona um "1" visual se estiver no modo "one"
+    if (repeatMode === 'one') {
+      btn.style.position = 'relative';
+      // Apenas uma dica visual; podemos manter o mesmo ícone.
+    } else {
+      btn.style.position = '';
+    }
+  }
+  showToast(`Repetição: ${repeatMode === 'off' ? 'Desligada' : repeatMode === 'all' ? 'Álbum' : 'Música'}`);
 };
 
 // ─── EVENTOS DE ÁUDIO ───
@@ -539,6 +593,10 @@ function bindAudioEvents() {
 window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
   setupMediaSessionHandlers();
+
+  // Eventos dos botões de Shuffle e Repeat
+  document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
+  document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
 
   const params = new URLSearchParams(window.location.search);
   const trackId = params.get('id');
