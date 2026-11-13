@@ -17,10 +17,18 @@
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
       <nav class="mobile-tabs" role="tablist">
-        <button class="mobile-tab active" data-tab="player" id="tab-button-player">Player</button>
-        <button class="mobile-tab" data-tab="albums" id="tab-button-albums">Álbuns</button>
-        <button class="mobile-tab" data-tab="music" id="tab-button-music">Músicas</button>
-        <button class="mobile-tab" data-tab="lyrics" id="tab-button-lyrics">Letra</button>
+        <button class="mobile-tab active" data-tab="player" id="tab-button-player" aria-label="Player">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+        </button>
+        <button class="mobile-tab" data-tab="albums" id="tab-button-albums" aria-label="Álbuns">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 10l-2.5-1.5L14 12V7l3 1.5L19.5 7v5z"/></svg>
+        </button>
+        <button class="mobile-tab" data-tab="music" id="tab-button-music" aria-label="Músicas">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+        </button>
+        <button class="mobile-tab" data-tab="lyrics" id="tab-button-lyrics" aria-label="Letra">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+        </button>
       </nav>
       <button class="player-icon-btn" id="fullscreenBtn" type="button" title="Tela cheia">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
@@ -96,13 +104,21 @@
       <div class="mini-artist" id="miniArtist">Joseph Matthos</div>
     </div>
     <div class="mini-controls">
-      <button id="miniPrevBtn" aria-label="Anterior">⏮</button>
-      <button id="miniPlayBtn" aria-label="Play/Pause">▶</button>
-      <button id="miniNextBtn" aria-label="Próximo">⏭</button>
-      <button id="miniOpenBtn" aria-label="Abrir player">^</button>
+      <button id="miniPrevBtn" aria-label="Anterior">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+      </button>
+      <button id="miniPlayBtn" aria-label="Play/Pause">
+        <svg id="miniPlayIcon" viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <button id="miniNextBtn" aria-label="Próximo">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      </button>
+      <button id="miniOpenBtn" aria-label="Abrir player">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+      </button>
     </div>
   </div>
 
-  <script src="/js/player.js?v=3" defer></script>
+  <script src="/js/player.js?v=4" defer></script>
 </body>
 </html>

@@ -494,7 +494,9 @@ window.tocarMusicaDaLista = async (id) => {
 function bindAudioEvents() {
   audio.addEventListener('play', () => {
     if (els.playIcon) els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
-    if (els.miniPlayBtn) els.miniPlayBtn.textContent = '⏸';
+    if (els.miniPlayBtn) {
+      els.miniPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
+    }
     clearInterval(updateInterval);
     updateInterval = setInterval(() => {
       const seek = audio.currentTime || 0;
@@ -508,7 +510,9 @@ function bindAudioEvents() {
 
   audio.addEventListener('pause', () => {
     if (els.playIcon) els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
-    if (els.miniPlayBtn) els.miniPlayBtn.textContent = '▶';
+    if (els.miniPlayBtn) {
+      els.miniPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+    }
     clearInterval(updateInterval);
   });
 
