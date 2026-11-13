@@ -411,26 +411,24 @@ async function initPlayer(trackId, autoplay = true) {
     updateMediaSessionMetadata(meta);
 
     // ─── LÓGICA DEFINITIVA DA URL DO ÁUDIO ───
-    // Força o uso do R2 e garante que a pasta previews esteja presente apenas uma vez
+    // Força a URL completa do R2 e garante que a pasta previews esteja presente
     const baseUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
-    let arquivo = meta.previewKey || '';
     
-    // Se o previewKey não vier, usa o ID como fallback
-    if (!arquivo) {
-      arquivo = `${trackId}.mp3`;
-    }
+    // Pega o caminho do arquivo. Se não vier, usa o ID da track como fallback
+    let arquivo = meta.previewKey || `${trackId}.mp3`;
     
-    // Garante que o caminho comece com "previews/"
+    // Garante que o caminho comece com a pasta previews
     if (!arquivo.startsWith('previews/')) {
       arquivo = 'previews/' + arquivo;
     }
     
-    // Remove barras duplicadas no final, se houver
+    // Remove barras duplicadas ou problemas de caminho
     arquivo = arquivo.replace(/\/+/g, '/').replace(/^previews\/previews\//, 'previews/');
-
+    
+    // Monta a URL final absoluta
     audio.src = `${baseUrl}/${arquivo}`;
     
-    console.log('[Player] URL final do áudio:', audio.src);
+    console.log('[Player] URL final absoluta do áudio:', audio.src);
     
     audio.load();
 
