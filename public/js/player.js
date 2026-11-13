@@ -448,19 +448,25 @@ window.abrirAlbum = async (albumId) => {
     if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
-    const tracks = data.tracks || []; 
+    // Garante que a capa do álbum seja usada em todas as faixas
+    const albumCover = album.coverUrl || '/assets/img/tema.webp';
+
+    const tracks = (data.tracks || []).map(track => ({
+      ...track,
+      coverUrl: albumCover // Força a capa do álbum
+    }));
 
     currentPlaybackContext = {
       type: 'album',
       id: album.id,
       name: album.title,
-      coverUrl: album.coverUrl,
+      coverUrl: albumCover,
       tracks: tracks
     };
 
     currentTrackMeta = { ...album, albumTracks: tracks };
     
-    if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${album.coverUrl}')`;
+    if (els.albumHeaderCover) els.albumHeaderCover.style.backgroundImage = `url('${albumCover}')`;
     if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = album.title;
     if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = album.artist || 'Joseph Matthos';
     if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
