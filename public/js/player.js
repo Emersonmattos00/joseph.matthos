@@ -1,4 +1,4 @@
-// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Áudio Seguro, Shuffle/Repeat)
+// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Áudio Seguro, Playlists)
 
 'use strict';
 
@@ -46,6 +46,45 @@ function preloadImage(url) {
   imageCache.set(url, img);
 }
 
+// ─── PLAYLISTS (localStorage) ───
+function getPlaylists() {
+  try {
+    return JSON.parse(localStorage.getItem('jm_playlists') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function savePlaylists(playlists) {
+  localStorage.setItem('jm_playlists', JSON.stringify(playlists));
+}
+
+function createPlaylist(name) {
+  const playlists = getPlaylists();
+  const newPlaylist = { id: Date.now().toString(), name, tracks: [] };
+  playlists.push(newPlaylist);
+  savePlaylists(playlists);
+  return newPlaylist;
+}
+
+function addTrackToPlaylist(playlistId, trackId) {
+  const playlists = getPlaylists();
+  const playlist = playlists.find(p => p.id === playlistId);
+  if (playlist && !playlist.tracks.includes(trackId)) {
+    playlist.tracks.push(trackId);
+    savePlaylists(playlists);
+    return true;
+  }
+  return false;
+}
+
+function removePlaylist(playlistId) {
+  let playlists = getPlaylists();
+  playlists = playlists.filter(p => p.id !== playlistId);
+  savePlaylists(playlists);
+}
+
+// ─── ELS ───
 const els = {
   container: document.getElementById('playerContainer'),
   cover: document.getElementById('playerCover'),
@@ -73,7 +112,8 @@ const els = {
   miniPlayBtn: document.getElementById('miniPlayBtn'),
   miniNextBtn: document.getElementById('miniNextBtn'),
   miniPrevBtn: document.getElementById('miniPrevBtn'),
-  miniOpenBtn: document.getElementById('miniOpenBtn')
+  miniOpenBtn: document.getElementById('miniOpenBtn'),
+  playlistsContainer: document.getElementById('playlistsContainer')
 };
 
 const audio = new Audio();
@@ -118,6 +158,9 @@ function updateTabState(activeTab) {
   if (tabName === 'albums') {
     renderAlbumsTab();
   }
+  if (tabName === 'playlists') {
+    renderPlaylistsTab();
+  }
 }
 
 tabs.forEach(tab => tab.addEventListener('click', () => updateTabState(tab)));
@@ -158,6 +201,125 @@ async function renderAlbumsTab() {
     container.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(err.message)}</p>`;
   }
 }
+
+// ─── RENDERIZAR PLAYLISTS ───
+function renderPlaylistsTab() {
+  const container = els.playlistsContainer;
+  if (!container) return;
+
+  const playlists = getPlaylists();
+
+  let html = `
+    <div class="playlist-header">
+      <h2>Minhas Playlists</h2>
+      <button class="btn-new-playlist" onclick="window.criarPlaylistModal()">+ Nova</button>
+    </div>
+  `;
+
+  if (playlists.length === 0) {
+    html += '<p style="text-align:center;color:#aaa;padding:2rem;">Nenhuma playlist criada ainda.</p>';
+  } else {
+    html += playlists.map(p => `
+      <div class="playlist-card">
+        <div class="playlist-info" onclick="window.abrirPlaylist('${p.id}')">
+          <h3>${esc(p.name)}</h3>
+          <p>${p.tracks.length} faixas</p>
+        </div>
+        <button class="playlist-delete-btn" onclick="event.stopPropagation(); window.deletarPlaylist('${p.id}')" title="Excluir">🗑️</button>
+      </div>
+    `).join('');
+  }
+
+  container.innerHTML = html;
+}
+
+// ─── CRIAR PLAYLIST ───
+window.criarPlaylistModal = () => {
+  const name = prompt('Nome da nova playlist:');
+  if (name && name.trim()) {
+    createPlaylist(name.trim());
+    renderPlaylistsTab();
+    showToast('Playlist criada!');
+  }
+};
+
+window.deletarPlaylist = (id) => {
+  if (confirm('Tem certeza que deseja excluir esta playlist?')) {
+    removePlaylist(id);
+    renderPlaylistsTab();
+    showToast('Playlist excluída.');
+  }
+};
+
+window.abrirPlaylist = async (playlistId) => {
+  const playlists = getPlaylists();
+  const playlist = playlists.find(p => p.id === playlistId);
+  if (!playlist) return;
+
+  if (playlist.tracks.length === 0) {
+    showToast('Esta playlist está vazia.');
+    return;
+  }
+
+  const firstTrackId = playlist.tracks[0];
+  history.replaceState(null, '', `/player.html?id=${encodeURIComponent(firstTrackId)}`);
+  await initPlayer(firstTrackId);
+};
+
+// ─── ADICIONAR À PLAYLIST (do menu de opções) ───
+window.abrirModalAdicionarPlaylist = (trackId) => {
+  document.getElementById('playlistModalOverlay')?.remove();
+
+  const playlists = getPlaylists();
+
+  let html = `
+    <div class="playlist-modal-overlay" id="playlistModalOverlay">
+      <div class="playlist-modal">
+        <h3>Adicionar à Playlist</h3>
+  `;
+
+  if (playlists.length === 0) {
+    html += '<p style="color:#aaa;">Nenhuma playlist criada.</p>';
+  } else {
+    html += '<div class="playlist-tracks-list">';
+    html += playlists.map(p => `
+      <div class="playlist-card" style="padding:0.5rem;" onclick="window.adicionarTrackPlaylist('${p.id}', '${trackId}')">
+        <div class="playlist-info">
+          <h3 style="font-size:0.9rem;">${esc(p.name)}</h3>
+        </div>
+      </div>
+    `).join('');
+    html += '</div>';
+  }
+
+  html += `
+        <div class="playlist-modal-actions">
+          <button onclick="document.getElementById('playlistModalOverlay').remove()">Cancelar</button>
+          <button class="save" onclick="window.criarPlaylistEAdicionar('${trackId}')">+ Nova Playlist</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', html);
+};
+
+window.adicionarTrackPlaylist = (playlistId, trackId) => {
+  const added = addTrackToPlaylist(playlistId, trackId);
+  document.getElementById('playlistModalOverlay')?.remove();
+  showToast(added ? 'Adicionado à playlist!' : 'Esta música já está na playlist.');
+};
+
+window.criarPlaylistEAdicionar = (trackId) => {
+  document.getElementById('playlistModalOverlay')?.remove();
+  const name = prompt('Nome da nova playlist:');
+  if (name && name.trim()) {
+    const newPlaylist = createPlaylist(name.trim());
+    addTrackToPlaylist(newPlaylist.id, trackId);
+    renderPlaylistsTab();
+    showToast('Playlist criada e música adicionada!');
+  }
+};
 
 // ─── ABRIR ÁLBUM ───
 window.abrirAlbum = async (albumId) => {
@@ -329,7 +491,7 @@ function openOptionsMenu(track, meta, index, anchorEl) {
       } else if (action === 'rent') {
         window.location.href = `/?rent=${encodeURIComponent(track.id)}`;
       } else if (action === 'playlist') {
-        showToast('Funcionalidade de playlist em breve.');
+        window.abrirModalAdicionarPlaylist(track.id);
       }
 
       menu.remove();
@@ -469,19 +631,14 @@ window.playerNext = () => {
   if (!currentTrackMeta?.albumTracks) return;
   const tracks = currentTrackMeta.albumTracks;
   
-  // Se o modo repeat for "one", ele não deve avançar manualmente, apenas no "ended"
-  // Mas se o usuário clicar em "Próximo", ele deve ir para a próxima.
-  
   let nextIndex;
   const currentIndex = tracks.findIndex(t => String(t.id) === String(currentTrackId));
 
   if (shuffleEnabled && tracks.length > 1) {
-    // Modo aleatório: escolhe uma música diferente da atual
     do {
       nextIndex = Math.floor(Math.random() * tracks.length);
     } while (nextIndex === currentIndex);
   } else {
-    // Modo normal
     nextIndex = (currentIndex + 1) % tracks.length;
   }
 
@@ -525,7 +682,6 @@ window.toggleShuffle = () => {
 };
 
 window.toggleRepeat = () => {
-  // Ciclo: off -> all -> one -> off
   if (repeatMode === 'off') repeatMode = 'all';
   else if (repeatMode === 'all') repeatMode = 'one';
   else repeatMode = 'off';
@@ -533,13 +689,6 @@ window.toggleRepeat = () => {
   const btn = document.getElementById('repeatBtn');
   if (btn) {
     btn.style.color = repeatMode !== 'off' ? 'var(--green)' : 'var(--text-dim)';
-    // Adiciona um "1" visual se estiver no modo "one"
-    if (repeatMode === 'one') {
-      btn.style.position = 'relative';
-      // Apenas uma dica visual; podemos manter o mesmo ícone.
-    } else {
-      btn.style.position = '';
-    }
   }
   showToast(`Repetição: ${repeatMode === 'off' ? 'Desligada' : repeatMode === 'all' ? 'Álbum' : 'Música'}`);
 };
@@ -594,7 +743,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindAudioEvents();
   setupMediaSessionHandlers();
 
-  // Eventos dos botões de Shuffle e Repeat
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
 
