@@ -411,24 +411,21 @@ async function initPlayer(trackId, autoplay = true) {
     updateMediaSessionMetadata(meta);
 
     // ─── LÓGICA DEFINITIVA DA URL DO ÁUDIO ───
-    // Força a URL completa do R2 e garante que a pasta previews esteja presente
     const baseUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
     
-    // Pega o caminho do arquivo. Se não vier, usa o ID da track como fallback
-    let arquivo = meta.previewKey || `${trackId}.mp3`;
-    
-    // Garante que o caminho comece com a pasta previews
-    if (!arquivo.startsWith('previews/')) {
-      arquivo = 'previews/' + arquivo;
-    }
-    
-    // Remove barras duplicadas ou problemas de caminho
-    arquivo = arquivo.replace(/\/+/g, '/').replace(/^previews\/previews\//, 'previews/');
-    
+    // Cria o nome do arquivo a partir do título da música
+    // Ex: "Meio do Tempo" -> "meio-do-tempo.mp3"
+    let nomeArquivo = (meta.title || '')
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove acentos
+      .replace(/[^a-z0-9]+/g, '-') // Substitui espaços e símbolos por hífen
+      .replace(/^-+|-+$/g, '') // Remove hífens do início e fim
+      + '.mp3';
+
     // Monta a URL final absoluta
-    audio.src = `${baseUrl}/${arquivo}`;
-    
-    console.log('[Player] URL final absoluta do áudio:', audio.src);
+    audio.src = `${baseUrl}/previews/${nomeArquivo}`;
+
+    console.log('[Player] URL final do áudio (baseada no título):', audio.src);
     
     audio.load();
 
