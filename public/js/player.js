@@ -1,4 +1,4 @@
-// js/player.js — Versão Final com Mini-Player, Abas e Opções
+// js/player.js — Versão Final Definitiva (Abas, Mini-Player, Sem Conflitos)
 
 'use strict';
 
@@ -159,7 +159,7 @@ async function renderAlbumsTab() {
   }
 }
 
-// ─── ABRIR ÁLBUM (CORRIGIDO) ───
+// ─── ABRIR ÁLBUM ───
 window.abrirAlbum = async (albumId) => {
   const header = document.getElementById('albumTracklistHeader');
   const list = document.getElementById('musicList');
@@ -276,7 +276,7 @@ function renderPlayerTrackList(meta, currentId) {
   });
 }
 
-// ─── MENU DE OPÇÕES (3 pontinhos) ───
+// ─── MENU DE OPÇÕES ───
 function openOptionsMenu(track, meta, index, anchorEl) {
   document.getElementById('trackOptionsMenu')?.remove();
 
@@ -331,7 +331,7 @@ function openOptionsMenu(track, meta, index, anchorEl) {
   });
 }
 
-// ─── MEDIA SESSION (NOTIFICAÇÕES) ───
+// ─── MEDIA SESSION ───
 function updateMediaSessionMetadata(meta) {
   if (!('mediaSession' in navigator)) return;
   const cover = meta.coverUrl || '/assets/img/tema.webp';
