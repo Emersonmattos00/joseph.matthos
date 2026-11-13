@@ -251,6 +251,7 @@ window.deletarPlaylist = (id) => {
   }
 };
 
+// ─── ABRIR PLAYLIST (Versão Corrigida) ───
 window.abrirPlaylist = async (playlistId) => {
   const playlists = getPlaylists();
   const playlist = playlists.find(p => p.id === playlistId);
@@ -266,12 +267,11 @@ window.abrirPlaylist = async (playlistId) => {
   const list = document.getElementById('musicList');
   const header = document.getElementById('albumTracklistHeader');
   
-  if (header) header.style.display = 'none'; // Esconde o header do álbum
+  if (header) header.style.display = 'none';
   
   if (list) list.innerHTML = '<p style="text-align:center;color:#aaa;">Carregando faixas da playlist...</p>';
 
   try {
-    // Busca os metadados de todas as músicas da playlist
     const trackPromises = playlist.tracks.map(id => 
       fetch(`/api/public?track=${encodeURIComponent(id)}`).then(r => r.json())
     );
@@ -290,7 +290,6 @@ window.abrirPlaylist = async (playlistId) => {
       return;
     }
 
-    // Atualiza o currentTrackMeta para que as funções de Next/Prev funcionem
     currentTrackMeta = { 
       ...currentTrackMeta, 
       albumTracks: validTracks,
@@ -299,7 +298,6 @@ window.abrirPlaylist = async (playlistId) => {
       artist: 'Playlist'
     };
 
-    // Renderiza a lista
     renderPlayerTrackList(currentTrackMeta, currentTrackId);
 
   } catch (err) {
@@ -617,7 +615,7 @@ async function initPlayer(trackId, autoplay = true) {
     if (els.miniTitle) els.miniTitle.textContent = meta.title;
     if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    // ─── CORREÇÃO: Carrega as faixas do álbum da música ───
+    // Carrega as faixas do álbum da música
     const albumId = meta.albumId;
     if (albumId) {
       try {
@@ -638,12 +636,11 @@ async function initPlayer(trackId, autoplay = true) {
         if (albumErr.name !== 'AbortError') console.warn('[player] Falha ao carregar faixas do álbum:', albumErr);
       }
     }
-    // ─────────────────────────────────────────────────────────
 
     renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks || [] }, trackId);
     updateMediaSessionMetadata(meta);
 
-    // ─── LÓGICA DEFINITIVA DE ÁUDIO (BACKEND DECIDE) ───
+    // Áudio seguro
     audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
     console.log('[Player] Solicitando áudio seguro para o backend:', audio.src);
     
