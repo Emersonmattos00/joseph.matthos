@@ -1,4 +1,4 @@
-// js/player.js — versão final com abas, mini-player e menu de opções
+// js/player.js — Versão Final com Mini-Player, Abas e Opções
 
 'use strict';
 
@@ -66,13 +66,13 @@ const els = {
   fullscreenBtn: document.getElementById('fullscreenBtn'),
   shuffleBtn: document.getElementById('shuffleBtn'),
   repeatBtn: document.getElementById('repeatBtn'),
-  // Mini-Player
   miniPlayer: document.getElementById('miniPlayer'),
   miniCover: document.getElementById('miniCover'),
   miniTitle: document.getElementById('miniTitle'),
   miniArtist: document.getElementById('miniArtist'),
   miniPlayBtn: document.getElementById('miniPlayBtn'),
   miniNextBtn: document.getElementById('miniNextBtn'),
+  miniPrevBtn: document.getElementById('miniPrevBtn'),
   miniOpenBtn: document.getElementById('miniOpenBtn')
 };
 
@@ -90,10 +90,6 @@ let repeatMode = 'off';
 
 let playerRequestId = 0;
 let playerAbortController = null;
-
-let isRadioMode = false;
-let radioQueue = [];
-let radioIndex = -1;
 
 // ─── ABAS ───
 const tabs = document.querySelectorAll('.mobile-tab');
@@ -113,14 +109,12 @@ function updateTabState(activeTab) {
     c.hidden = !on;
   });
 
-  // Mostra o Mini-Player se não estiver na aba do player e houver áudio carregado
   if (tabName !== 'player' && currentTrackId) {
     els.miniPlayer.style.display = 'flex';
   } else {
     els.miniPlayer.style.display = 'none';
   }
 
-  // Se abrir a aba de álbuns, carrega a lista
   if (tabName === 'albums') {
     renderAlbumsTab();
   }
@@ -136,6 +130,7 @@ function switchTab(tabName) {
 // ─── MINI-PLAYER ───
 els.miniPlayBtn?.addEventListener('click', () => window.playerPlay());
 els.miniNextBtn?.addEventListener('click', () => window.playerNext());
+els.miniPrevBtn?.addEventListener('click', () => window.playerPrev());
 els.miniOpenBtn?.addEventListener('click', () => switchTab('player'));
 
 // ─── RENDERIZAR ÁLBUNS ───
@@ -164,7 +159,7 @@ async function renderAlbumsTab() {
   }
 }
 
-// ─── ABRIR ÁLBUM (mostra as faixas do álbum) ───
+// ─── ABRIR ÁLBUM (CORRIGIDO) ───
 window.abrirAlbum = async (albumId) => {
   const header = document.getElementById('albumTracklistHeader');
   const list = document.getElementById('musicList');
@@ -176,7 +171,7 @@ window.abrirAlbum = async (albumId) => {
   try {
     const res = await fetch(`/api/public?album=${albumId}&t=${Date.now()}`);
     const data = await res.json();
-    if (!data.ok || !data.album) throw new Error('Álbum não encontrado.');
+    if (!data.ok || !data.album) throw new Error(data.error || 'Álbum não encontrado.');
 
     const album = data.album;
     const tracks = album.tracks || [];
@@ -419,18 +414,13 @@ async function initPlayer(trackId, autoplay = true) {
       if (els.container) els.container.style.setProperty('--player-bg', `url('${meta.coverUrl}')`);
     }
 
-    // Mini-player
     if (els.miniCover) els.miniCover.style.backgroundImage = `url('${meta.coverUrl}')`;
     if (els.miniTitle) els.miniTitle.textContent = meta.title;
     if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-    // Lista de faixas do álbum
     renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
-
-    // Media Session
     updateMediaSessionMetadata(meta);
 
-    // Carrega o áudio
     audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
     audio.load();
 
