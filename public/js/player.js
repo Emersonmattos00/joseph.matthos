@@ -412,7 +412,9 @@ async function initPlayer(trackId, autoplay = true) {
     renderPlayerTrackList({ ...meta, albumTracks: meta.albumTracks }, trackId);
     updateMediaSessionMetadata(meta);
 
-    audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
+    const baseUrl = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+    // meta.previewKey já contém o caminho (ex: "previews/ser-nao-ser.mp3")
+    audio.src = `${baseUrl}/${meta.previewKey || 'previews/' + trackId + '.mp3'}`;
     audio.load();
 
     if (autoplay) {
