@@ -109,12 +109,14 @@ function updateTabState(activeTab) {
     c.hidden = !on;
   });
 
+  // CORREÇÃO: Se estiver em uma aba que não é o player, mostra o mini-player
   if (tabName !== 'player' && currentTrackId) {
     els.miniPlayer.style.display = 'flex';
   } else {
     els.miniPlayer.style.display = 'none';
   }
 
+  // Se abrir a aba de Álbuns, carrega a lista
   if (tabName === 'albums') {
     renderAlbumsTab();
   }
@@ -331,7 +333,7 @@ function openOptionsMenu(track, meta, index, anchorEl) {
   });
 }
 
-// ─── MEDIA SESSION ───
+// ─── MEDIA SESSION (NOTIFICAÇÕES) ───
 function updateMediaSessionMetadata(meta) {
   if (!('mediaSession' in navigator)) return;
   const cover = meta.coverUrl || '/assets/img/tema.webp';
