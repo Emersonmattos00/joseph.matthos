@@ -18,7 +18,7 @@
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
-      <nav class="mobile-tabs" role="tablist">
+      <nav class="mobile-tabs" role="tablist" aria-label="Seções do player">
         <button class="mobile-tab active" type="button" role="tab"
                 data-tab="player" id="tab-button-player"
                 aria-label="Player" aria-selected="true"
@@ -160,7 +160,7 @@
   </div>
 
   <!-- MINI-PLAYER -->
-  <div id="miniPlayer" class="mini-player" style="display: none;" aria-label="Mini-player">
+  <div id="miniPlayer" class="mini-player" role="region" aria-label="Mini-player" style="display: none;">
     <div class="mini-cover" id="miniCover" aria-hidden="true"></div>
     <div class="mini-info">
       <div class="mini-title" id="miniTitle">Nenhuma música</div>
@@ -177,11 +177,11 @@
         <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
       </button>
       <button type="button" id="miniOpenBtn" aria-label="Abrir player">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
       </button>
     </div>
   </div>
 
   <script src="/js/player.js?v=33" defer></script>
 </body>
-        </html>
+</html>
