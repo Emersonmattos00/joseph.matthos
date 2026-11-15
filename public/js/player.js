@@ -1,8 +1,14 @@
-// js/player.js — v32.9
-// v32.8 → v32.9:
-// - audioReady: consume rejeição no catch síncrono de src=/load()
-//   (evita unhandledrejection; cleanup continua executando via fail())
-// - Backend TBD mantido
+// js/player.js — v32.9.1
+// v32.9 → v32.9.1:
+// - updateTabState: sincroniza tabindex (0/-1) das abas (WAI-ARIA APG)
+// - Tablist: navegação por ArrowLeft/ArrowRight/Home/End
+// - Progresso: aria-valuenow/aria-valuetext no mesmo setInterval (sem timer novo)
+// - resetProgressUI e restorePlaybackSnapshot: reset/restaura ARIA
+// - syncProgressUI(): seek por click/teclado atualiza ARIA com player pausado
+// - renderPlayerTrackList: music-item focável (role=button, tabindex, Enter/Space)
+// - renderPlaylistsTab: role/tabindex movidos de .playlist-info para .playlist-card
+//   + guarda no delete (lixeira não abre a playlist)
+// - setBuffering: sem alteração (já correto em #playerContainer)
 
 'use strict';
 
@@ -335,9 +341,16 @@ async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
   try {
     const dur = snapshot.audio.duration || 0;
     const cur = snapshot.audio.currentTime || 0;
-    if (els.progressFill) els.progressFill.style.width = `${dur > 0 ? Math.min(100, (cur/dur)*100) : 0}%`;
+    const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
+    if (els.progressFill) els.progressFill.style.width = `${pct}%`;
     if (els.currentTime) els.currentTime.textContent = formatTime(cur);
     if (els.duration) els.duration.textContent = formatTime(dur);
+    /* ← v32.9.1 — restaura ARIA junto com o visual */
+    if (els.progressBar) {
+      els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
+      els.progressBar.setAttribute('aria-valuetext',
+        `${formatTime(cur)} de ${formatTime(dur)}`);
+    }
   } catch {}
 
   if (snapshot.wasPaused) {
@@ -370,13 +383,38 @@ const tabContents = document.querySelectorAll('.tab-content');
 function updateTabState(activeTab) {
   const name = activeTab?.dataset.tab;
   if (!name) return;
-  tabs.forEach(t => { const on = t === activeTab; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
-  tabContents.forEach(c => { const on = c.id === `tab-${name}`; c.classList.toggle('active', on); c.hidden = !on; });
+  tabs.forEach(t => {
+    const on = t === activeTab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.setAttribute('tabindex', on ? '0' : '-1');           /* ← v32.9.1 */
+  });
+  tabContents.forEach(c => {
+    const on = c.id === `tab-${name}`;
+    c.classList.toggle('active', on);
+    c.hidden = !on;
+  });
   if (els.miniPlayer) els.miniPlayer.style.display = (name !== 'player' && currentTrackId) ? 'flex' : 'none';
   if (name === 'albums') renderAlbumsTab();
   if (name === 'playlists') renderPlaylistsTab();
 }
 tabs.forEach(t => t.addEventListener('click', () => updateTabState(t)));
+
+/* ← v32.9.1 — navegação por setas no tablist (WAI-ARIA APG) */
+tabs.forEach((tab, idx) => {
+  tab.addEventListener('keydown', (e) => {
+    let next = null;
+    if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    tabs[next].focus();
+    updateTabState(tabs[next]);
+  });
+});
+
 function switchTab(name) { const b = document.querySelector(`.mobile-tab[data-tab="${name}"]`); if (b) updateTabState(b); }
 
 // ─── CATÁLOGO ───
@@ -431,15 +469,23 @@ function renderPlaylistsTab() {
   }
   pl.forEach(p => {
     const card = document.createElement('div'); card.className = 'playlist-card';
+    /* ← v32.9.1 — foco/role movidos de .playlist-info para .playlist-card */
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-label', `Abrir playlist ${p.name}`);
     const info = document.createElement('div'); info.className = 'playlist-info';
-    info.setAttribute('role', 'button');
-    info.setAttribute('tabindex', '0');
-    info.setAttribute('aria-label', `Abrir playlist ${p.name}`);
     const t = document.createElement('h3'); t.textContent = p.name;
     const s = document.createElement('p'); s.textContent = `${p.tracks.length} faixas`;
     info.append(t, s);
-    info.addEventListener('click', () => window.abrirPlaylist(p.id));
-    info.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.abrirPlaylist(p.id); } });
+    /* ← v32.9.1 — clique/teclado no card; lixeira não abre */
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.playlist-delete-btn')) return;
+      window.abrirPlaylist(p.id);
+    });
+    card.addEventListener('keydown', (e) => {
+      if (e.target !== card) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.abrirPlaylist(p.id); }
+    });
     const d = document.createElement('button'); d.className = 'playlist-delete-btn'; d.title = 'Excluir'; d.setAttribute('aria-label', `Excluir playlist ${p.name}`); d.textContent = '🗑️';
     d.addEventListener('click', (e) => { e.stopPropagation(); window.deletarPlaylist(p.id); });
     card.append(info, d); c.appendChild(card);
@@ -558,7 +604,18 @@ function renderPlayerTrackList(context, currentId) {
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
     item.append(nc, info, act);
+    /* ← v32.9.1 — item focável + teclado (ignora foco em botões filhos) */
+    item.setAttribute('role', 'button');
+    item.setAttribute('tabindex', '0');
+    item.setAttribute('aria-label', `Tocar ${track.title || 'faixa'}`);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
+    item.addEventListener('keydown', (e) => {
+      if (e.target !== item) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        window.tocarMusicaDaLista(String(track.id), 'user');
+      }
+    });
     els.musicList.appendChild(item);
   });
 }
@@ -628,6 +685,26 @@ function resetProgressUI() {
   if (els.progressFill) els.progressFill.style.width = '0%';
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
+  /* ← v32.9.1 — reset ARIA junto com o visual */
+  if (els.progressBar) {
+    els.progressBar.setAttribute('aria-valuenow', '0');
+    els.progressBar.setAttribute('aria-valuetext', '0:00 de 0:00');
+  }
+}
+/* ← v32.9.1 — sincroniza visual + ARIA a partir do áudio atual (seek com player pausado) */
+function syncProgressUI() {
+  if (!currentAudio) return;
+  const s = currentAudio.currentTime || 0;
+  const d = Number.isFinite(currentAudio.duration) ? currentAudio.duration : 0;
+  const pct = d > 0 ? Math.min(100, (s / d) * 100) : 0;
+  if (els.progressFill) els.progressFill.style.width = `${pct}%`;
+  if (els.currentTime) els.currentTime.textContent = formatTime(s);
+  if (els.duration) els.duration.textContent = formatTime(d);
+  if (els.progressBar) {
+    els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
+    els.progressBar.setAttribute('aria-valuetext',
+      `${formatTime(s)} de ${formatTime(d)}`);
+  }
 }
 function attemptPlay(audioEl) {
   if (!audioEl || !audioEl.src) return Promise.resolve({ started: false, reason: 'no-src' });
@@ -667,9 +744,16 @@ function attachPlaybackListeners(a) {
     updateInterval = setInterval(() => {
       if (a !== currentAudio) return;
       const s = a.currentTime || 0, d = a.duration || 0;
-      if (els.progressFill) els.progressFill.style.width = `${d > 0 ? Math.min(100, (s/d)*100) : 0}%`;
+      const pct = d > 0 ? Math.min(100, (s / d) * 100) : 0;
+      if (els.progressFill) els.progressFill.style.width = `${pct}%`;
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
+      /* ← v32.9.1 — ARIA no mesmo ponto de update, sem timer novo */
+      if (els.progressBar) {
+        els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
+        els.progressBar.setAttribute('aria-valuetext',
+          `${formatTime(s)} de ${formatTime(d)}`);
+      }
     }, 250);
   });
   a.addEventListener('pause', () => {
@@ -836,7 +920,6 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
       createdAudio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
       createdAudio.load();
     } catch (loadErr) {
-      // v32.9: failAudioReady executa cleanup, await consome rejeição (evita unhandledrejection)
       if (failAudioReady) {
         failAudioReady(loadErr);
         try { await audioReady; } catch {}
@@ -1337,11 +1420,12 @@ async function bootPlayer() {
     if (r.width <= 0) return;
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     currentAudio.currentTime = p * currentAudio.duration;
+    syncProgressUI();                                       /* ← v32.9.1 */
   });
   els.progressBar?.addEventListener('keydown', (e) => {
     if (!currentAudio || !Number.isFinite(currentAudio.duration) || currentAudio.duration <= 0) return;
-    if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); syncProgressUI(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); syncProgressUI(); }
   });
   els.fullscreenBtn?.addEventListener('click', () => {
     if (!els.container || typeof els.container.requestFullscreen !== 'function') return;
