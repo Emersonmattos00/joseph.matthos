@@ -1,7 +1,8 @@
-// js/player.js — v32.10
-// v32.9 → v32.10:
-// - updateTabState atualiza tabindex das abas (0 ativo, -1 inativo)
-// - setInterval do play atualiza aria-valuenow + aria-valuetext do progressBar
+// js/player.js — v32.9
+// v32.8 → v32.9:
+// - audioReady: consume rejeição no catch síncrono de src=/load()
+//   (evita unhandledrejection; cleanup continua executando via fail())
+// - Backend TBD mantido
 
 'use strict';
 
@@ -369,18 +370,8 @@ const tabContents = document.querySelectorAll('.tab-content');
 function updateTabState(activeTab) {
   const name = activeTab?.dataset.tab;
   if (!name) return;
-  tabs.forEach(t => {
-    const on = t === activeTab;
-    t.classList.toggle('active', on);
-    t.setAttribute('aria-selected', on ? 'true' : 'false');
-    // v32.10: sincroniza tabindex com aba ativa
-    t.setAttribute('tabindex', on ? '0' : '-1');
-  });
-  tabContents.forEach(c => {
-    const on = c.id === `tab-${name}`;
-    c.classList.toggle('active', on);
-    c.hidden = !on;
-  });
+  tabs.forEach(t => { const on = t === activeTab; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  tabContents.forEach(c => { const on = c.id === `tab-${name}`; c.classList.toggle('active', on); c.hidden = !on; });
   if (els.miniPlayer) els.miniPlayer.style.display = (name !== 'player' && currentTrackId) ? 'flex' : 'none';
   if (name === 'albums') renderAlbumsTab();
   if (name === 'playlists') renderPlaylistsTab();
@@ -431,7 +422,7 @@ function renderPlaylistsTab() {
   const pl = getPlaylists(); c.innerHTML = '';
   const h = document.createElement('div'); h.className = 'playlist-header';
   const t = document.createElement('h2'); t.textContent = 'Minhas Playlists'; h.appendChild(t);
-  const b = document.createElement('button'); b.type = 'button'; b.className = 'btn-new-playlist'; b.textContent = '+ Nova';
+  const b = document.createElement('button'); b.className = 'btn-new-playlist'; b.textContent = '+ Nova';
   b.setAttribute('aria-label', 'Criar nova playlist');
   b.addEventListener('click', () => window.criarPlaylistModal()); h.appendChild(b); c.appendChild(h);
   if (!pl.length) {
@@ -449,7 +440,7 @@ function renderPlaylistsTab() {
     info.append(t, s);
     info.addEventListener('click', () => window.abrirPlaylist(p.id));
     info.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.abrirPlaylist(p.id); } });
-    const d = document.createElement('button'); d.type = 'button'; d.className = 'playlist-delete-btn'; d.title = 'Excluir'; d.setAttribute('aria-label', `Excluir playlist ${p.name}`); d.textContent = '🗑️';
+    const d = document.createElement('button'); d.className = 'playlist-delete-btn'; d.title = 'Excluir'; d.setAttribute('aria-label', `Excluir playlist ${p.name}`); d.textContent = '🗑️';
     d.addEventListener('click', (e) => { e.stopPropagation(); window.deletarPlaylist(p.id); });
     card.append(info, d); c.appendChild(card);
   });
@@ -491,8 +482,8 @@ window.abrirModalAdicionarPlaylist = (trackId) => {
     m.appendChild(l);
   }
   const ac = document.createElement('div'); ac.className = 'playlist-modal-actions';
-  const cb = document.createElement('button'); cb.type = 'button'; cb.textContent = 'Cancelar'; cb.addEventListener('click', () => ov.remove());
-  const sb = document.createElement('button'); sb.type = 'button'; sb.className = 'save'; sb.textContent = '+ Nova'; sb.addEventListener('click', () => window.criarPlaylistEAdicionar(trackId));
+  const cb = document.createElement('button'); cb.textContent = 'Cancelar'; cb.addEventListener('click', () => ov.remove());
+  const sb = document.createElement('button'); sb.className = 'save'; sb.textContent = '+ Nova'; sb.addEventListener('click', () => window.criarPlaylistEAdicionar(trackId));
   ac.append(cb, sb); m.appendChild(ac); ov.appendChild(m); document.body.appendChild(ov);
 };
 window.adicionarTrackPlaylist = (id, trackId) => {
@@ -530,7 +521,7 @@ function renderPlayerTrackList(context, currentId) {
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
     const act = document.createElement('div'); act.className = 'music-item-actions';
-    const like = document.createElement('button'); like.type = 'button'; like.className = 'action-icon';
+    const like = document.createElement('button'); like.className = 'action-icon';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
     like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
@@ -542,7 +533,7 @@ function renderPlayerTrackList(context, currentId) {
       } else showToast('Erro ao salvar.');
     });
     act.appendChild(like);
-    const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'action-icon';
+    const sh = document.createElement('button'); sh.className = 'action-icon';
     sh.setAttribute('aria-label', 'Compartilhar faixa');
     sh.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
     sh.addEventListener('click', async (e) => {
@@ -554,14 +545,14 @@ function renderPlayerTrackList(context, currentId) {
       else showToast('Não suportado.');
     });
     act.appendChild(sh);
-    const rt = document.createElement('button'); rt.type = 'button'; rt.className = 'action-icon';
+    const rt = document.createElement('button'); rt.className = 'action-icon';
     rt.setAttribute('aria-label', 'Alugar faixa');
     rt.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>`;
     rt.addEventListener('click', (e) => { e.stopPropagation(); window.location.href = `/?rent=${encodeURIComponent(track.id)}`; });
     act.appendChild(rt);
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
-    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'action-icon';
+    const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
@@ -577,7 +568,7 @@ function openOptionsMenu(track, anchorEl) {
   const m = document.createElement('div'); m.id = 'trackOptionsMenu'; m.className = 'track-options-menu';
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-  m.innerHTML = `<button type="button" role="menuitem" data-action="share">🔗 Compartilhar</button><button type="button" role="menuitem" data-action="copy">📋 Copiar</button><button type="button" role="menuitem" data-action="rent">🎫 Alugar</button><button type="button" role="menuitem" data-action="playlist">➕ Playlist</button>`;
+  m.innerHTML = `<button role="menuitem" data-action="share">🔗 Compartilhar</button><button role="menuitem" data-action="copy">📋 Copiar</button><button role="menuitem" data-action="rent">🎫 Alugar</button><button role="menuitem" data-action="playlist">➕ Playlist</button>`;
   document.body.appendChild(m);
   const r = anchorEl.getBoundingClientRect(); const mr = m.getBoundingClientRect();
   m.style.top = `${Math.max(10, Math.min(r.bottom + 6, window.innerHeight - mr.height - 10))}px`;
@@ -637,10 +628,6 @@ function resetProgressUI() {
   if (els.progressFill) els.progressFill.style.width = '0%';
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
-  if (els.progressBar) {
-    els.progressBar.setAttribute('aria-valuenow', '0');
-    els.progressBar.setAttribute('aria-valuetext', '0 minutos e 0 segundos');
-  }
 }
 function attemptPlay(audioEl) {
   if (!audioEl || !audioEl.src) return Promise.resolve({ started: false, reason: 'no-src' });
@@ -679,18 +666,10 @@ function attachPlaybackListeners(a) {
     clearInterval(updateInterval);
     updateInterval = setInterval(() => {
       if (a !== currentAudio) return;
-      const s = Number.isFinite(a.currentTime) ? a.currentTime : 0;
-      const d = Number.isFinite(a.duration) ? a.duration : 0;
-      const percent = d > 0 ? Math.max(0, Math.min(100, (s/d)*100)) : 0;
-      if (els.progressFill) els.progressFill.style.width = `${percent}%`;
+      const s = a.currentTime || 0, d = a.duration || 0;
+      if (els.progressFill) els.progressFill.style.width = `${d > 0 ? Math.min(100, (s/d)*100) : 0}%`;
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
-      // v32.10: atualiza atributos ARIA do slider de progresso
-      if (els.progressBar) {
-        els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
-        els.progressBar.setAttribute('aria-valuetext',
-          `${Math.floor(s/60)} minutos e ${Math.floor(s%60)} segundos`);
-      }
     }, 250);
   });
   a.addEventListener('pause', () => {
@@ -857,6 +836,7 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
       createdAudio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
       createdAudio.load();
     } catch (loadErr) {
+      // v32.9: failAudioReady executa cleanup, await consome rejeição (evita unhandledrejection)
       if (failAudioReady) {
         failAudioReady(loadErr);
         try { await audioReady; } catch {}
@@ -1328,7 +1308,7 @@ window.abrirPlaylist = async (playlistId) => {
       if (sub) sub.style.display = 'none';
       let eb = header.querySelector('.btn-edit-cover');
       if (!eb) {
-        eb = document.createElement('button'); eb.type = 'button'; eb.className = 'btn-edit-cover'; eb.textContent = 'Editar Capa';
+        eb = document.createElement('button'); eb.className = 'btn-edit-cover'; eb.textContent = 'Editar Capa';
         eb.setAttribute('aria-label', 'Editar capa da playlist');
         eb.addEventListener('click', () => window.editarCapaPlaylist(playlistId));
         header.appendChild(eb);
@@ -1362,8 +1342,6 @@ async function bootPlayer() {
     if (!currentAudio || !Number.isFinite(currentAudio.duration) || currentAudio.duration <= 0) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); }
-    else if (e.key === 'Home') { e.preventDefault(); currentAudio.currentTime = 0; }
-    else if (e.key === 'End') { e.preventDefault(); currentAudio.currentTime = currentAudio.duration; }
   });
   els.fullscreenBtn?.addEventListener('click', () => {
     if (!els.container || typeof els.container.requestFullscreen !== 'function') return;
