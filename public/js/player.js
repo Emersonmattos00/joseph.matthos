@@ -1,14 +1,7 @@
-// js/player.js — v32.9.1
-// v32.9 → v32.9.1:
-// - updateTabState: sincroniza tabindex (0/-1) das abas (WAI-ARIA APG)
-// - Tablist: navegação por ArrowLeft/ArrowRight/Home/End
-// - Progresso: aria-valuenow/aria-valuetext no mesmo setInterval (sem timer novo)
-// - resetProgressUI e restorePlaybackSnapshot: reset/restaura ARIA
-// - syncProgressUI(): seek por click/teclado atualiza ARIA com player pausado
-// - renderPlayerTrackList: music-item focável (role=button, tabindex, Enter/Space)
-// - renderPlaylistsTab: role/tabindex movidos de .playlist-info para .playlist-card
-//   + guarda no delete (lixeira não abre a playlist)
-// - setBuffering: sem alteração (já correto em #playerContainer)
+// js/player.js — v32.10
+// v32.9 → v32.10:
+// - updateTabState atualiza tabindex das abas (0 ativo, -1 inativo)
+// - setInterval do play atualiza aria-valuenow + aria-valuetext do progressBar
 
 'use strict';
 
@@ -341,16 +334,9 @@ async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
   try {
     const dur = snapshot.audio.duration || 0;
     const cur = snapshot.audio.currentTime || 0;
-    const pct = dur > 0 ? Math.min(100, (cur / dur) * 100) : 0;
-    if (els.progressFill) els.progressFill.style.width = `${pct}%`;
+    if (els.progressFill) els.progressFill.style.width = `${dur > 0 ? Math.min(100, (cur/dur)*100) : 0}%`;
     if (els.currentTime) els.currentTime.textContent = formatTime(cur);
     if (els.duration) els.duration.textContent = formatTime(dur);
-    /* ← v32.9.1 — restaura ARIA junto com o visual */
-    if (els.progressBar) {
-      els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
-      els.progressBar.setAttribute('aria-valuetext',
-        `${formatTime(cur)} de ${formatTime(dur)}`);
-    }
   } catch {}
 
   if (snapshot.wasPaused) {
@@ -387,7 +373,8 @@ function updateTabState(activeTab) {
     const on = t === activeTab;
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on ? 'true' : 'false');
-    t.setAttribute('tabindex', on ? '0' : '-1');           /* ← v32.9.1 */
+    // v32.10: sincroniza tabindex com aba ativa
+    t.setAttribute('tabindex', on ? '0' : '-1');
   });
   tabContents.forEach(c => {
     const on = c.id === `tab-${name}`;
@@ -399,22 +386,6 @@ function updateTabState(activeTab) {
   if (name === 'playlists') renderPlaylistsTab();
 }
 tabs.forEach(t => t.addEventListener('click', () => updateTabState(t)));
-
-/* ← v32.9.1 — navegação por setas no tablist (WAI-ARIA APG) */
-tabs.forEach((tab, idx) => {
-  tab.addEventListener('keydown', (e) => {
-    let next = null;
-    if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
-    else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
-    else if (e.key === 'Home') next = 0;
-    else if (e.key === 'End') next = tabs.length - 1;
-    if (next === null) return;
-    e.preventDefault();
-    tabs[next].focus();
-    updateTabState(tabs[next]);
-  });
-});
-
 function switchTab(name) { const b = document.querySelector(`.mobile-tab[data-tab="${name}"]`); if (b) updateTabState(b); }
 
 // ─── CATÁLOGO ───
@@ -460,7 +431,7 @@ function renderPlaylistsTab() {
   const pl = getPlaylists(); c.innerHTML = '';
   const h = document.createElement('div'); h.className = 'playlist-header';
   const t = document.createElement('h2'); t.textContent = 'Minhas Playlists'; h.appendChild(t);
-  const b = document.createElement('button'); b.className = 'btn-new-playlist'; b.textContent = '+ Nova';
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'btn-new-playlist'; b.textContent = '+ Nova';
   b.setAttribute('aria-label', 'Criar nova playlist');
   b.addEventListener('click', () => window.criarPlaylistModal()); h.appendChild(b); c.appendChild(h);
   if (!pl.length) {
@@ -469,24 +440,16 @@ function renderPlaylistsTab() {
   }
   pl.forEach(p => {
     const card = document.createElement('div'); card.className = 'playlist-card';
-    /* ← v32.9.1 — foco/role movidos de .playlist-info para .playlist-card */
-    card.setAttribute('role', 'button');
-    card.setAttribute('tabindex', '0');
-    card.setAttribute('aria-label', `Abrir playlist ${p.name}`);
     const info = document.createElement('div'); info.className = 'playlist-info';
+    info.setAttribute('role', 'button');
+    info.setAttribute('tabindex', '0');
+    info.setAttribute('aria-label', `Abrir playlist ${p.name}`);
     const t = document.createElement('h3'); t.textContent = p.name;
     const s = document.createElement('p'); s.textContent = `${p.tracks.length} faixas`;
     info.append(t, s);
-    /* ← v32.9.1 — clique/teclado no card; lixeira não abre */
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.playlist-delete-btn')) return;
-      window.abrirPlaylist(p.id);
-    });
-    card.addEventListener('keydown', (e) => {
-      if (e.target !== card) return;
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.abrirPlaylist(p.id); }
-    });
-    const d = document.createElement('button'); d.className = 'playlist-delete-btn'; d.title = 'Excluir'; d.setAttribute('aria-label', `Excluir playlist ${p.name}`); d.textContent = '🗑️';
+    info.addEventListener('click', () => window.abrirPlaylist(p.id));
+    info.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.abrirPlaylist(p.id); } });
+    const d = document.createElement('button'); d.type = 'button'; d.className = 'playlist-delete-btn'; d.title = 'Excluir'; d.setAttribute('aria-label', `Excluir playlist ${p.name}`); d.textContent = '🗑️';
     d.addEventListener('click', (e) => { e.stopPropagation(); window.deletarPlaylist(p.id); });
     card.append(info, d); c.appendChild(card);
   });
@@ -528,8 +491,8 @@ window.abrirModalAdicionarPlaylist = (trackId) => {
     m.appendChild(l);
   }
   const ac = document.createElement('div'); ac.className = 'playlist-modal-actions';
-  const cb = document.createElement('button'); cb.textContent = 'Cancelar'; cb.addEventListener('click', () => ov.remove());
-  const sb = document.createElement('button'); sb.className = 'save'; sb.textContent = '+ Nova'; sb.addEventListener('click', () => window.criarPlaylistEAdicionar(trackId));
+  const cb = document.createElement('button'); cb.type = 'button'; cb.textContent = 'Cancelar'; cb.addEventListener('click', () => ov.remove());
+  const sb = document.createElement('button'); sb.type = 'button'; sb.className = 'save'; sb.textContent = '+ Nova'; sb.addEventListener('click', () => window.criarPlaylistEAdicionar(trackId));
   ac.append(cb, sb); m.appendChild(ac); ov.appendChild(m); document.body.appendChild(ov);
 };
 window.adicionarTrackPlaylist = (id, trackId) => {
@@ -567,7 +530,7 @@ function renderPlayerTrackList(context, currentId) {
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
     const act = document.createElement('div'); act.className = 'music-item-actions';
-    const like = document.createElement('button'); like.className = 'action-icon';
+    const like = document.createElement('button'); like.type = 'button'; like.className = 'action-icon';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
     like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
@@ -579,7 +542,7 @@ function renderPlayerTrackList(context, currentId) {
       } else showToast('Erro ao salvar.');
     });
     act.appendChild(like);
-    const sh = document.createElement('button'); sh.className = 'action-icon';
+    const sh = document.createElement('button'); sh.type = 'button'; sh.className = 'action-icon';
     sh.setAttribute('aria-label', 'Compartilhar faixa');
     sh.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
     sh.addEventListener('click', async (e) => {
@@ -591,31 +554,20 @@ function renderPlayerTrackList(context, currentId) {
       else showToast('Não suportado.');
     });
     act.appendChild(sh);
-    const rt = document.createElement('button'); rt.className = 'action-icon';
+    const rt = document.createElement('button'); rt.type = 'button'; rt.className = 'action-icon';
     rt.setAttribute('aria-label', 'Alugar faixa');
     rt.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>`;
     rt.addEventListener('click', (e) => { e.stopPropagation(); window.location.href = `/?rent=${encodeURIComponent(track.id)}`; });
     act.appendChild(rt);
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
-    const mb = document.createElement('button'); mb.className = 'action-icon';
+    const mb = document.createElement('button'); mb.type = 'button'; mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
     item.append(nc, info, act);
-    /* ← v32.9.1 — item focável + teclado (ignora foco em botões filhos) */
-    item.setAttribute('role', 'button');
-    item.setAttribute('tabindex', '0');
-    item.setAttribute('aria-label', `Tocar ${track.title || 'faixa'}`);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
-    item.addEventListener('keydown', (e) => {
-      if (e.target !== item) return;
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        window.tocarMusicaDaLista(String(track.id), 'user');
-      }
-    });
     els.musicList.appendChild(item);
   });
 }
@@ -625,7 +577,7 @@ function openOptionsMenu(track, anchorEl) {
   const m = document.createElement('div'); m.id = 'trackOptionsMenu'; m.className = 'track-options-menu';
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-  m.innerHTML = `<button role="menuitem" data-action="share">🔗 Compartilhar</button><button role="menuitem" data-action="copy">📋 Copiar</button><button role="menuitem" data-action="rent">🎫 Alugar</button><button role="menuitem" data-action="playlist">➕ Playlist</button>`;
+  m.innerHTML = `<button type="button" role="menuitem" data-action="share">🔗 Compartilhar</button><button type="button" role="menuitem" data-action="copy">📋 Copiar</button><button type="button" role="menuitem" data-action="rent">🎫 Alugar</button><button type="button" role="menuitem" data-action="playlist">➕ Playlist</button>`;
   document.body.appendChild(m);
   const r = anchorEl.getBoundingClientRect(); const mr = m.getBoundingClientRect();
   m.style.top = `${Math.max(10, Math.min(r.bottom + 6, window.innerHeight - mr.height - 10))}px`;
@@ -685,25 +637,9 @@ function resetProgressUI() {
   if (els.progressFill) els.progressFill.style.width = '0%';
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
-  /* ← v32.9.1 — reset ARIA junto com o visual */
   if (els.progressBar) {
     els.progressBar.setAttribute('aria-valuenow', '0');
-    els.progressBar.setAttribute('aria-valuetext', '0:00 de 0:00');
-  }
-}
-/* ← v32.9.1 — sincroniza visual + ARIA a partir do áudio atual (seek com player pausado) */
-function syncProgressUI() {
-  if (!currentAudio) return;
-  const s = currentAudio.currentTime || 0;
-  const d = Number.isFinite(currentAudio.duration) ? currentAudio.duration : 0;
-  const pct = d > 0 ? Math.min(100, (s / d) * 100) : 0;
-  if (els.progressFill) els.progressFill.style.width = `${pct}%`;
-  if (els.currentTime) els.currentTime.textContent = formatTime(s);
-  if (els.duration) els.duration.textContent = formatTime(d);
-  if (els.progressBar) {
-    els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
-    els.progressBar.setAttribute('aria-valuetext',
-      `${formatTime(s)} de ${formatTime(d)}`);
+    els.progressBar.setAttribute('aria-valuetext', '0 minutos e 0 segundos');
   }
 }
 function attemptPlay(audioEl) {
@@ -743,16 +679,17 @@ function attachPlaybackListeners(a) {
     clearInterval(updateInterval);
     updateInterval = setInterval(() => {
       if (a !== currentAudio) return;
-      const s = a.currentTime || 0, d = a.duration || 0;
-      const pct = d > 0 ? Math.min(100, (s / d) * 100) : 0;
-      if (els.progressFill) els.progressFill.style.width = `${pct}%`;
+      const s = Number.isFinite(a.currentTime) ? a.currentTime : 0;
+      const d = Number.isFinite(a.duration) ? a.duration : 0;
+      const percent = d > 0 ? Math.max(0, Math.min(100, (s/d)*100)) : 0;
+      if (els.progressFill) els.progressFill.style.width = `${percent}%`;
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
-      /* ← v32.9.1 — ARIA no mesmo ponto de update, sem timer novo */
+      // v32.10: atualiza atributos ARIA do slider de progresso
       if (els.progressBar) {
-        els.progressBar.setAttribute('aria-valuenow', String(Math.round(pct)));
+        els.progressBar.setAttribute('aria-valuenow', String(Math.round(percent)));
         els.progressBar.setAttribute('aria-valuetext',
-          `${formatTime(s)} de ${formatTime(d)}`);
+          `${Math.floor(s/60)} minutos e ${Math.floor(s%60)} segundos`);
       }
     }, 250);
   });
@@ -1391,7 +1328,7 @@ window.abrirPlaylist = async (playlistId) => {
       if (sub) sub.style.display = 'none';
       let eb = header.querySelector('.btn-edit-cover');
       if (!eb) {
-        eb = document.createElement('button'); eb.className = 'btn-edit-cover'; eb.textContent = 'Editar Capa';
+        eb = document.createElement('button'); eb.type = 'button'; eb.className = 'btn-edit-cover'; eb.textContent = 'Editar Capa';
         eb.setAttribute('aria-label', 'Editar capa da playlist');
         eb.addEventListener('click', () => window.editarCapaPlaylist(playlistId));
         header.appendChild(eb);
@@ -1420,12 +1357,13 @@ async function bootPlayer() {
     if (r.width <= 0) return;
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     currentAudio.currentTime = p * currentAudio.duration;
-    syncProgressUI();                                       /* ← v32.9.1 */
   });
   els.progressBar?.addEventListener('keydown', (e) => {
     if (!currentAudio || !Number.isFinite(currentAudio.duration) || currentAudio.duration <= 0) return;
-    if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); syncProgressUI(); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); syncProgressUI(); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); }
+    else if (e.key === 'Home') { e.preventDefault(); currentAudio.currentTime = 0; }
+    else if (e.key === 'End') { e.preventDefault(); currentAudio.currentTime = currentAudio.duration; }
   });
   els.fullscreenBtn?.addEventListener('click', () => {
     if (!els.container || typeof els.container.requestFullscreen !== 'function') return;
