@@ -45,7 +45,6 @@ body.player-page button {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Focus visível para acessibilidade por teclado */
 body.player-page button:focus-visible,
 body.player-page [tabindex="0"]:focus-visible,
 body.player-page [role="slider"]:focus-visible {
@@ -105,6 +104,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.player-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .mobile-tabs {
   display: flex;
   gap: 1.5rem;
@@ -122,6 +125,10 @@ body.player-page [role="slider"]:focus-visible {
   align-items: center;
   justify-content: center;
   transition: color 0.2s;
+}
+
+.mobile-tab:hover {
+  color: #fff;
 }
 
 .mobile-tab.active {
@@ -169,11 +176,10 @@ body.player-page [role="slider"]:focus-visible {
   display: none !important;
 }
 
-/* ─── 6. ABA PLAYER (BASE MOBILE-FIRST) ─── */
+/* ─── 6. ABA PLAYER ─── */
 #tab-player {
-  justify-content: space-evenly;
+  justify-content: space-evenly; /* Melhora a distribuição da capa e controles */
   padding: 1rem 0;
-  width: 100%;
 }
 
 .player-col--cover {
@@ -183,13 +189,13 @@ body.player-page [role="slider"]:focus-visible {
   justify-content: center;
   min-height: 0;
   padding: 0 1.5rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.5rem; /* Separa a capa do título */
 }
 
 .player-cover-wrap {
   width: 100%;
   max-width: min(380px, 80vw);
-  max-height: 45dvh;
+  max-height: 45dvh; /* Impede que a capa ocupe a tela toda no mobile */
   aspect-ratio: 1 / 1;
   border-radius: 12px;
   overflow: hidden;
@@ -204,7 +210,7 @@ body.player-page [role="slider"]:focus-visible {
 .album-cover {
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: contain; /* Mostra a imagem inteira, sem cortar as bordas */
   display: block;
   background-color: #000;
 }
@@ -213,16 +219,12 @@ body.player-page [role="slider"]:focus-visible {
   flex-shrink: 0;
   padding-top: 1rem;
   width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
 .player-track-info-center {
   text-align: center;
   margin-bottom: 1.5rem;
   padding: 0 1.5rem;
-  width: 100%;
 }
 
 .track-title-large {
@@ -282,7 +284,6 @@ body.player-page [role="slider"]:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 0 1.5rem;
-  width: 100%;
 }
 
 .control-btn {
@@ -297,6 +298,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: color 0.2s, transform 0.15s;
 }
 
+.control-btn:hover {
+  color: #fff;
+}
+
 .control-btn:active {
   transform: scale(0.95);
 }
@@ -308,6 +313,11 @@ body.player-page [role="slider"]:focus-visible {
   border-radius: 50%;
   color: #000;
   justify-content: center;
+}
+
+.play-btn-large:hover {
+  background: var(--gold-soft);
+  color: #000;
 }
 
 .play-btn-large svg {
@@ -341,6 +351,10 @@ body.player-page [role="slider"]:focus-visible {
   overflow: hidden;
 }
 
+.album-card:hover {
+  transform: scale(1.02);
+}
+
 .album-card img {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -369,7 +383,7 @@ body.player-page [role="slider"]:focus-visible {
   color: var(--text-dim);
 }
 
-/* ─── 8. ABA MÚSICAS ─── */
+/* ─── 8. ABA MÚSICAS (Lista de Faixas) ─── */
 #tab-music {
   padding: 1rem 1.5rem;
   overflow: hidden;
@@ -444,6 +458,11 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.btn-subscribe-header:hover {
+  background: var(--gold-soft);
+}
+
+/* Rolagem vertical e barra sutil */
 .music-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -467,6 +486,7 @@ body.player-page [role="slider"]:focus-visible {
   border-radius: 4px;
 }
 
+/* Item flexível e textos multilinhas */
 .music-item {
   display: flex;
   align-items: center;
@@ -477,6 +497,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.15s;
   width: 100%;
   min-width: 0;
+}
+
+.music-item:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .music-item-number {
@@ -492,6 +516,7 @@ body.player-page [role="slider"]:focus-visible {
   flex-direction: column;
   justify-content: center;
   overflow: hidden;
+  padding-right: 0.5rem;
 }
 
 .music-item-title {
@@ -503,7 +528,7 @@ body.player-page [role="slider"]:focus-visible {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  line-height: 1.3;
+  line-height: 1.25;
 }
 
 .music-item.playing .music-item-title {
@@ -518,7 +543,8 @@ body.player-page [role="slider"]:focus-visible {
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
-  line-height: 1.3;
+  line-height: 1.25;
+  margin-top: 2px;
 }
 
 .music-item-isrc {
@@ -534,7 +560,8 @@ body.player-page [role="slider"]:focus-visible {
 .music-item-actions {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  gap: 0.8rem;
   flex-shrink: 0;
   color: var(--text-dim);
   margin-left: 0.5rem;
@@ -553,16 +580,31 @@ body.player-page [role="slider"]:focus-visible {
   transition: color 0.15s, background 0.15s;
 }
 
+.action-icon:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .music-item-duration {
   font-size: 0.8rem;
-  min-width: 40px;
+  min-width: 35px;
   text-align: right;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+  margin-right: 0.2rem;
 }
 
 .music-item .play-hover {
   display: none;
+}
+
+.music-item:hover .num-text {
+  display: none;
+}
+
+.music-item:hover .play-hover {
+  display: inline;
+  color: var(--green);
 }
 
 /* ─── 9. ABA LETRA ─── */
@@ -634,6 +676,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.btn-new-playlist:hover {
+  background: var(--gold-soft);
+}
+
 .playlist-card {
   background: var(--bg-input);
   border-radius: 8px;
@@ -643,6 +689,10 @@ body.player-page [role="slider"]:focus-visible {
   justify-content: space-between;
   cursor: pointer;
   transition: background 0.2s;
+}
+
+.playlist-card:hover {
+  background: #333;
 }
 
 .playlist-info {
@@ -675,6 +725,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.playlist-delete-btn:hover {
+  background: rgba(255, 77, 77, 0.15);
+}
+
 .btn-edit-cover {
   background: var(--gold);
   color: #000;
@@ -688,6 +742,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.btn-edit-cover:hover {
+  background: var(--gold-soft);
+}
+
 /* ─── 11. MINI-PLAYER ─── */
 .mini-player {
   position: fixed;
@@ -695,11 +753,10 @@ body.player-page [role="slider"]:focus-visible {
   left: 0;
   right: 0;
   height: calc(64px + var(--safe-bottom));
-  padding: 0 1rem var(--safe-bottom);
-  box-sizing: border-box;
   background: var(--bg-panel);
   display: flex;
   align-items: center;
+  padding: 0 1rem;
   border-top: 1px solid var(--border-soft);
   z-index: 9999;
 }
@@ -761,6 +818,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: transform 0.2s, opacity 0.2s;
 }
 
+.mini-controls button:hover {
+  transform: scale(1.05);
+}
+
 .mini-controls button:active {
   transform: scale(0.95);
   opacity: 0.8;
@@ -773,6 +834,10 @@ body.player-page [role="slider"]:focus-visible {
 
 #miniOpenBtn {
   color: var(--text-dim);
+}
+
+#miniOpenBtn:hover {
+  color: #fff;
 }
 
 /* ─── 12. ESTADO DE BUFFERING ─── */
@@ -819,6 +884,10 @@ body.player-page [role="slider"]:focus-visible {
   cursor: pointer;
   font-size: 0.9rem;
   transition: background 0.2s;
+}
+
+.track-options-menu button:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ─── 14. MODAL DE PLAYLIST ─── */
@@ -871,6 +940,10 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
+.playlist-modal-actions button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .playlist-modal-actions button.save {
   color: var(--gold);
   font-weight: 700;
@@ -911,23 +984,10 @@ body.player-page [role="slider"]:focus-visible {
   transform: translateX(-50%) translateY(0);
 }
 
-/* ─── 16. RESPONSIVIDADE E DESKTOP ─── */
-
+/* ─── 16. RESPONSIVIDADE ─── */
 @media (max-width: 380px) {
   .mobile-tabs {
-    flex: 1;
-    justify-content: space-evenly;
-    gap: 0.25rem;
-    min-width: 0;
-  }
-  .mobile-tab {
-    min-width: 0;
-    padding-inline: 0.15rem;
-    font-size: 0.75rem;
-  }
-  .player-top {
-    gap: 0.5rem;
-    padding-inline: 0.5rem;
+    gap: 1rem;
   }
   .play-btn-large {
     width: 60px;
@@ -958,7 +1018,6 @@ body.player-page [role="slider"]:focus-visible {
   }
   .mini-player {
     height: calc(72px + var(--safe-bottom));
-    padding: 0 1rem var(--safe-bottom);
   }
   .mini-cover {
     width: 48px;
@@ -973,161 +1032,47 @@ body.player-page [role="slider"]:focus-visible {
   #tab-player {
     flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 4rem;
+    gap: 3rem;
     padding: 2rem 4rem;
   }
-
   .player-col--cover {
     flex: 1;
     padding: 0;
     margin-bottom: 0;
-    max-width: 50%;
-    display: flex;
-    justify-content: flex-end;
   }
-
-  .player-cover-wrap {
-    max-width: 450px;
-    max-height: 60vh;
-    width: 100%;
-  }
-
   .player-col--controls {
     flex: 1;
-    max-width: 50%;
+    max-width: 500px;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    justify-content: center;
-  }
-
-  .player-track-info-center {
-    text-align: left;
-    padding: 0;
-    width: 100%;
-    margin-bottom: 2rem;
-  }
-  
-  .track-title-large {
-    font-size: 2.5rem;
-  }
-
-  .track-artist-large {
-    font-size: 1.2rem;
-  }
-
-  .progress-container {
-    padding: 0;
-    width: 100%;
-  }
-
-  .controls-main {
-    padding: 0;
-    width: 100%;
-    justify-content: flex-start;
-    gap: 2rem;
-  }
-  
-  .controls-main .play-btn-large {
-    margin: 0 1rem;
-  }
-}
-
-@media (max-height: 700px) {
-  #tab-player {
-    justify-content: center;
-    padding: 0.5rem 0;
-  }
-  .player-col--cover {
-    flex: 1 1 0;
-    min-height: 0;
-    min-width: 0;
-    margin-bottom: 0.5rem;
-  }
-  .player-col--controls {
-    padding-top: 0.25rem;
-  }
-  .player-track-info-center {
-    margin-bottom: 0.75rem;
-  }
-  .progress-container {
-    margin-bottom: 0.75rem;
-  }
-  .play-btn-large {
-    width: 58px;
-    height: 58px;
   }
   .player-cover-wrap {
-    width: min(100%, 280px, 60vw, 35dvh);
-    max-width: none;
+    max-width: 480px;
+    max-height: 60dvh;
+  }
+}
+
+/* Capa em telas com pouca altura */
+@media (max-height: 700px) and (max-width: 767px) {
+  .player-col--cover {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .player-cover-wrap {
+    max-width: min(240px, 60vw);
     max-height: 35dvh;
   }
-}
 
-/* ─── 17. HOVER RESTRITO A MOUSE ─── */
-@media (hover: hover) and (pointer: fine) {
-  .album-card:hover {
-    transform: scale(1.02);
+  .player-track-info-center {
+    margin-bottom: 0.75rem;
   }
-  .music-item:hover {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .playlist-card:hover {
-    background: #333;
-  }
-  .music-item:hover .num-text {
-    display: none;
-  }
-  .music-item:hover .play-hover {
-    display: inline;
-    color: var(--green);
-  }
-  .action-icon:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.08);
-  }
-  .player-icon-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-  .mobile-tab:hover {
-    color: #fff;
-  }
-  .btn-subscribe-header:hover {
-    background: var(--gold-soft);
-  }
-  .btn-new-playlist:hover {
-    background: var(--gold-soft);
-  }
-  .btn-edit-cover:hover {
-    background: var(--gold-soft);
-  }
-  .playlist-delete-btn:hover {
-    background: rgba(255, 77, 77, 0.15);
-  }
-  .track-options-menu button:hover {
-    background: rgba(255, 255, 255, 0.1);
-  }
-  .playlist-modal-actions button:hover {
-    background: rgba(255, 255, 255, 0.08);
-  }
-  .mini-controls button:hover {
-    transform: scale(1.05);
-  }
-  #miniOpenBtn:hover {
-    color: #fff;
-  }
-  .control-btn:hover {
-    color: #fff;
-  }
-  .play-btn-large:hover {
-    background: var(--gold-soft);
-    color: #000;
+
+  .progress-container {
+    margin-bottom: 0.75rem;
   }
 }
 
-/* ─── 18. PREFERÊNCIA DE MOVIMENTO REDUZIDO ─── */
+/* ─── 17. PREFERÊNCIA DE MOVIMENTO REDUZIDO ─── */
 @media (prefers-reduced-motion: reduce) {
   body.player-page *,
   body.player-page *::before,
