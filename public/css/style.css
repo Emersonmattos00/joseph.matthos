@@ -2462,16 +2462,19 @@ section[aria-labelledby="destaqueTitle"] {
 #contato .ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 8px 24px rgba(24,119,242,0.4); }
 #contato .ad-social-icon.tiktok:hover   { background: #000; box-shadow: 0 8px 24px rgba(0,242,234,0.4); border-color: #00f2ea; }
 
-/* ── CORREÇÃO DO AVATAR DO ARTISTA ──────────────────────────────── */
+/* ── CORREÇÃO DO AVATAR DO ARTISTA (ALINHADO À ESQUERDA) ───────── */
+
 .artist-banner-content {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 2rem;
+  flex-direction: column; /* Empilha o avatar e o texto */
+  align-items: flex-start; /* Alinha tudo à esquerda */
+  gap: 1.5rem;
+  padding-top: 1rem;
 }
 
 .artist-hero-left {
-  flex: 1;
+  width: 100%;
+  max-width: 720px; /* Mantém o texto legível */
 }
 
 .artist-avatar {
@@ -2480,22 +2483,16 @@ section[aria-labelledby="destaqueTitle"] {
   border-radius: 50%;
   background-color: var(--card);
   background-size: cover;
-  background-position: center;
+  background-position: center top;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
   border: 4px solid var(--bg);
   flex-shrink: 0;
-  margin-bottom: 1rem;
 }
 
-/* Em telas menores, o avatar fica em cima ou centralizado */
+/* Em telas menores, ajusta o tamanho do avatar */
 @media (max-width: 768px) {
-  .artist-banner-content {
-    flex-direction: column-reverse;
-    align-items: flex-start;
-  }
   .artist-avatar {
     width: 120px;
     height: 120px;
-    margin-bottom: 1.5rem;
   }
 }
