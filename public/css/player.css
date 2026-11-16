@@ -177,10 +177,11 @@ body.player-page [role="slider"]:focus-visible {
   display: none !important;
 }
 
-/* ─── 6. ABA PLAYER ─── */
+/* ─── 6. ABA PLAYER (BASE MOBILE-FIRST) ─── */
 #tab-player {
   justify-content: space-evenly;
   padding: 1rem 0;
+  width: 100%;
 }
 
 .player-col--cover {
@@ -220,12 +221,16 @@ body.player-page [role="slider"]:focus-visible {
   flex-shrink: 0;
   padding-top: 1rem;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .player-track-info-center {
   text-align: center;
   margin-bottom: 1.5rem;
   padding: 0 1.5rem;
+  width: 100%;
 }
 
 .track-title-large {
@@ -285,6 +290,7 @@ body.player-page [role="slider"]:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 0 1.5rem;
+  width: 100%;
 }
 
 .control-btn {
@@ -979,7 +985,8 @@ body.player-page [role="slider"]:focus-visible {
   transform: translateX(-50%) translateY(0);
 }
 
-/* ─── 16. RESPONSIVIDADE ─── */
+/* ─── 16. RESPONSIVIDADE E DESKTOP ─── */
+
 @media (max-width: 380px) {
   .mobile-tabs {
     gap: 1rem;
@@ -1027,27 +1034,71 @@ body.player-page [role="slider"]:focus-visible {
   #tab-player {
     flex-direction: row;
     align-items: center;
-    gap: 3rem;
+    justify-content: center;
+    gap: 4rem;
     padding: 2rem 4rem;
   }
+
   .player-col--cover {
     flex: 1;
     padding: 0;
+    margin-bottom: 0;
+    max-width: 50%;
+    display: flex;
+    justify-content: flex-end;
   }
+
+  .player-cover-wrap {
+    max-width: 450px;
+    max-height: 60vh;
+    width: 100%;
+  }
+
   .player-col--controls {
     flex: 1;
-    max-width: 500px;
+    max-width: 50%;
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
   }
-  .player-cover-wrap {
-    max-width: 480px;
+
+  .player-track-info-center {
+    text-align: left;
+    padding: 0;
+    width: 100%;
+    margin-bottom: 2rem;
+  }
+  
+  .track-title-large {
+    font-size: 2.5rem;
+  }
+
+  .track-artist-large {
+    font-size: 1.2rem;
+  }
+
+  .progress-container {
+    padding: 0;
+    width: 100%;
+  }
+
+  .controls-main {
+    padding: 0;
+    width: 100%;
+    justify-content: flex-start;
+    gap: 2rem;
+  }
+  
+  .controls-main .play-btn-large {
+    margin: 0 1rem;
   }
 }
 
-/* Ajuste para telas muito baixas (garante que a capa não quebre o layout) */
 @media (max-height: 700px) {
   .player-cover-wrap {
-    max-width: min(240px, 60vw);
+    max-width: min(280px, 60vw);
     max-height: 35dvh;
   }
 }
