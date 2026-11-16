@@ -2461,3 +2461,41 @@ section[aria-labelledby="destaqueTitle"] {
 #contato .ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 8px 24px rgba(255,153,0,0.4); }
 #contato .ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 8px 24px rgba(24,119,242,0.4); }
 #contato .ad-social-icon.tiktok:hover   { background: #000; box-shadow: 0 8px 24px rgba(0,242,234,0.4); border-color: #00f2ea; }
+
+/* ── CORREÇÃO DO AVATAR DO ARTISTA ──────────────────────────────── */
+.artist-banner-content {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.artist-hero-left {
+  flex: 1;
+}
+
+.artist-avatar {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background-color: var(--card);
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  border: 4px solid var(--bg);
+  flex-shrink: 0;
+  margin-bottom: 1rem;
+}
+
+/* Em telas menores, o avatar fica em cima ou centralizado */
+@media (max-width: 768px) {
+  .artist-banner-content {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+  }
+  .artist-avatar {
+    width: 120px;
+    height: 120px;
+    margin-bottom: 1.5rem;
+  }
+}
