@@ -105,10 +105,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.player-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .mobile-tabs {
   display: flex;
   gap: 1.5rem;
@@ -126,10 +122,6 @@ body.player-page [role="slider"]:focus-visible {
   align-items: center;
   justify-content: center;
   transition: color 0.2s;
-}
-
-.mobile-tab:hover {
-  color: #fff;
 }
 
 .mobile-tab.active {
@@ -305,10 +297,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: color 0.2s, transform 0.15s;
 }
 
-.control-btn:hover {
-  color: #fff;
-}
-
 .control-btn:active {
   transform: scale(0.95);
 }
@@ -320,11 +308,6 @@ body.player-page [role="slider"]:focus-visible {
   border-radius: 50%;
   color: #000;
   justify-content: center;
-}
-
-.play-btn-large:hover {
-  background: var(--gold-soft);
-  color: #000;
 }
 
 .play-btn-large svg {
@@ -461,10 +444,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.btn-subscribe-header:hover {
-  background: var(--gold-soft);
-}
-
 .music-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -574,11 +553,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: color 0.15s, background 0.15s;
 }
 
-.action-icon:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .music-item-duration {
   font-size: 0.8rem;
   min-width: 40px;
@@ -589,15 +563,6 @@ body.player-page [role="slider"]:focus-visible {
 
 .music-item .play-hover {
   display: none;
-}
-
-.music-item:hover .num-text {
-  display: none;
-}
-
-.music-item:hover .play-hover {
-  display: inline;
-  color: var(--green);
 }
 
 /* ─── 9. ABA LETRA ─── */
@@ -669,10 +634,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.btn-new-playlist:hover {
-  background: var(--gold-soft);
-}
-
 .playlist-card {
   background: var(--bg-input);
   border-radius: 8px;
@@ -714,10 +675,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.playlist-delete-btn:hover {
-  background: rgba(255, 77, 77, 0.15);
-}
-
 .btn-edit-cover {
   background: var(--gold);
   color: #000;
@@ -731,11 +688,7 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.btn-edit-cover:hover {
-  background: var(--gold-soft);
-}
-
-/* ─── 11. MINI-PLAYER (CORRIGIDO P1.1) ─── */
+/* ─── 11. MINI-PLAYER ─── */
 .mini-player {
   position: fixed;
   bottom: 0;
@@ -808,10 +761,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: transform 0.2s, opacity 0.2s;
 }
 
-.mini-controls button:hover {
-  transform: scale(1.05);
-}
-
 .mini-controls button:active {
   transform: scale(0.95);
   opacity: 0.8;
@@ -824,10 +773,6 @@ body.player-page [role="slider"]:focus-visible {
 
 #miniOpenBtn {
   color: var(--text-dim);
-}
-
-#miniOpenBtn:hover {
-  color: #fff;
 }
 
 /* ─── 12. ESTADO DE BUFFERING ─── */
@@ -874,10 +819,6 @@ body.player-page [role="slider"]:focus-visible {
   cursor: pointer;
   font-size: 0.9rem;
   transition: background 0.2s;
-}
-
-.track-options-menu button:hover {
-  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ─── 14. MODAL DE PLAYLIST ─── */
@@ -930,10 +871,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.playlist-modal-actions button:hover {
-  background: rgba(255, 255, 255, 0.08);
-}
-
 .playlist-modal-actions button.save {
   color: var(--gold);
   font-weight: 700;
@@ -976,15 +913,17 @@ body.player-page [role="slider"]:focus-visible {
 
 /* ─── 16. RESPONSIVIDADE E DESKTOP ─── */
 
-/* P1.4: Ajuste de abas em telas muito estreitas */
 @media (max-width: 380px) {
   .mobile-tabs {
-    gap: 0.75rem;
+    flex: 1;
+    justify-content: space-evenly;
+    gap: 0.25rem;
     min-width: 0;
   }
   .mobile-tab {
-    flex-shrink: 1;
-    white-space: nowrap;
+    min-width: 0;
+    padding-inline: 0.15rem;
+    font-size: 0.75rem;
   }
   .player-top {
     gap: 0.5rem;
@@ -1096,13 +1035,15 @@ body.player-page [role="slider"]:focus-visible {
   }
 }
 
-/* P1.2: Ajuste para telas baixas (celular deitado) */
 @media (max-height: 700px) {
   #tab-player {
     justify-content: center;
     padding: 0.5rem 0;
   }
   .player-col--cover {
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
     margin-bottom: 0.5rem;
   }
   .player-col--controls {
@@ -1119,12 +1060,13 @@ body.player-page [role="slider"]:focus-visible {
     height: 58px;
   }
   .player-cover-wrap {
-    max-width: min(280px, 60vw);
+    width: min(100%, 280px, 60vw, 35dvh);
+    max-width: none;
     max-height: 35dvh;
   }
 }
 
-/* P2.1: Hover apenas em dispositivos com mouse (pointer: fine) */
+/* ─── 17. HOVER RESTRITO A MOUSE ─── */
 @media (hover: hover) and (pointer: fine) {
   .album-card:hover {
     transform: scale(1.02);
@@ -1185,7 +1127,7 @@ body.player-page [role="slider"]:focus-visible {
   }
 }
 
-/* ─── 17. PREFERÊNCIA DE MOVIMENTO REDUZIDO ─── */
+/* ─── 18. PREFERÊNCIA DE MOVIMENTO REDUZIDO ─── */
 @media (prefers-reduced-motion: reduce) {
   body.player-page *,
   body.player-page *::before,
