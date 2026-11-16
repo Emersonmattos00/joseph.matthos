@@ -358,10 +358,6 @@ body.player-page [role="slider"]:focus-visible {
   overflow: hidden;
 }
 
-.album-card:hover {
-  transform: scale(1.02);
-}
-
 .album-card img {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -502,10 +498,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.15s;
   width: 100%;
   min-width: 0;
-}
-
-.music-item:hover {
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .music-item-number {
@@ -692,10 +684,6 @@ body.player-page [role="slider"]:focus-visible {
   transition: background 0.2s;
 }
 
-.playlist-card:hover {
-  background: #333;
-}
-
 .playlist-info {
   flex: 1;
   min-width: 0;
@@ -747,17 +735,18 @@ body.player-page [role="slider"]:focus-visible {
   background: var(--gold-soft);
 }
 
-/* ─── 11. MINI-PLAYER ─── */
+/* ─── 11. MINI-PLAYER (CORRIGIDO P1.1) ─── */
 .mini-player {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
   height: calc(64px + var(--safe-bottom));
+  padding: 0 1rem var(--safe-bottom);
+  box-sizing: border-box;
   background: var(--bg-panel);
   display: flex;
   align-items: center;
-  padding: 0 1rem;
   border-top: 1px solid var(--border-soft);
   z-index: 9999;
 }
@@ -987,9 +976,19 @@ body.player-page [role="slider"]:focus-visible {
 
 /* ─── 16. RESPONSIVIDADE E DESKTOP ─── */
 
+/* P1.4: Ajuste de abas em telas muito estreitas */
 @media (max-width: 380px) {
   .mobile-tabs {
-    gap: 1rem;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+  .mobile-tab {
+    flex-shrink: 1;
+    white-space: nowrap;
+  }
+  .player-top {
+    gap: 0.5rem;
+    padding-inline: 0.5rem;
   }
   .play-btn-large {
     width: 60px;
@@ -1020,6 +1019,7 @@ body.player-page [role="slider"]:focus-visible {
   }
   .mini-player {
     height: calc(72px + var(--safe-bottom));
+    padding: 0 1rem var(--safe-bottom);
   }
   .mini-cover {
     width: 48px;
@@ -1096,10 +1096,92 @@ body.player-page [role="slider"]:focus-visible {
   }
 }
 
+/* P1.2: Ajuste para telas baixas (celular deitado) */
 @media (max-height: 700px) {
+  #tab-player {
+    justify-content: center;
+    padding: 0.5rem 0;
+  }
+  .player-col--cover {
+    margin-bottom: 0.5rem;
+  }
+  .player-col--controls {
+    padding-top: 0.25rem;
+  }
+  .player-track-info-center {
+    margin-bottom: 0.75rem;
+  }
+  .progress-container {
+    margin-bottom: 0.75rem;
+  }
+  .play-btn-large {
+    width: 58px;
+    height: 58px;
+  }
   .player-cover-wrap {
     max-width: min(280px, 60vw);
     max-height: 35dvh;
+  }
+}
+
+/* P2.1: Hover apenas em dispositivos com mouse (pointer: fine) */
+@media (hover: hover) and (pointer: fine) {
+  .album-card:hover {
+    transform: scale(1.02);
+  }
+  .music-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .playlist-card:hover {
+    background: #333;
+  }
+  .music-item:hover .num-text {
+    display: none;
+  }
+  .music-item:hover .play-hover {
+    display: inline;
+    color: var(--green);
+  }
+  .action-icon:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .player-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .mobile-tab:hover {
+    color: #fff;
+  }
+  .btn-subscribe-header:hover {
+    background: var(--gold-soft);
+  }
+  .btn-new-playlist:hover {
+    background: var(--gold-soft);
+  }
+  .btn-edit-cover:hover {
+    background: var(--gold-soft);
+  }
+  .playlist-delete-btn:hover {
+    background: rgba(255, 77, 77, 0.15);
+  }
+  .track-options-menu button:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+  .playlist-modal-actions button:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .mini-controls button:hover {
+    transform: scale(1.05);
+  }
+  #miniOpenBtn:hover {
+    color: #fff;
+  }
+  .control-btn:hover {
+    color: #fff;
+  }
+  .play-btn-large:hover {
+    background: var(--gold-soft);
+    color: #000;
   }
 }
 
