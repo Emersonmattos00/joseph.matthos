@@ -1,9 +1,4 @@
-// js/player.js — v32.9
-// v32.8 → v32.9:
-// - audioReady: consume rejeição no catch síncrono de src=/load()
-//   (evita unhandledrejection; cleanup continua executando via fail())
-// - Backend TBD mantido
-
+// js/player.js — v32.9 (Modificado)
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -370,7 +365,7 @@ const tabContents = document.querySelectorAll('.tab-content');
 function updateTabState(activeTab) {
   const name = activeTab?.dataset.tab;
   if (!name) return;
-  tabs.forEach(t => { const on = t === activeTab; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  tabs.forEach(t => { const on = t === activeTab; t.classList.toggle('active', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); t.tabIndex = on ? 0 : -1; });
   tabContents.forEach(c => { const on = c.id === `tab-${name}`; c.classList.toggle('active', on); c.hidden = !on; });
   if (els.miniPlayer) els.miniPlayer.style.display = (name !== 'player' && currentTrackId) ? 'flex' : 'none';
   if (name === 'albums') renderAlbumsTab();
@@ -505,6 +500,7 @@ function renderPlayerTrackList(context, currentId) {
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
     if (String(track.id) === String(currentId)) item.classList.add('playing');
+    
     const nc = document.createElement('div'); nc.className = 'music-item-number';
     nc.style.cssText = 'display:flex;align-items:center;gap:12px;width:auto;min-width:60px;';
     const num = document.createElement('span'); num.className = 'num-text'; num.textContent = index + 1; num.style.cssText = 'width:20px;text-align:center;';
@@ -514,13 +510,17 @@ function renderPlayerTrackList(context, currentId) {
     img.style.cssText = 'width:40px;height:40px;border-radius:4px;object-fit:cover;flex-shrink:0;';
     img.onerror = () => { img.onerror = null; img.src = DEFAULT_COVER; };
     nc.append(num, ph, img);
+    
     const info = document.createElement('div'); info.className = 'music-item-info';
     const t = document.createElement('div'); t.className = 'music-item-title'; t.textContent = track.title || 'Faixa sem título';
     const a = document.createElement('div'); a.className = 'music-item-artist';
     a.appendChild(document.createTextNode(track.artist || 'Joseph Matthos'));
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
+    
     const act = document.createElement('div'); act.className = 'music-item-actions';
+    
+    // Botão Curtir (Coração)
     const like = document.createElement('button'); like.className = 'action-icon';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
@@ -533,30 +533,18 @@ function renderPlayerTrackList(context, currentId) {
       } else showToast('Erro ao salvar.');
     });
     act.appendChild(like);
-    const sh = document.createElement('button'); sh.className = 'action-icon';
-    sh.setAttribute('aria-label', 'Compartilhar faixa');
-    sh.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>`;
-    sh.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-      const sd = { title: `${track.title} — Joseph Matthos`, url };
-      if (navigator.share) { try { await navigator.share(sd); return; } catch {} }
-      if (navigator.clipboard) { try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); } catch { showToast('Erro.'); } }
-      else showToast('Não suportado.');
-    });
-    act.appendChild(sh);
-    const rt = document.createElement('button'); rt.className = 'action-icon';
-    rt.setAttribute('aria-label', 'Alugar faixa');
-    rt.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>`;
-    rt.addEventListener('click', (e) => { e.stopPropagation(); window.location.href = `/?rent=${encodeURIComponent(track.id)}`; });
-    act.appendChild(rt);
+
+    // Duração
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
+
+    // Mais Opções (3 pontinhos)
     const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
+    
     item.append(nc, info, act);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
     els.musicList.appendChild(item);
@@ -670,6 +658,10 @@ function attachPlaybackListeners(a) {
       if (els.progressFill) els.progressFill.style.width = `${d > 0 ? Math.min(100, (s/d)*100) : 0}%`;
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
+      if (els.progressBar) {
+        els.progressBar.setAttribute('aria-valuenow', d > 0 ? Math.round((s/d)*100) : 0);
+        els.progressBar.setAttribute('aria-valuetext', `${formatTime(s)} de ${formatTime(d)}`);
+      }
     }, 250);
   });
   a.addEventListener('pause', () => {
@@ -729,8 +721,6 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
       }
     }
 
-    // TBD backend: 404 do álbum → fallback single. Requer contrato verificado
-    // de que /api/stream?trackId= revalida autorização independentemente.
     if (!playbackContext && allowAlbumFallback) {
       const albumId = normalizeTrackId(meta.albumId);
       if (albumId) {
@@ -836,7 +826,6 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
       createdAudio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
       createdAudio.load();
     } catch (loadErr) {
-      // v32.9: failAudioReady executa cleanup, await consome rejeição (evita unhandledrejection)
       if (failAudioReady) {
         failAudioReady(loadErr);
         try { await audioReady; } catch {}
@@ -1024,7 +1013,12 @@ async function playTrack(trackId, options = {}) {
 // ─── CONTROLES PÚBLICOS ───
 window.playerPlay = () => {
   if (!currentAudio || !currentAudio.src) {
-    if (currentTrackId) playTrack(currentTrackId);
+    if (currentTrackId) {
+      playTrack(currentTrackId);
+    } else {
+      showToast('Selecione uma faixa para tocar.');
+      switchTab('albums');
+    }
     return;
   }
   if (!currentAudio.paused) {
@@ -1354,6 +1348,10 @@ async function bootPlayer() {
   els.miniOpenBtn?.addEventListener('click', () => switchTab('player'));
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
+  
+  // Adicionados listeners para prev e next principais caso não estejam no HTML
+  document.getElementById('prevBtn')?.addEventListener('click', window.playerPrev);
+  document.getElementById('nextBtn')?.addEventListener('click', () => window.playerNext(false));
 
   els.playBtn?.setAttribute('aria-label', 'Play/Pause');
   els.fullscreenBtn?.setAttribute('aria-label', 'Alternar tela cheia');
