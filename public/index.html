@@ -119,14 +119,12 @@
             <h1 class="artist-spotify-name" id="artistTitle">Joseph Matthos</h1>
             <p class="artist-tagline" id="heroSub">Seja um dos primeiros seguidores</p>
 
-            <!-- ═══════════ ÁREA DE ESTATÍSTICAS (VISÍVEL) ═══════════ -->
             <div class="artist-stats-row" style="display:flex; gap:1rem; margin-top:1rem; color:#b3b3b3; font-size:0.9rem;">
               <span><strong id="statFollowers" style="color:#fff;">0</strong> seguidores</span>
               <span>·</span>
               <span><strong id="statPlays" style="color:#fff;">0</strong> curtidas</span>
             </div>
             <span id="memberSince" style="margin-top:0.5rem; display:block; color:#888; font-size:0.8rem;">Membro desde: Jul '26</span>
-            <!-- ═══════════════════════════════════════════════════════ -->
 
             <div class="artist-actions">
               <div class="social-links" id="socialLinks"></div>
@@ -159,27 +157,13 @@
 
       <div class="artist-tabs-bar">
         <nav class="artist-tabs" role="tablist">
-          <button class="artist-tab" data-artist-tab="lancamentos" role="tab" aria-selected="false">Lançamentos</button>
-          <button class="artist-tab" data-artist-tab="mais-ouvidos" role="tab" aria-selected="false">Mais ouvidos</button>
-          <button class="artist-tab" data-artist-tab="discografia" role="tab" aria-selected="false">Discografia</button>
+          <!-- Abas Lançamentos e Mais Ouvidos removidas -->
+          <button class="artist-tab active" data-artist-tab="discografia" role="tab" aria-selected="true">Discografia</button>
         </nav>
       </div>
     </section>
 
-    <!-- ═══════════ LANÇAMENTOS (carrossel) ═══════════ -->
-    <section class="section-amz" id="secao-lancamentos" aria-labelledby="lancamentosTitle">
-      <div class="section-spotify-header">
-        <h2 class="section-spotify-title" id="lancamentosTitle">Lançamentos</h2>
-        <div class="section-amz-nav">
-          <button class="amz-arrow" type="button" aria-label="Anterior" data-carousel-prev>‹</button>
-          <button class="amz-arrow" type="button" aria-label="Próximo" data-carousel-next>›</button>
-          <a href="#discografia" class="section-spotify-link">VER TUDO</a>
-        </div>
-      </div>
-      <div class="amz-grid" id="gridLancamentos"></div>
-    </section>
-
-    <!-- ═══════════ DISCOGRAFIA (GRADE) ═══════════ -->
+    <!-- ═══════════ DISCOGRAFIA (ROLAGEM HORIZONTAL) ═══════════ -->
     <section id="discografia" aria-labelledby="discoTitle" class="section-amz-discografia">
       <div class="amz-discografia-wrap">
         <div class="section-spotify-header">
@@ -187,6 +171,7 @@
         </div>
         <p class="section-sub" id="discoSub">Explore os álbuns. Visitantes ouvem prévias de 30s. Assinantes Premium têm acesso completo + downloads.</p>
 
+        <!-- Container que recebe a rolagem horizontal -->
         <div id="discographyContainer"></div>
 
         <div id="playlistsPanel" style="display:none" aria-hidden="true">
