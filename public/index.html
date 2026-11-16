@@ -110,7 +110,7 @@
 
   <main class="amz-main">
 
-    <!-- ═══════════ HERO ═══════════ -->
+        <!-- ═══════════ HERO ═══════════ -->
     <section class="artist-spotify" aria-labelledby="artistTitle">
       <div class="artist-banner" id="artistBanner">
         <div class="artist-banner-content">
@@ -119,14 +119,12 @@
             <h1 class="artist-spotify-name" id="artistTitle">Joseph Matthos</h1>
             <p class="artist-tagline" id="heroSub">Seja um dos primeiros seguidores</p>
 
-            <!-- ═══════════ ÁREA DE ESTATÍSTICAS (VISÍVEL) ═══════════ -->
             <div class="artist-stats-row" style="display:flex; gap:1rem; margin-top:1rem; color:#b3b3b3; font-size:0.9rem;">
               <span><strong id="statFollowers" style="color:#fff;">0</strong> seguidores</span>
               <span>·</span>
               <span><strong id="statPlays" style="color:#fff;">0</strong> curtidas</span>
             </div>
             <span id="memberSince" style="margin-top:0.5rem; display:block; color:#888; font-size:0.8rem;">Membro desde: Jul '26</span>
-            <!-- ═══════════════════════════════════════════════════════ -->
 
             <div class="artist-actions">
               <div class="social-links" id="socialLinks"></div>
@@ -153,8 +151,16 @@
             </div>
           </div>
 
-          <div class="artist-avatar" id="artistAvatar" style="display:none;"></div>
+          <!-- Aqui está o Avatar de volta -->
+          <div class="artist-avatar" id="artistAvatar"></div>
         </div>
+      </div>
+
+      <div class="artist-tabs-bar">
+        <nav class="artist-tabs" role="tablist">
+          <!-- Abas Lançamentos e Mais Ouvidos removidas -->
+          <button class="artist-tab active" data-artist-tab="discografia" role="tab" aria-selected="true">Discografia</button>
+        </nav>
       </div>
     </section>
 
