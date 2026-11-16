@@ -2423,44 +2423,63 @@ section[aria-labelledby="destaqueTitle"] {
   max-width: 480px;
 }
 
-/* Ícones — cards maiores, com fundo */
-#contato .social-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.85rem;
-}
+/* ── CORES ORIGINAIS DAS REDES SOCIAIS ────────────────────────── */
+.social-links { display: flex; flex-wrap: wrap; gap: 0.6rem; }
 
-#contato .social-links a,
-#contato .ad-social-icon {
-  position: relative;
+.social-links a, .ad-social-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
+  /* Fundo neutro para os ícones que não têm cor de marca */
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #fff;
-  font-size: 1.4rem;
+  color: #fff; 
+  font-size: 1rem;
   text-decoration: none;
-  transition: transform 0.25s ease, background 0.25s ease, color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
-  cursor: pointer;
+  transition: transform 0.2s, filter 0.2s;
 }
 
-#contato .social-links a:hover,
-#contato .ad-social-icon:hover {
-  transform: translateY(-4px);
-  color: #000;
-  border-color: transparent;
+/* Efeito de hover geral */
+.social-links a:hover, .ad-social-icon:hover {
+  transform: scale(1.1);
+  filter: brightness(1.2);
 }
 
-/* Cores por rede */
-#contato .ad-social-icon.spotify:hover  { background: #1DB954; box-shadow: 0 8px 24px rgba(29,185,84,0.4); }
-#contato .ad-social-icon.youtube:hover  { background: #FF0000; box-shadow: 0 8px 24px rgba(255,0,0,0.4); }
-#contato .ad-social-icon.amazon:hover   { background: #FF9900; box-shadow: 0 8px 24px rgba(255,153,0,0.4); }
-#contato .ad-social-icon.facebook:hover { background: #1877F2; box-shadow: 0 8px 24px rgba(24,119,242,0.4); }
-#contato .ad-social-icon.tiktok:hover   { background: #000; box-shadow: 0 8px 24px rgba(0,242,234,0.4); border-color: #00f2ea; }
+/* ── CORES ESPECÍFICAS (Baseado nas classes do FontAwesome) ── */
+
+/* WhatsApp (Verde) */
+.social-links a .fa-whatsapp { color: #25D366; }
+
+/* YouTube (Vermelho) */
+.social-links a .fa-youtube { color: #FF0000; }
+
+/* Instagram (Gradiente/Rosa) */
+.social-links a .fa-instagram { color: #E1306C; }
+
+/* TikTok (Branco/Preto - usamos branco para contraste) */
+.social-links a .fa-tiktok { color: #ffffff; }
+
+/* Facebook (Azul) */
+.social-links a .fa-facebook, 
+.social-links a .fa-facebook-f { color: #1877F2; }
+
+/* Spotify (Verde) */
+.social-links a .fa-spotify { color: #1DB954; }
+
+/* Apple Music (Rosa/Vermelho) */
+.social-links a .fa-apple { color: #FC3C44; }
+
+/* Twitter / X (Branco ou Azul) */
+.social-links a .fa-x-twitter, 
+.social-links a .fa-twitter { color: #ffffff; } 
+
+/* Deezer (Roxo) */
+.social-links a .fa-deezer { color: #a238ff; }
+
+/* Link Genérico (Dourado) */
+.social-links a .fa-link { color: var(--accent); }
 
 /* ── CORREÇÃO DO AVATAR DO ARTISTA (ALINHADO À ESQUERDA) ───────── */
 
