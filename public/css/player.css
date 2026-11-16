@@ -86,7 +86,7 @@ body.player-page [role="slider"]:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: calc(var(--safe-top) + 0.5rem) 1.25rem 0.5rem;
+  padding: 0.5rem 1.25rem;
   flex-shrink: 0;
   position: relative;
   z-index: 20;
@@ -169,8 +169,12 @@ body.player-page [role="slider"]:focus-visible {
   z-index: 1;
 }
 
-.tab-content.active {
+.tab-content.active:not([hidden]) {
   display: flex !important;
+}
+
+.tab-content[hidden] {
+  display: none !important;
 }
 
 /* ─── 6. ABA PLAYER ─── */
@@ -451,9 +455,10 @@ body.player-page [role="slider"]:focus-visible {
 }
 
 .music-list {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding-bottom: 80px;
+  padding-bottom: calc(80px + var(--safe-bottom));
   scrollbar-width: none;
 }
 
@@ -709,12 +714,11 @@ body.player-page [role="slider"]:focus-visible {
   bottom: 0;
   left: 0;
   right: 0;
-  height: 64px;
+  height: calc(64px + var(--safe-bottom));
   background: var(--bg-panel);
   display: flex;
   align-items: center;
   padding: 0 1rem;
-  padding-bottom: var(--safe-bottom);
   border-top: 1px solid var(--border-soft);
   z-index: 9999;
 }
@@ -870,8 +874,9 @@ body.player-page [role="slider"]:focus-visible {
   flex-direction: column;
   gap: 1rem;
   border: 1px solid var(--border-strong);
-  max-height: 80vh;
+  max-height: min(80dvh, 700px);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .playlist-modal h3 {
@@ -974,7 +979,7 @@ body.player-page [role="slider"]:focus-visible {
     max-width: 420px;
   }
   .mini-player {
-    height: 72px;
+    height: calc(72px + var(--safe-bottom));
   }
   .mini-cover {
     width: 48px;
@@ -1006,11 +1011,33 @@ body.player-page [role="slider"]:focus-visible {
   }
 }
 
+/* Capa em telas com pouca altura */
+@media (max-height: 700px) and (max-width: 767px) {
+  .player-col--cover {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .player-cover-wrap {
+    width: min(100%, 280px);
+    max-height: 32dvh;
+    aspect-ratio: 1;
+  }
+
+  .player-track-info-center {
+    margin-bottom: 0.75rem;
+  }
+
+  .progress-container {
+    margin-bottom: 0.75rem;
+  }
+}
+
 /* ─── 17. PREFERÊNCIA DE MOVIMENTO REDUZIDO ─── */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  body.player-page *,
+  body.player-page *::before,
+  body.player-page *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
