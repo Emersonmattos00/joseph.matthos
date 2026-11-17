@@ -1288,3 +1288,70 @@ body.player-page [role="slider"]:focus-visible {
     border-color: var(--gold);
   }
 }
+
+/* --- Correções de Layout v33.4 --- */
+
+/* A linha inteira precisa ser um container flexível */
+.music-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between; /* Empurra o play-area pra esquerda e as ações pra direita */
+  padding: 8px 12px;
+  border-radius: 6px;
+  transition: background-color 0.2s;
+  position: relative;
+}
+
+.music-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* O novo botão que envolve a capa, o número e o texto */
+.music-item-play-area {
+  display: flex;
+  align-items: center;
+  flex: 1; /* Ocupa todo o espaço esquerdo disponível */
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  gap: 12px; /* Espaço entre a capa e o texto */
+}
+
+/* Área dos botões da direita (Curtir, Duração, Opções) */
+.music-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px; /* Espaço entre os botões da direita */
+  margin-left: 16px;
+  flex-shrink: 0; /* Impede que os botões sejam esmagados */
+}
+
+/* Ajuste fino do texto para não sobrepor o fundo */
+.music-item-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.music-item-title {
+  font-weight: 500;
+  font-size: 1rem;
+  color: #fff;
+}
+
+.music-item-artist {
+  font-size: 0.85rem;
+  color: #b3b3b3;
+}
+
+/* Remove o fundo branco padrão do botão de play-area no focus (acessibilidade) */
+.music-item-play-area:focus {
+  outline: none;
+}
+.music-item-play-area:focus-visible {
+  outline: 2px solid var(--green);
+  border-radius: 6px;
+}
