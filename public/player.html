@@ -159,7 +159,7 @@
     </main>
   </div>
 
-    <!-- MINI-PLAYER -->
+      <!-- MINI-PLAYER -->
   <div id="miniPlayer" class="mini-player" role="region" aria-label="Mini-player" style="display: none;">
     <div class="mini-left">
       <div class="mini-cover" id="miniCover" aria-hidden="true"></div>
@@ -174,9 +174,18 @@
         <button type="button" id="miniPrevBtn" aria-label="Anterior">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
         </button>
-        <button type="button" id="miniPlayBtn" aria-label="Play/Pause">
-          <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        </button>
+        
+        <!-- Anel Circular em volta do Play -->
+        <div class="mini-progress-ring-container">
+          <svg class="mini-progress-ring" width="48" height="48">
+            <circle class="mini-progress-ring-track" stroke="rgba(255, 255, 255, 0.1)" stroke-width="2" fill="transparent" r="22" cx="24" cy="24"/>
+            <circle class="mini-progress-ring-circle" stroke="var(--gold)" stroke-width="2" fill="transparent" r="22" cx="24" cy="24" id="miniProgressRingCircle"/>
+          </svg>
+          <button type="button" id="miniPlayBtn" aria-label="Play/Pause">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+        </div>
+
         <button type="button" id="miniNextBtn" aria-label="Próxima">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
