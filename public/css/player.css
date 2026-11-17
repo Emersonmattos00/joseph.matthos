@@ -752,32 +752,43 @@ body.player-page [role="slider"]:focus-visible {
   bottom: 0;
   left: 0;
   right: 0;
-  height: calc(64px + var(--safe-bottom));
+  height: calc(72px + var(--safe-bottom));
   background: var(--bg-panel);
   display: flex;
   align-items: center;
-  padding: 0 1rem;
+  justify-content: space-between;
+  padding: 0 1.5rem;
   border-top: 1px solid var(--border-soft);
   z-index: 9999;
+  box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.3);
+}
+
+/* Lado Esquerdo: Capa e Info */
+.mini-left {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0; /* Permite que o texto seja truncado se necessário */
 }
 
 .mini-cover {
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
   background: #333;
   background-size: cover;
   background-position: center;
   margin-right: 12px;
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
 }
 
 .mini-info {
-  flex: 1;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .mini-title {
@@ -785,13 +796,13 @@ body.player-page [role="slider"]:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   color: #fff;
   line-height: 1.2;
 }
 
 .mini-artist {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -799,11 +810,18 @@ body.player-page [role="slider"]:focus-visible {
   margin-top: 2px;
 }
 
+/* Lado Central: Controles */
+.mini-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .mini-controls {
   display: flex;
-  gap: 1rem;
+  gap: 1.2rem;
   align-items: center;
-  flex-shrink: 0;
 }
 
 .mini-controls button {
@@ -819,27 +837,67 @@ body.player-page [role="slider"]:focus-visible {
 }
 
 .mini-controls button:hover {
-  transform: scale(1.05);
-}
-
-.mini-controls button:active {
-  transform: scale(0.95);
+  transform: scale(1.1);
   opacity: 0.8;
 }
 
-#miniPlayBtn svg {
-  width: 32px;
-  height: 32px;
+#miniPlayBtn {
+  color: var(--gold);
 }
 
-#miniOpenBtn {
+/* Lado Direito: Ações Extra */
+.mini-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  flex: 1;
+}
+
+.mini-action {
+  background: none;
+  border: none;
   color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  border-radius: 50%;
+  transition: color 0.2s, background 0.2s;
 }
 
-#miniOpenBtn:hover {
+.mini-action:hover {
   color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
+.mini-action.active {
+  color: var(--green);
+}
+
+/* Esconde os controles extras em telas muito pequenas para não quebrar */
+@media (max-width: 600px) {
+  .mini-right {
+    gap: 0.5rem;
+  }
+  .mini-action {
+    padding: 0.2rem;
+  }
+  .mini-center {
+    margin: 0 0.5rem;
+  }
+  .mini-controls {
+    gap: 0.8rem;
+  }
+  .mini-player {
+    padding: 0 1rem;
+  }
+  /* Esconde o botão de compartilhar no mobile extremo se o espaço for muito pequeno */
+  #miniShareBtn {
+    display: none;
+  }
+}
 /* ─── 12. ESTADO DE BUFFERING ─── */
 .music-player--fullscreen.is-buffering::after {
   content: '';
