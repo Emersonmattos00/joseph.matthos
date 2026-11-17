@@ -2284,7 +2284,7 @@ section[aria-labelledby="destaqueTitle"] {
   width: 100% !important;
   aspect-ratio: 1 / 1 !important;
   height: auto !important;
-  max-height: 160px !important;    /* ← CORREÇÃO: no máximo a largura do card */
+  max-height: 320px !important;    /* ← CORREÇÃO: no máximo a largura do card */
   border-radius: 6px !important;
   overflow: hidden !important;
   position: relative !important;
