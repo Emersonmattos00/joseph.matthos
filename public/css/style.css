@@ -2538,8 +2538,8 @@ section[aria-labelledby="destaqueTitle"] {
 }
 
 .artist-avatar {
-  width: 180px;
-  height: 180px;
+  width: 240px;
+  height: 240px;
   border-radius: 50%;
   background-color: var(--card);
   background-size: cover;
