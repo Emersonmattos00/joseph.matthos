@@ -1,4 +1,9 @@
-// js/player.js — v32.9 (Modificado)
+// js/player.js — v32.9
+// v32.8 → v32.9:
+// - audioReady: consume rejeição no catch síncrono de src=/load()
+//   (evita unhandledrejection; cleanup continua executando via fail())
+// - Backend TBD mantido
+
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -500,7 +505,6 @@ function renderPlayerTrackList(context, currentId) {
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
     if (String(track.id) === String(currentId)) item.classList.add('playing');
-    
     const nc = document.createElement('div'); nc.className = 'music-item-number';
     nc.style.cssText = 'display:flex;align-items:center;gap:12px;width:auto;min-width:60px;';
     const num = document.createElement('span'); num.className = 'num-text'; num.textContent = index + 1; num.style.cssText = 'width:20px;text-align:center;';
@@ -510,17 +514,13 @@ function renderPlayerTrackList(context, currentId) {
     img.style.cssText = 'width:40px;height:40px;border-radius:4px;object-fit:cover;flex-shrink:0;';
     img.onerror = () => { img.onerror = null; img.src = DEFAULT_COVER; };
     nc.append(num, ph, img);
-    
     const info = document.createElement('div'); info.className = 'music-item-info';
     const t = document.createElement('div'); t.className = 'music-item-title'; t.textContent = track.title || 'Faixa sem título';
     const a = document.createElement('div'); a.className = 'music-item-artist';
     a.appendChild(document.createTextNode(track.artist || 'Joseph Matthos'));
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
-    
     const act = document.createElement('div'); act.className = 'music-item-actions';
-    
-    // Botão Curtir (Coração)
     const like = document.createElement('button'); like.className = 'action-icon';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
@@ -533,23 +533,17 @@ function renderPlayerTrackList(context, currentId) {
       } else showToast('Erro ao salvar.');
     });
     act.appendChild(like);
+    
+    // Botão Compartilhar removido conforme solicitado anteriormente
+    // Botão Alugar removido conforme solicitado anteriormente
 
-    // Duração
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
-
-    // Mais Opções (3 pontinhos) - AQUI está o e.stopPropagation()
     const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
-    
-    mb.addEventListener('click', (e) => { 
-      e.stopPropagation(); // IMPEDE que o clique suba para a linha e inicie a música
-      openOptionsMenu(track, mb); 
-    });
-    
+    mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
-    
     item.append(nc, info, act);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
     els.musicList.appendChild(item);
@@ -561,25 +555,7 @@ function openOptionsMenu(track, anchorEl) {
   const m = document.createElement('div'); m.id = 'trackOptionsMenu'; m.className = 'track-options-menu';
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-  
-  m.innerHTML = `
-    <button role="menuitem" data-action="share">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-      Compartilhar
-    </button>
-    <button role="menuitem" data-action="copy">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-      Copiar Link
-    </button>
-    <button role="menuitem" data-action="rent">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>
-      Alugar Faixa
-    </button>
-    <button role="menuitem" data-action="playlist">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-      Adicionar à Playlist
-    </button>
-  `;
+  m.innerHTML = `<button role="menuitem" data-action="share">🔗 Compartilhar</button><button role="menuitem" data-action="copy">📋 Copiar</button><button role="menuitem" data-action="rent">🎫 Alugar</button><button role="menuitem" data-action="playlist">➕ Playlist</button>`;
   document.body.appendChild(m);
   const r = anchorEl.getBoundingClientRect(); const mr = m.getBoundingClientRect();
   m.style.top = `${Math.max(10, Math.min(r.bottom + 6, window.innerHeight - mr.height - 10))}px`;
@@ -633,6 +609,24 @@ function updatePlayerUI(meta) {
   if (els.miniCover) els.miniCover.style.backgroundImage = `url('${c}')`;
   if (els.miniTitle) els.miniTitle.textContent = meta.title;
   if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
+
+  // Atualiza o estado do botão de curtir do mini-player
+  const miniLikeBtn = document.getElementById('miniLikeBtn');
+  if (miniLikeBtn) {
+    const lk = getLikeState(`jm_like_${meta.id}`);
+    miniLikeBtn.classList.toggle('active', lk);
+    miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  }
+
+  // Atualiza o estado do botão de mudo do mini-player
+  const miniMuteBtn = document.getElementById('miniMuteBtn');
+  if (miniMuteBtn) {
+    const isMuted = currentAudio ? currentAudio.muted : false;
+    miniMuteBtn.innerHTML = isMuted 
+      ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`
+      : `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
+  }
+
   updateMediaSessionMetadata(meta);
 }
 function resetProgressUI() {
@@ -1371,10 +1365,47 @@ async function bootPlayer() {
   els.miniOpenBtn?.addEventListener('click', () => switchTab('player'));
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
-  
-  // Adicionados listeners para prev e next principais caso não estejam no HTML
-  document.getElementById('prevBtn')?.addEventListener('click', window.playerPrev);
-  document.getElementById('nextBtn')?.addEventListener('click', () => window.playerNext(false));
+
+  // Novos controles do Mini-Player
+  document.getElementById('miniLikeBtn')?.addEventListener('click', (e) => {
+    if (!currentTrackId) return;
+    const key = `jm_like_${currentTrackId}`;
+    const lk = getLikeState(key);
+    if (setLikeState(key, !lk)) {
+      const btn = document.getElementById('miniLikeBtn');
+      if (btn) {
+        btn.classList.toggle('active', !lk);
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${!lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+      }
+      showToast(!lk ? 'Curtido!' : 'Removido');
+      // Atualiza também na lista principal
+      const mainLikeBtns = document.querySelectorAll(`.music-item[data-id="${currentTrackId}"] .action-icon`);
+      // Lógica para atualizar na lista se necessário
+    }
+  });
+
+  document.getElementById('miniShareBtn')?.addEventListener('click', async () => {
+    if (!currentTrackMeta) return;
+    const url = `${location.origin}/player.html?id=${encodeURIComponent(currentTrackId)}`;
+    const sd = { title: `${currentTrackMeta.title} — Joseph Matthos`, url };
+    if (navigator.share) {
+      try { await navigator.share(sd); return; } catch {}
+    }
+    if (navigator.clipboard) {
+      try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); } catch { showToast('Erro.'); }
+    }
+  });
+
+  document.getElementById('miniMuteBtn')?.addEventListener('click', () => {
+    if (!currentAudio) return;
+    currentAudio.muted = !currentAudio.muted;
+    const btn = document.getElementById('miniMuteBtn');
+    if (btn) {
+      btn.innerHTML = currentAudio.muted 
+        ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`
+        : `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
+    }
+  });
 
   els.playBtn?.setAttribute('aria-label', 'Play/Pause');
   els.fullscreenBtn?.setAttribute('aria-label', 'Alternar tela cheia');
