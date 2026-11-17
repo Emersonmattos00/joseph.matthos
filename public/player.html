@@ -159,25 +159,42 @@
     </main>
   </div>
 
-  <!-- MINI-PLAYER -->
+    <!-- MINI-PLAYER -->
   <div id="miniPlayer" class="mini-player" role="region" aria-label="Mini-player" style="display: none;">
-    <div class="mini-cover" id="miniCover" aria-hidden="true"></div>
-    <div class="mini-info">
-      <div class="mini-title" id="miniTitle">Nenhuma música</div>
-      <div class="mini-artist" id="miniArtist">Joseph Matthos</div>
+    <div class="mini-left">
+      <div class="mini-cover" id="miniCover" aria-hidden="true"></div>
+      <div class="mini-info">
+        <div class="mini-title" id="miniTitle">Nenhuma música</div>
+        <div class="mini-artist" id="miniArtist">Joseph Matthos</div>
+      </div>
     </div>
-    <div class="mini-controls">
-      <button type="button" id="miniPrevBtn" aria-label="Anterior">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+
+    <div class="mini-center">
+      <div class="mini-controls">
+        <button type="button" id="miniPrevBtn" aria-label="Anterior">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+        </button>
+        <button type="button" id="miniPlayBtn" aria-label="Play/Pause">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button type="button" id="miniNextBtn" aria-label="Próxima">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="mini-right">
+      <button type="button" class="mini-action" id="miniLikeBtn" aria-label="Curtir">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
       </button>
-      <button type="button" id="miniPlayBtn" aria-label="Play/Pause">
-        <svg id="miniPlayIcon" viewBox="0 0 24 24" width="32" height="32" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      <button type="button" class="mini-action" id="miniShareBtn" aria-label="Compartilhar">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
       </button>
-      <button type="button" id="miniNextBtn" aria-label="Próximo">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      <button type="button" class="mini-action" id="miniMuteBtn" aria-label="Mudo">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
       </button>
-      <button type="button" id="miniOpenBtn" aria-label="Abrir player">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+      <button type="button" class="mini-action" id="miniOpenBtn" aria-label="Expandir player">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
       </button>
     </div>
   </div>
