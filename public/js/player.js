@@ -1,9 +1,4 @@
-// js/player.js — v32.9
-// v32.8 → v32.9:
-// - audioReady: consume rejeição no catch síncrono de src=/load()
-//   (evita unhandledrejection; cleanup continua executando via fail())
-// - Backend TBD mantido
-
+// js/player.js — v32.9 (Modificado com Sincronização de Curtida)
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -29,7 +24,6 @@ function normalizeTrackId(v) {
 }
 function normalizeCoverUrl(url, fallback = DEFAULT_COVER) {
   if (!url) return fallback;
-  // Aceita Base64 gerado pelo upload local
   if (url.startsWith('data:image/')) return url;
   try {
     const p = new URL(url, window.location.origin);
@@ -309,6 +303,20 @@ function setCatalogLoading(loading) {
   }
 }
 
+// ─── NOVA FUNÇÃO: Sincronização de Curtida ───
+function syncLikeUI(trackId, isLiked) {
+  const miniLikeBtn = document.getElementById('miniLikeBtn');
+  if (miniLikeBtn && currentTrackId === String(trackId)) {
+    miniLikeBtn.classList.toggle('active', isLiked);
+    miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${isLiked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  }
+
+  const likeBtns = document.querySelectorAll(`.music-item[data-track-id="${trackId}"] .action-icon.like-btn`);
+  likeBtns.forEach(btn => {
+    btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  });
+}
+
 async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
   if (!snapshot) return { restored: false };
 
@@ -482,7 +490,6 @@ window.editarCapaPlaylist = (id) => {
   form.style.flexDirection = 'column';
   form.style.gap = '1rem';
 
-  // Campo URL
   const urlGroup = document.createElement('div');
   urlGroup.className = 'form-group';
   const urlLabel = document.createElement('label');
@@ -494,7 +501,6 @@ window.editarCapaPlaylist = (id) => {
   urlGroup.append(urlLabel, urlInput);
   form.appendChild(urlGroup);
 
-  // Upload
   const uploadBtn = document.createElement('button');
   uploadBtn.className = 'btn btn-outline';
   uploadBtn.type = 'button';
@@ -526,7 +532,6 @@ window.editarCapaPlaylist = (id) => {
   form.append(uploadBtn, fileInput);
   m.appendChild(form);
 
-  // Ações
   const ac = document.createElement('div'); 
   ac.className = 'playlist-modal-actions';
   
@@ -602,7 +607,9 @@ function renderPlayerTrackList(context, currentId) {
   if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${context.tracks.length} faixas`;
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
+    item.setAttribute('data-track-id', track.id); // IMPORTANTE PARA SINCRONIZAR A CURTIDA
     if (String(track.id) === String(currentId)) item.classList.add('playing');
+    
     const nc = document.createElement('div'); nc.className = 'music-item-number';
     nc.style.cssText = 'display:flex;align-items:center;gap:12px;width:auto;min-width:60px;';
     const num = document.createElement('span'); num.className = 'num-text'; num.textContent = index + 1; num.style.cssText = 'width:20px;text-align:center;';
@@ -612,21 +619,26 @@ function renderPlayerTrackList(context, currentId) {
     img.style.cssText = 'width:40px;height:40px;border-radius:4px;object-fit:cover;flex-shrink:0;';
     img.onerror = () => { img.onerror = null; img.src = DEFAULT_COVER; };
     nc.append(num, ph, img);
+    
     const info = document.createElement('div'); info.className = 'music-item-info';
     const t = document.createElement('div'); t.className = 'music-item-title'; t.textContent = track.title || 'Faixa sem título';
     const a = document.createElement('div'); a.className = 'music-item-artist';
     a.appendChild(document.createTextNode(track.artist || 'Joseph Matthos'));
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
+    
     const act = document.createElement('div'); act.className = 'music-item-actions';
-    const like = document.createElement('button'); like.className = 'action-icon';
+    
+    // Botão Curtir (Coração) - adicionada classe 'like-btn' para busca
+    const like = document.createElement('button'); like.className = 'action-icon like-btn';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
     like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    
     like.addEventListener('click', (e) => {
       e.stopPropagation(); const l = getLikeState(key);
       if (setLikeState(key, !l)) {
-        like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${!l ? '#1DB954' : 'none'}" stroke="${!l ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+        syncLikeUI(track.id, !l); // Sincroniza interface
         showToast(l ? 'Removido' : 'Curtido!');
       } else showToast('Erro ao salvar.');
     });
@@ -634,11 +646,13 @@ function renderPlayerTrackList(context, currentId) {
     
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
+    
     const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
+    
     item.append(nc, info, act);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
     els.musicList.appendChild(item);
@@ -724,12 +738,8 @@ function updatePlayerUI(meta) {
   if (els.miniTitle) els.miniTitle.textContent = meta.title;
   if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-  const miniLikeBtn = document.getElementById('miniLikeBtn');
-  if (miniLikeBtn) {
-    const lk = getLikeState(`jm_like_${meta.id}`);
-    miniLikeBtn.classList.toggle('active', lk);
-    miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-  }
+  const lk = getLikeState(`jm_like_${meta.id}`);
+  syncLikeUI(meta.id, lk);
 
   const miniMuteBtn = document.getElementById('miniMuteBtn');
   if (miniMuteBtn) {
@@ -1505,17 +1515,12 @@ async function bootPlayer() {
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
 
-  // Novos controles do Mini-Player
   document.getElementById('miniLikeBtn')?.addEventListener('click', (e) => {
     if (!currentTrackId) return;
     const key = `jm_like_${currentTrackId}`;
     const lk = getLikeState(key);
     if (setLikeState(key, !lk)) {
-      const btn = document.getElementById('miniLikeBtn');
-      if (btn) {
-        btn.classList.toggle('active', !lk);
-        btn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${!lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-      }
+      syncLikeUI(currentTrackId, !lk);
       showToast(!lk ? 'Curtido!' : 'Removido');
     }
   });
