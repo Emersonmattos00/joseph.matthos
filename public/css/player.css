@@ -768,7 +768,7 @@ body.player-page [role="slider"]:focus-visible {
   display: flex;
   align-items: center;
   flex: 1;
-  min-width: 0; /* Permite que o texto seja truncado se necessário */
+  min-width: 0;
 }
 
 .mini-cover {
@@ -810,7 +810,7 @@ body.player-page [role="slider"]:focus-visible {
   margin-top: 2px;
 }
 
-/* Lado Central: Controles */
+/* Lado Central: Controles + Anel */
 .mini-center {
   display: flex;
   align-items: center;
@@ -820,7 +820,7 @@ body.player-page [role="slider"]:focus-visible {
 
 .mini-controls {
   display: flex;
-  gap: 1.2rem;
+  gap: 1rem;
   align-items: center;
 }
 
@@ -841,8 +841,49 @@ body.player-page [role="slider"]:focus-visible {
   opacity: 0.8;
 }
 
+/* Anel de Progresso do Mini-Player */
+.mini-progress-ring-container {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0.5rem;
+}
+
+.mini-progress-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.mini-progress-ring-circle {
+  stroke-dasharray: 138.23; /* 2 * PI * 22 */
+  stroke-dashoffset: 138.23;
+  transition: stroke-dashoffset 0.2s linear;
+  stroke-linecap: round;
+}
+
 #miniPlayBtn {
+  position: relative;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-panel);
+  border-radius: 50%;
   color: var(--gold);
+  transition: transform 0.2s;
+  padding: 0;
+}
+
+#miniPlayBtn:hover {
+  transform: scale(1.1);
 }
 
 /* Lado Direito: Ações Extra */
@@ -850,7 +891,7 @@ body.player-page [role="slider"]:focus-visible {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 1rem;
+  gap: 0.8rem;
   flex: 1;
 }
 
@@ -876,10 +917,10 @@ body.player-page [role="slider"]:focus-visible {
   color: var(--green);
 }
 
-/* Esconde os controles extras em telas muito pequenas para não quebrar */
+/* Responsividade do Mini-Player */
 @media (max-width: 600px) {
   .mini-right {
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
   .mini-action {
     padding: 0.2rem;
@@ -888,16 +929,16 @@ body.player-page [role="slider"]:focus-visible {
     margin: 0 0.5rem;
   }
   .mini-controls {
-    gap: 0.8rem;
+    gap: 0.5rem;
   }
   .mini-player {
     padding: 0 1rem;
   }
-  /* Esconde o botão de compartilhar no mobile extremo se o espaço for muito pequeno */
   #miniShareBtn {
     display: none;
   }
 }
+
 /* ─── 12. ESTADO DE BUFFERING ─── */
 .music-player--fullscreen.is-buffering::after {
   content: '';
