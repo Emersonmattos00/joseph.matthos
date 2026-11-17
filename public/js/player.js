@@ -552,7 +552,27 @@ function openOptionsMenu(track, anchorEl) {
   const m = document.createElement('div'); m.id = 'trackOptionsMenu'; m.className = 'track-options-menu';
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
-  m.innerHTML = `<button role="menuitem" data-action="share">🔗 Compartilhar</button><button role="menuitem" data-action="copy">📋 Copiar</button><button role="menuitem" data-action="rent">🎫 Alugar</button><button role="menuitem" data-action="playlist">➕ Playlist</button>`;
+  
+  // Ícones SVG no estilo minimalista (Spotify)
+  m.innerHTML = `
+    <button role="menuitem" data-action="share">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      Compartilhar
+    </button>
+    <button role="menuitem" data-action="copy">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      Copiar Link
+    </button>
+    <button role="menuitem" data-action="rent">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>
+      Alugar Faixa
+    </button>
+    <button role="menuitem" data-action="playlist">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Adicionar à Playlist
+    </button>
+  `;
+  
   document.body.appendChild(m);
   const r = anchorEl.getBoundingClientRect(); const mr = m.getBoundingClientRect();
   m.style.top = `${Math.max(10, Math.min(r.bottom + 6, window.innerHeight - mr.height - 10))}px`;
