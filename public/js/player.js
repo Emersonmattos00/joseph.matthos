@@ -1,4 +1,4 @@
-// js/player.js — v33.4 (Correção de A2: propriedade no caminho sem áudio)
+// js/player.js — v33.5 (Blindado, Visualmente Compatível com CSS antigo)
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -223,10 +223,6 @@ let isBooted = false;
 const snapshotRefs = new Map();
 
 // ─── Propriedade da reprodução ───
-// O chamador já incrementou commitRequestId e entrega o ID recém-criado.
-// Não incrementamos commitRequestId aqui para não invalidar a operação que
-// acabou de assumir a propriedade. A geração (playbackOwnerToken) é o que
-// distingue duas operações com o mesmo operationId em cenários de reentrada.
 function takePlaybackOwnership(operationId) {
   ++playbackOwnerToken;
   playbackOwnerOperationId = operationId;
@@ -237,7 +233,6 @@ function isPlaybackOwner(operationId, ownerToken) {
   return operationId === playbackOwnerOperationId &&
     (ownerToken === undefined || ownerToken === playbackOwnerToken);
 }
-// ─── Cancelamento centralizado de preparação pendente ───
 function cancelPendingPreparation() {
   if (!playbackAbortController) return;
   try { playbackAbortController.abort(); } catch {}
@@ -329,8 +324,6 @@ function shuffleQueueMatchesContext(expectedVersion) {
 function shouldAdvanceQueue(result) {
   if (!result || !result.committed) return false;
   if (result.playbackStarted) return true;
-  // 'manual-pause': a operação foi concluída e a faixa é a atual;
-  // em shuffle, considerar como avanço mantém a fila e o histórico coerentes.
   return result.reason === 'not-allowed' || result.reason === 'manual-pause';
 }
 function setBuffering(value) {
@@ -399,8 +392,6 @@ async function restorePlaybackSnapshot(snapshot, operationId, restoreId, ownerTo
     operationId === commitRequestId &&
     (restoreId === undefined || restoreId === activeRestoreId);
 
-  // Validar antes de liberar/alterar estado global. Um rollback revogado
-  // nunca pode sobrescrever o áudio ou os metadados de uma operação mais nova.
   if (!restoreIsCurrent()) {
     releaseAndDisposeSnapshot(snapshot);
     return { restored: false, reason: 'restore-revoked-before-state' };
@@ -712,21 +703,16 @@ window.criarPlaylistEAdicionar = (trackId) => {
   if (n && n.trim()) { const p = createPlaylistWithTrack(n, trackId); if (p) { renderPlaylistsTab(); showToast('Playlist criada!'); } else showToast('Erro.'); }
 };
 
-// ─── LISTA DE MÚSICAS ───
+// ─── LISTA DE MÚSICAS (Layout Original Mantido) ───
 function renderPlayerTrackList(context, currentId) {
   if (!els.musicList) return;
   els.musicList.replaceChildren();
   if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${context.tracks.length} faixas`;
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
-    item.setAttribute('data-track-id', track.id);
+    item.setAttribute('data-track-id', track.id); // IMPORTANTE PARA SINCRONIZAR A CURTIDA
     if (String(track.id) === String(currentId)) item.classList.add('playing');
-
-    const playArea = document.createElement('button');
-    playArea.type = 'button';
-    playArea.className = 'music-item-play-area';
-    playArea.setAttribute('aria-label', `Tocar ${track.title || 'faixa'}`);
-
+    
     const nc = document.createElement('div'); nc.className = 'music-item-number';
     nc.style.cssText = 'display:flex;align-items:center;gap:12px;width:auto;min-width:60px;';
     const num = document.createElement('span'); num.className = 'num-text'; num.textContent = index + 1; num.style.cssText = 'width:20px;text-align:center;';
@@ -736,41 +722,43 @@ function renderPlayerTrackList(context, currentId) {
     img.style.cssText = 'width:40px;height:40px;border-radius:4px;object-fit:cover;flex-shrink:0;';
     img.onerror = () => { img.onerror = null; img.src = DEFAULT_COVER; };
     nc.append(num, ph, img);
-
+    
     const info = document.createElement('div'); info.className = 'music-item-info';
     const t = document.createElement('div'); t.className = 'music-item-title'; t.textContent = track.title || 'Faixa sem título';
     const a = document.createElement('div'); a.className = 'music-item-artist';
     a.appendChild(document.createTextNode(track.artist || 'Joseph Matthos'));
     if (track.isrc) { const s = document.createElement('span'); s.className = 'music-item-isrc'; s.textContent = `ISRC: ${track.isrc}`; a.appendChild(s); }
     info.append(t, a);
-
-    playArea.append(nc, info);
-    playArea.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
-
+    
     const act = document.createElement('div'); act.className = 'music-item-actions';
-
+    
+    // Botão Curtir (Coração)
     const like = document.createElement('button'); like.className = 'action-icon like-btn';
     like.setAttribute('aria-label', 'Curtir faixa');
     const key = `jm_like_${track.id}`; const lk = getLikeState(key);
     like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-
+    
     like.addEventListener('click', (e) => {
       e.stopPropagation(); const l = getLikeState(key);
-      if (setLikeState(key, !l)) { syncLikeUI(track.id, !l); showToast(l ? 'Removido' : 'Curtido!'); }
-      else showToast('Erro ao salvar.');
+      if (setLikeState(key, !l)) {
+        syncLikeUI(track.id, !l); 
+        showToast(l ? 'Removido' : 'Curtido!');
+      } else showToast('Erro ao salvar.');
     });
     act.appendChild(like);
-
+    
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
-
+    
     const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
-
-    item.append(playArea, act);
+    
+    // ESTRUTURA ORIGINAL MANTIDA PARA O CSS
+    item.append(nc, info, act);
+    item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
     els.musicList.appendChild(item);
   });
 }
@@ -780,12 +768,26 @@ function openOptionsMenu(track, anchorEl) {
   const m = document.createElement('div'); m.id = 'trackOptionsMenu'; m.className = 'track-options-menu';
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
+  
   m.innerHTML = `
-    <button role="menuitem" data-action="share"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Compartilhar</button>
-    <button role="menuitem" data-action="copy"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copiar Link</button>
-    <button role="menuitem" data-action="rent"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>Alugar Faixa</button>
-    <button role="menuitem" data-action="playlist"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Adicionar à Playlist</button>
+    <button role="menuitem" data-action="share">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+      Compartilhar
+    </button>
+    <button role="menuitem" data-action="copy">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      Copiar Link
+    </button>
+    <button role="menuitem" data-action="rent">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12c0-1.1.9-2 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-1.99.9-1.99 2v4c1.1 0 1.99.9 1.99 2s-.89 2-2 2v4c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2v-4c-1.1 0-2-.9-2-2z"/></svg>
+      Alugar Faixa
+    </button>
+    <button role="menuitem" data-action="playlist">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Adicionar à Playlist
+    </button>
   `;
+  
   document.body.appendChild(m);
   const r = anchorEl.getBoundingClientRect(); const mr = m.getBoundingClientRect();
   m.style.top = `${Math.max(10, Math.min(r.bottom + 6, window.innerHeight - mr.height - 10))}px`;
@@ -818,15 +820,9 @@ function updateMediaSessionMetadata(meta) {
   } catch (e) { console.warn('[MediaSession]', e); }
 }
 
-// ─── Políticas centralizadas de Play/Pause ───
 function requestPlay() {
-  // ─── v33.4 (A2) — caminho "sem áudio": playTrackInternal assume a propriedade ───
   if (!currentAudio || !currentAudio.src) {
     if (currentTrackId) {
-      // Não chamar takePlaybackOwnership aqui: playTrackInternal gera seu
-      // próprio operationId e chama takePlaybackOwnership com ele. Chamar
-      // antes faria commitTrack ver playbackOwnerOperationId != operationId
-      // e abortar como 'superseded'.
       playTrack(currentTrackId);
     } else {
       showToast('Selecione uma faixa para tocar.');
@@ -840,8 +836,6 @@ function requestPlay() {
 }
 function requestPause() {
   if (!currentAudio) return;
-  // A pausa pertence à operação proprietária no momento do comando.
-  // Não toma propriedade: apenas sinaliza intenção à operação corrente.
   manualPauseOperationId = playbackOwnerOperationId || commitRequestId;
   cancelPendingPreparation();
   if (!currentAudio.paused) { try { currentAudio.pause(); } catch {} }
@@ -1203,7 +1197,6 @@ async function playTrackInternal(trackId, { contextHint = null, allowAlbumFallba
   if (!trackId) return { committed: false, playbackStarted: false, reason: 'invalid-id' };
 
   const operationId = ++commitRequestId;
-  // ─── v33.4 (A1) — captura das gerações em ordem determinística ───
   const reqId = ++playbackRequestId;
   const restoreId = ++activeRestoreId;
   const ownerToken = takePlaybackOwnership(operationId);
