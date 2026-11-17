@@ -534,9 +534,6 @@ function renderPlayerTrackList(context, currentId) {
     });
     act.appendChild(like);
     
-    // Botão Compartilhar removido conforme solicitado anteriormente
-    // Botão Alugar removido conforme solicitado anteriormente
-
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
     const mb = document.createElement('button'); mb.className = 'action-icon';
@@ -633,6 +630,20 @@ function resetProgressUI() {
   if (els.progressFill) els.progressFill.style.width = '0%';
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
+  
+  // Zera o anel do Player Principal
+  const mainRing = document.getElementById('progressRingCircle');
+  if (mainRing) {
+    const circumference = 2 * Math.PI * 40;
+    mainRing.style.strokeDashoffset = circumference;
+  }
+
+  // Zera o anel do Mini-Player
+  const miniRing = document.getElementById('miniProgressRingCircle');
+  if (miniRing) {
+    const circumference = 2 * Math.PI * 22;
+    miniRing.style.strokeDashoffset = circumference;
+  }
 }
 function attemptPlay(audioEl) {
   if (!audioEl || !audioEl.src) return Promise.resolve({ started: false, reason: 'no-src' });
@@ -672,11 +683,28 @@ function attachPlaybackListeners(a) {
     updateInterval = setInterval(() => {
       if (a !== currentAudio) return;
       const s = a.currentTime || 0, d = a.duration || 0;
-      if (els.progressFill) els.progressFill.style.width = `${d > 0 ? Math.min(100, (s/d)*100) : 0}%`;
+      const percent = d > 0 ? s / d : 0;
+      
+      if (els.progressFill) els.progressFill.style.width = `${percent * 100}%`;
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
+      
+      // Atualiza o anel de progresso do Player Principal
+      const mainRing = document.getElementById('progressRingCircle');
+      if (mainRing) {
+        const circumference = 2 * Math.PI * 40;
+        mainRing.style.strokeDashoffset = circumference - (percent * circumference);
+      }
+
+      // Atualiza o anel de progresso do Mini-Player
+      const miniRing = document.getElementById('miniProgressRingCircle');
+      if (miniRing) {
+        const circumference = 2 * Math.PI * 22;
+        miniRing.style.strokeDashoffset = circumference - (percent * circumference);
+      }
+
       if (els.progressBar) {
-        els.progressBar.setAttribute('aria-valuenow', d > 0 ? Math.round((s/d)*100) : 0);
+        els.progressBar.setAttribute('aria-valuenow', d > 0 ? Math.round(percent * 100) : 0);
         els.progressBar.setAttribute('aria-valuetext', `${formatTime(s)} de ${formatTime(d)}`);
       }
     }, 250);
@@ -1378,9 +1406,6 @@ async function bootPlayer() {
         btn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${!lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
       }
       showToast(!lk ? 'Curtido!' : 'Removido');
-      // Atualiza também na lista principal
-      const mainLikeBtns = document.querySelectorAll(`.music-item[data-id="${currentTrackId}"] .action-icon`);
-      // Lógica para atualizar na lista se necessário
     }
   });
 
