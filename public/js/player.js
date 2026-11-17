@@ -29,6 +29,8 @@ function normalizeTrackId(v) {
 }
 function normalizeCoverUrl(url, fallback = DEFAULT_COVER) {
   if (!url) return fallback;
+  // Aceita Base64 gerado pelo upload local
+  if (url.startsWith('data:image/')) return url;
   try {
     const p = new URL(url, window.location.origin);
     if (p.protocol === 'https:' || (p.protocol === 'http:' && window.location.hostname === 'localhost')) return p.href;
@@ -453,11 +455,107 @@ window.criarPlaylistModal = () => {
 window.deletarPlaylist = (id) => {
   if (confirm('Excluir esta playlist?')) { if (removePlaylist(id)) { renderPlaylistsTab(); showToast('Excluída.'); } else showToast('Erro.'); }
 };
+
 window.editarCapaPlaylist = (id) => {
-  const pl = getPlaylists(); const p = pl.find(x => x.id === id); if (!p) return;
-  const n = prompt('URL da capa:', p.coverUrl || '');
-  if (n !== null) { p.coverUrl = normalizeCoverUrl(n.trim(), ''); if (savePlaylists(pl)) { showToast('Capa atualizada!'); window.abrirPlaylist(id); } }
+  const pl = getPlaylists(); 
+  const p = pl.find(x => x.id === id); 
+  if (!p) return;
+
+  document.getElementById('editCoverModalOverlay')?.remove();
+
+  const ov = document.createElement('div'); 
+  ov.className = 'playlist-modal-overlay'; 
+  ov.id = 'editCoverModalOverlay';
+  ov.setAttribute('role', 'dialog'); 
+  ov.setAttribute('aria-modal', 'true'); 
+  ov.setAttribute('aria-label', 'Editar Capa da Playlist');
+
+  const m = document.createElement('div'); 
+  m.className = 'playlist-modal';
+  
+  const h = document.createElement('h3'); 
+  h.textContent = 'Editar Capa'; 
+  m.appendChild(h);
+
+  const form = document.createElement('div');
+  form.style.display = 'flex';
+  form.style.flexDirection = 'column';
+  form.style.gap = '1rem';
+
+  // Campo URL
+  const urlGroup = document.createElement('div');
+  urlGroup.className = 'form-group';
+  const urlLabel = document.createElement('label');
+  urlLabel.textContent = 'URL da Imagem';
+  const urlInput = document.createElement('input');
+  urlInput.type = 'text';
+  urlInput.placeholder = 'https://...';
+  urlInput.value = p.coverUrl || '';
+  urlGroup.append(urlLabel, urlInput);
+  form.appendChild(urlGroup);
+
+  // Upload
+  const uploadBtn = document.createElement('button');
+  uploadBtn.className = 'btn btn-outline';
+  uploadBtn.type = 'button';
+  uploadBtn.innerHTML = '📁 Escolher do Dispositivo';
+  uploadBtn.style.width = '100%';
+  
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.style.display = 'none';
+  
+  uploadBtn.addEventListener('click', () => fileInput.click());
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('Imagem muito grande (máx 2MB).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      urlInput.value = ev.target.result;
+      showToast('Imagem carregada!');
+    };
+    reader.readAsDataURL(file);
+  });
+
+  form.append(uploadBtn, fileInput);
+  m.appendChild(form);
+
+  // Ações
+  const ac = document.createElement('div'); 
+  ac.className = 'playlist-modal-actions';
+  
+  const cb = document.createElement('button'); 
+  cb.textContent = 'Cancelar'; 
+  cb.addEventListener('click', () => ov.remove());
+  
+  const sb = document.createElement('button'); 
+  sb.className = 'save'; 
+  sb.textContent = 'Salvar'; 
+  sb.addEventListener('click', () => {
+    const newUrl = urlInput.value.trim();
+    p.coverUrl = normalizeCoverUrl(newUrl, '');
+    
+    if (savePlaylists(pl)) {
+      showToast('Capa atualizada!');
+      ov.remove();
+      window.abrirPlaylist(id);
+    } else {
+      showToast('Erro ao salvar.');
+    }
+  });
+
+  ac.append(cb, sb); 
+  m.appendChild(ac); 
+  ov.appendChild(m); 
+  document.body.appendChild(ov);
 };
+
 window.abrirModalAdicionarPlaylist = (trackId) => {
   document.getElementById('playlistModalOverlay')?.remove();
   const pl = getPlaylists();
@@ -553,7 +651,6 @@ function openOptionsMenu(track, anchorEl) {
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
   
-  // Ícones SVG no estilo minimalista (Spotify)
   m.innerHTML = `
     <button role="menuitem" data-action="share">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
@@ -627,7 +724,6 @@ function updatePlayerUI(meta) {
   if (els.miniTitle) els.miniTitle.textContent = meta.title;
   if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
 
-  // Atualiza o estado do botão de curtir do mini-player
   const miniLikeBtn = document.getElementById('miniLikeBtn');
   if (miniLikeBtn) {
     const lk = getLikeState(`jm_like_${meta.id}`);
@@ -635,7 +731,6 @@ function updatePlayerUI(meta) {
     miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${lk ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
   }
 
-  // Atualiza o estado do botão de mudo do mini-player
   const miniMuteBtn = document.getElementById('miniMuteBtn');
   if (miniMuteBtn) {
     const isMuted = currentAudio ? currentAudio.muted : false;
@@ -651,14 +746,12 @@ function resetProgressUI() {
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
   
-  // Zera o anel do Player Principal
   const mainRing = document.getElementById('progressRingCircle');
   if (mainRing) {
     const circumference = 2 * Math.PI * 40;
     mainRing.style.strokeDashoffset = circumference;
   }
 
-  // Zera o anel do Mini-Player
   const miniRing = document.getElementById('miniProgressRingCircle');
   if (miniRing) {
     const circumference = 2 * Math.PI * 22;
@@ -709,14 +802,12 @@ function attachPlaybackListeners(a) {
       if (els.currentTime) els.currentTime.textContent = formatTime(s);
       if (els.duration) els.duration.textContent = formatTime(d);
       
-      // Atualiza o anel de progresso do Player Principal
       const mainRing = document.getElementById('progressRingCircle');
       if (mainRing) {
         const circumference = 2 * Math.PI * 40;
         mainRing.style.strokeDashoffset = circumference - (percent * circumference);
       }
 
-      // Atualiza o anel de progresso do Mini-Player
       const miniRing = document.getElementById('miniProgressRingCircle');
       if (miniRing) {
         const circumference = 2 * Math.PI * 22;
