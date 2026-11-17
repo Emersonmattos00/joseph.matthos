@@ -2270,9 +2270,9 @@ section[aria-labelledby="destaqueTitle"] {
 /* Cada card: largura fixa, altura automática */
 .amz-carousel-track > * {
   flex: 0 0 auto !important;
-  width: 160px !important;
-  max-width: 160px !important;
-  min-width: 160px !important;
+  width: 320px !important;
+  max-width: 320px !important;
+  min-width: 320px !important;
   height: auto !important;         /* ← CORREÇÃO: altura automática */
   max-height: none !important;
   scroll-snap-align: start;
