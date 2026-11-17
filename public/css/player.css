@@ -1113,6 +1113,51 @@ body.player-page [role="slider"]:focus-visible {
   overflow-y: auto;
 }
 
+/* Ajustes no formulário do Modal */
+.playlist-modal .form-group {
+  margin-bottom: 0;
+}
+
+.playlist-modal .form-group label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.playlist-modal .form-group input[type="text"] {
+  width: 100%;
+  padding: 0.8rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.playlist-modal .form-group input[type="text"]:focus {
+  border-color: var(--gold);
+}
+
+.playlist-modal .btn-outline {
+  border: 1px dashed var(--border-strong);
+  color: var(--text-dim);
+  background: transparent;
+  padding: 1rem;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.playlist-modal .btn-outline:hover {
+  border-color: var(--gold);
+  color: #fff;
+  background: rgba(212, 175, 55, 0.05);
+}
+
 /* ─── 15. TOAST ─── */
 #playerToast {
   position: fixed;
