@@ -2270,9 +2270,9 @@ section[aria-labelledby="destaqueTitle"] {
 /* Cada card: largura fixa, altura automática */
 .amz-carousel-track > * {
   flex: 0 0 auto !important;
-  width: 320px !important;
-  max-width: 320px !important;
-  min-width: 320px !important;
+  width: 280px !important;
+  max-width: 280px !important;
+  min-width: 280px !important;
   height: auto !important;         /* ← CORREÇÃO: altura automática */
   max-height: none !important;
   scroll-snap-align: start;
@@ -2284,7 +2284,7 @@ section[aria-labelledby="destaqueTitle"] {
   width: 100% !important;
   aspect-ratio: 1 / 1 !important;
   height: auto !important;
-  max-height: 320px !important;    /* ← CORREÇÃO: no máximo a largura do card */
+  max-height: 280px !important;    /* ← CORREÇÃO: no máximo a largura do card */
   border-radius: 6px !important;
   overflow: hidden !important;
   position: relative !important;
