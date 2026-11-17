@@ -538,11 +538,16 @@ function renderPlayerTrackList(context, currentId) {
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
 
-    // Mais Opções (3 pontinhos)
+    // Mais Opções (3 pontinhos) - AQUI está o e.stopPropagation()
     const mb = document.createElement('button'); mb.className = 'action-icon';
     mb.setAttribute('aria-label', 'Mais opções');
     mb.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`;
-    mb.addEventListener('click', (e) => { e.stopPropagation(); (track, mb); });
+    
+    mb.addEventListener('click', (e) => { 
+      e.stopPropagation(); // IMPEDE que o clique suba para a linha e inicie a música
+      openOptionsMenu(track, mb); 
+    });
+    
     act.appendChild(mb);
     
     item.append(nc, info, act);
@@ -557,7 +562,6 @@ function openOptionsMenu(track, anchorEl) {
   m.setAttribute('role', 'menu');
   const url = `${location.origin}/player.html?id=${encodeURIComponent(track.id)}`;
   
-  // Ícones SVG no estilo minimalista
   m.innerHTML = `
     <button role="menuitem" data-action="share">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
