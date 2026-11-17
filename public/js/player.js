@@ -1,4 +1,4 @@
-// js/player.js — v33.5 (Blindado, Visualmente Compatível com CSS antigo)
+// js/player.js — v33.6 (Curtida apenas no miniplayer)
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -351,20 +351,13 @@ function setCatalogLoading(loading) {
   }
 }
 
-// ─── Sincronização de Curtida ───
+// ─── Sincronização de Curtida (Agora apenas no miniplayer) ───
 function syncLikeUI(trackId, isLiked) {
   const miniLikeBtn = document.getElementById('miniLikeBtn');
   if (miniLikeBtn && currentTrackId === String(trackId)) {
     miniLikeBtn.classList.toggle('active', isLiked);
     miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${isLiked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
   }
-  let safeId;
-  try { safeId = CSS.escape(String(trackId)); } catch { safeId = null; }
-  if (!safeId) return;
-  const likeBtns = document.querySelectorAll(`.music-item[data-track-id="${safeId}"] .action-icon.like-btn`);
-  likeBtns.forEach(btn => {
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-  });
 }
 
 // ─── Limpeza completa da UI ───
@@ -703,14 +696,14 @@ window.criarPlaylistEAdicionar = (trackId) => {
   if (n && n.trim()) { const p = createPlaylistWithTrack(n, trackId); if (p) { renderPlaylistsTab(); showToast('Playlist criada!'); } else showToast('Erro.'); }
 };
 
-// ─── LISTA DE MÚSICAS (Layout Original Mantido) ───
+// ─── LISTA DE MÚSICAS (Sem botão de curtir) ───
 function renderPlayerTrackList(context, currentId) {
   if (!els.musicList) return;
   els.musicList.replaceChildren();
   if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${context.tracks.length} faixas`;
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
-    item.setAttribute('data-track-id', track.id); // IMPORTANTE PARA SINCRONIZAR A CURTIDA
+    item.setAttribute('data-track-id', track.id);
     if (String(track.id) === String(currentId)) item.classList.add('playing');
     
     const nc = document.createElement('div'); nc.className = 'music-item-number';
@@ -732,20 +725,7 @@ function renderPlayerTrackList(context, currentId) {
     
     const act = document.createElement('div'); act.className = 'music-item-actions';
     
-    // Botão Curtir (Coração)
-    const like = document.createElement('button'); like.className = 'action-icon like-btn';
-    like.setAttribute('aria-label', 'Curtir faixa');
-    const key = `jm_like_${track.id}`; const lk = getLikeState(key);
-    like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-    
-    like.addEventListener('click', (e) => {
-      e.stopPropagation(); const l = getLikeState(key);
-      if (setLikeState(key, !l)) {
-        syncLikeUI(track.id, !l); 
-        showToast(l ? 'Removido' : 'Curtido!');
-      } else showToast('Erro ao salvar.');
-    });
-    act.appendChild(like);
+    // Botão Curtir (Coração) REMOVIDO daqui
     
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
@@ -868,8 +848,11 @@ function updatePlayerUI(meta) {
   if (els.miniCover) els.miniCover.style.backgroundImage = `url('${c}')`;
   if (els.miniTitle) els.miniTitle.textContent = meta.title;
   if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
+  
+  // Atualiza o coração no miniplayer
   const lk = getLikeState(`jm_like_${meta.id}`);
   syncLikeUI(meta.id, lk);
+
   const miniMuteBtn = document.getElementById('miniMuteBtn');
   if (miniMuteBtn) {
     const isMuted = currentAudio ? currentAudio.muted : false;
@@ -1576,6 +1559,7 @@ async function bootPlayer() {
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
 
+  // Botão de curtir do miniplayer mantido aqui
   document.getElementById('miniLikeBtn')?.addEventListener('click', () => {
     if (!currentTrackId) return;
     const key = `jm_like_${currentTrackId}`;
