@@ -7,6 +7,7 @@ import { toast } from '../ui/toast.js';
 import { esc, escAttr } from '../ui/dom.js';
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
+import { safeMediaUrl } from '../../utils.js'; // ← novo (fallback de URL direta);
 
 const State = {
   albums: [],
@@ -18,6 +19,177 @@ const State = {
 };
 
 let _dragState = null;
+
+// ─────────────────────────────────────────────────────────────
+// MINI PLAYER DO ADMIN (v9)
+// ─────────────────────────────────────────────────────────────
+const Player = {
+  el: null,
+  bar: null,
+  current: null,            // { trackId, albumId, title, version }
+  versions: { preview: false, full: false },
+  reqSeq: 0,
+  seeking: false
+};
+
+function ensurePlayer() {
+  if (Player.el) return;
+  const a = new Audio();
+  a.preload = 'auto';
+  a.addEventListener('timeupdate', syncProgress);
+  a.addEventListener('loadedmetadata', syncProgress);
+  a.addEventListener('durationchange', syncProgress);
+  a.addEventListener('play',  () => { setPlayIcon(true);  repaint(); });
+  a.addEventListener('pause', () => { setPlayIcon(false); repaint(); });
+  a.addEventListener('ended', () => { setPlayIcon(false); repaint(); });
+  a.addEventListener('error', () => toast('Não foi possível reproduzir este áudio.', '⚠'));
+  Player.el = a;
+  buildPlayerBar();
+}
+
+function buildPlayerBar() {
+  const bar = document.createElement('div');
+  bar.className = 'admin-player';
+  bar.hidden = true;
+  bar.innerHTML = `
+    <div class="admin-player__cover" aria-hidden="true">♪</div>
+    <div class="admin-player__meta">
+      <div class="admin-player__title">—</div>
+      <div class="admin-player__sub">—</div>
+    </div>
+    <button class="admin-player__play btn btn-ghost btn-sm" type="button" title="Play/Pause">▶</button>
+    <div class="admin-player__progress">
+      <span class="admin-player__cur">0:00</span>
+      <input class="admin-player__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição">
+      <span class="admin-player__dur">0:00</span>
+    </div>
+    <div class="admin-player__versions">
+      <button class="btn btn-ghost btn-sm" data-player-version="preview" type="button">Prévia</button>
+      <button class="btn btn-ghost btn-sm" data-player-version="full" type="button">Completa</button>
+    </div>
+    <div class="admin-player__volume">
+      <button class="admin-player__mute btn btn-ghost btn-sm" type="button" title="Mudo">🔊</button>
+      <input class="admin-player__vol" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
+    </div>
+    <button class="admin-player__close btn btn-ghost btn-sm" type="button" title="Fechar">✕</button>
+  `;
+  document.body.appendChild(bar);
+  Player.bar = bar;
+
+  bar.querySelector('.admin-player__play').addEventListener('click', () => {
+    if (Player.el.paused) Player.el.play().catch(() => {});
+    else Player.el.pause();
+  });
+  bar.querySelector('.admin-player__seek').addEventListener('input', (e) => {
+    Player.seeking = true;
+    bar.querySelector('.admin-player__cur').textContent = fmtTime(Number(e.target.value));
+  });
+  bar.querySelector('.admin-player__seek').addEventListener('change', (e) => {
+    if (Number.isFinite(Number(e.target.value))) Player.el.currentTime = Number(e.target.value);
+    Player.seeking = false;
+  });
+  bar.querySelector('.admin-player__vol').addEventListener('input', (e) => {
+    Player.el.volume = Number(e.target.value); Player.el.muted = false;
+  });
+  bar.querySelector('.admin-player__mute').addEventListener('click', () => { Player.el.muted = !Player.el.muted; });
+  bar.querySelectorAll('[data-player-version]').forEach((b) =>
+    b.addEventListener('click', () => switchVersion(b.dataset.playerVersion)));
+  bar.querySelector('.admin-player__close').addEventListener('click', stopPlayback);
+}
+
+async function getTrackAudioUrl(track, version) {
+  // 1ª opção: URL assinada (mesmo endpoint do download, agora com ?type=)
+  try {
+    const res = await apiFetch('download-url', {
+      method: 'GET', query: { id: String(track.id), type: version }
+    });
+    if (res?.ok && res.url) return res.url;
+  } catch { /* cai no fallback */ }
+
+  // 2ª opção: path direto do bucket
+  const path = version === 'preview'
+    ? (track.previewPath || track.preview_path)
+    : (track.fullPath || track.full_path);
+  const direct = path && safeMediaUrl(path);
+  if (direct) return direct;
+
+  throw new Error(version === 'preview' ? 'Prévia indisponível.' : 'Áudio completo indisponível.');
+}
+
+async function playTrack(albumId, trackId, version) {
+  ensurePlayer();
+  const list = State.tracks.get(albumId);
+  const track = Array.isArray(list) ? list.find((t) => String(t.id) === String(trackId)) : null;
+  if (!track) return toast('Faixa não encontrada.', '⚠');
+
+  const hasPreview = !!(track.previewPath || track.preview_path);
+  const hasFull    = !!(track.fullPath || track.full_path);
+  if (!hasPreview && !hasFull) return toast('Esta faixa não tem áudio cadastrado.', '⚠');
+
+  const seq = ++Player.reqSeq;
+  try {
+    const url = await getTrackAudioUrl(track, version);
+    if (seq !== Player.reqSeq) return;
+
+    Player.current  = { trackId: String(trackId), albumId: String(albumId), title: track.title || 'Faixa', version };
+    Player.versions = { preview: hasPreview, full: hasFull };
+    Player.el.src = url;
+    updateBarMeta();
+    Player.bar.hidden = false;
+    await Player.el.play();
+    repaint();
+  } catch (err) {
+    if (seq === Player.reqSeq) toast(err?.message || 'Falha ao reproduzir.', '⚠');
+  }
+}
+
+async function switchVersion(version) {
+  if (!Player.current || Player.current.version === version) return;
+  if (!Player.versions[version]) return toast('Versão indisponível para esta faixa.', '⚠');
+  const { albumId, trackId } = Player.current;
+  const t = Player.el.currentTime;
+  await playTrack(albumId, trackId, version);
+  if (t > 1) try { Player.el.currentTime = t; } catch {}
+}
+
+function stopPlayback() {
+  Player.reqSeq++;
+  if (Player.el) { Player.el.pause(); Player.el.removeAttribute('src'); Player.el.load(); }
+  Player.current = null;
+  if (Player.bar) Player.bar.hidden = true;
+  repaint();
+}
+
+function updateBarMeta() {
+  if (!Player.bar || !Player.current) return;
+  Player.bar.querySelector('.admin-player__title').textContent = Player.current.title;
+  Player.bar.querySelector('.admin-player__sub').textContent =
+    Player.current.version === 'preview' ? 'Prévia' : 'Áudio completo';
+  Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
+    const v = b.dataset.playerVersion;
+    b.disabled = !Player.versions[v];
+    b.classList.toggle('active', Player.current.version === v);
+  });
+}
+
+function setPlayIcon(playing) {
+  const btn = Player.bar?.querySelector('.admin-player__play');
+  if (btn) btn.textContent = playing ? '⏸' : '▶';
+}
+
+function fmtTime(s) {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+
+function syncProgress() {
+  if (!Player.el || !Player.bar) return;
+  const seek = Player.bar.querySelector('.admin-player__seek');
+  const dur = Number.isFinite(Player.el.duration) ? Player.el.duration : 0;
+  if (!Player.seeking) { seek.max = dur || 0; seek.value = Player.el.currentTime || 0; }
+  Player.bar.querySelector('.admin-player__cur').textContent = fmtTime(Player.el.currentTime);
+  Player.bar.querySelector('.admin-player__dur').textContent = fmtTime(dur);
+}
 
 // ─────────────────────────────────────────────────────────────
 // parseLyricsInput — Versão Estrita (Item 10)
@@ -302,6 +474,32 @@ function bindTrackButtons(scope) {
     });
   });
 
+  scope.querySelectorAll('[data-track-play]').forEach((btn) => {
+  btn.addEventListener('click', async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const trackId = String(btn.dataset.trackPlay);
+    const albumId = String(btn.dataset.trackAlbum);
+
+    const isCurrent = Player.current
+      && String(Player.current.trackId) === trackId
+      && String(Player.current.albumId) === albumId;
+
+    if (isCurrent) { // mesmo som → play/pause
+      if (!Player.el.paused) Player.el.pause();
+      else Player.el.play().catch(() => {});
+      return;
+    }
+
+    const list = State.tracks.get(albumId);
+    const track = Array.isArray(list) ? list.find((t) => String(t.id) === trackId) : null;
+    if (!track) return toast('Faixa não encontrada.', '⚠');
+
+    const version = btn.dataset.playVersion
+      || ((track.fullPath || track.full_path) ? 'full' : 'preview');
+    await playTrack(albumId, trackId, version);
+  });
+});
+
   bindTrackDragDrop(scope);
 }
 
@@ -554,12 +752,24 @@ function renderTracksList(albumId, tracks) {
 }
 
 function renderTrackRow(albumId, track, idx) {
-  const hasPreview = !!track.previewPath || !!track.preview_path;
-  const hasFull = !!track.fullPath || !!track.full_path;
+  const hasPreview = !!(track.previewPath || track.preview_path);
+  const hasFull    = !!(track.fullPath || track.full_path);
+
+  const isCurrent = Player.current
+    && String(Player.current.trackId) === String(track.id)
+    && String(Player.current.albumId) === String(albumId);
+  const playing = isCurrent && Player.el && !Player.el.paused;
+  const canPlay = hasPreview || hasFull;
 
   const audioChips = `
-    <span class="audio-chip ${hasPreview ? '' : 'none'}" title="Preview">${hasPreview ? 'P' : '—'}</span>
-    <span class="audio-chip ${hasFull ? '' : 'none'}" title="Completo">${hasFull ? 'F' : '—'}</span>`;
+    <button class="audio-chip ${hasPreview ? '' : 'none'}" type="button"
+      data-track-play="${escAttr(String(track.id))}" data-track-album="${escAttr(albumId)}"
+      data-play-version="preview" title="${hasPreview ? 'Ouvir prévia' : 'Sem prévia'}"
+      ${hasPreview ? '' : 'disabled'}>P</button>
+    <button class="audio-chip ${hasFull ? '' : 'none'}" type="button"
+      data-track-play="${escAttr(String(track.id))}" data-track-album="${escAttr(albumId)}"
+      data-play-version="full" title="${hasFull ? 'Ouvir completa' : 'Sem completa'}"
+      ${hasFull ? '' : 'disabled'}>F</button>`;
 
   const isPublished = track.status === 'PUBLISHED' || track.published;
   const statusBadge = isPublished
@@ -569,7 +779,9 @@ function renderTrackRow(albumId, track, idx) {
   const price = Number(track.priceCents || track.price_cents) || 0;
 
   return `
-    <tr data-track-id="${escAttr(String(track.id))}" data-track-index="${Number(track.trackNumber || track.track_index) || 0}" draggable="true" class="track-row">
+    <tr data-track-id="${escAttr(String(track.id))}"
+        data-track-index="${Number(track.trackNumber || track.track_index) || 0}"
+        draggable="true" class="track-row ${playing ? 'is-playing' : ''}">
       <td class="track-drag-cell"><span class="track-drag-handle">⋮⋮</span></td>
       <td>${idx + 1}</td>
       <td>${esc(track.title || '—')}</td>
@@ -579,9 +791,26 @@ function renderTrackRow(albumId, track, idx) {
       <td>${statusBadge}</td>
       <td>
         <div class="actions">
-          <button class="btn btn-ghost btn-sm" data-track-download="${escAttr(String(track.id))}" data-track-download-title="${escAttr(track.title || '')}" type="button" ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
-          <button class="btn btn-ghost btn-sm" data-track-edit="${escAttr(String(track.id))}" data-track-album="${escAttr(albumId)}" type="button">✎ Editar</button>
-          <button class="btn btn-ghost btn-sm" data-track-delete="${escAttr(String(track.id))}" data-track-album="${escAttr(albumId)}" type="button">🗑</button>
+          <button class="btn btn-ghost btn-sm ${playing ? 'is-playing' : ''}"
+                  data-track-play="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
+                  type="button"
+                  ${canPlay ? '' : 'disabled'}>
+            ${playing ? '⏸ Pausar' : '▶ Ouvir'}
+          </button>
+          <button class="btn btn-ghost btn-sm"
+                  data-track-download="${escAttr(String(track.id))}"
+                  data-track-download-title="${escAttr(track.title || '')}"
+                  type="button"
+                  ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
+          <button class="btn btn-ghost btn-sm"
+                  data-track-edit="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
+                  type="button">✎ Editar</button>
+          <button class="btn btn-ghost btn-sm"
+                  data-track-delete="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
+                  type="button">🗑</button>
         </div>
       </td>
     </tr>`;
