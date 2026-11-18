@@ -520,7 +520,7 @@ body.player-page [role="slider"]:focus-visible {
 }
 
 .music-item-title {
-  font-size: 0.95rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: #fff;
   white-space: normal;
@@ -536,7 +536,7 @@ body.player-page [role="slider"]:focus-visible {
 }
 
 .music-item-artist {
-  font-size: 0.75rem;
+  font-size: 0.65rem;
   color: var(--text-dim);
   white-space: normal;
   overflow: hidden;
