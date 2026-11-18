@@ -423,7 +423,7 @@ body.player-page [role="slider"]:focus-visible {
 }
 
 .album-tracklist-title {
-  font-size: 1.2rem;
+  font-size: 0.85rem;
   font-weight: 800;
   margin: 0.15rem 0 0.2rem;
   line-height: 1.1;
