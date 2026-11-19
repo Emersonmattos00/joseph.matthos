@@ -1,12 +1,14 @@
 'use strict';
 
 /* ============================================================
-   api/_db.js — Conexão Neon PostgreSQL + Drizzle ORM (v3 — final)
+   api/_db.js — Conexão Neon PostgreSQL + Drizzle ORM (v4)
    ------------------------------------------------------------
    - Driver: neon-serverless (WebSocket) para transações reais
    - checkDatabase testa o pool (não o HTTP) com timeout externo
    - Listener de erro no pool
-   - closeDatabase idempotente (SIGTERM + SIGINT)
+   - closeDatabase idempotente (NÃO registra sinais aqui;
+     o ponto de entrada da aplicação deve chamar closeDatabase
+     em SIGTERM/SIGINT se rodar em processo persistente)
    - REGRA ARQUITETURAL:
        db    → CRUD, Drizzle, transações, pg_advisory_xact_lock
        sql   → consultas independentes (neon HTTP); NUNCA dentro
@@ -31,8 +33,6 @@ const schema = require('../src/schema.js');
 neonConfig.webSocketConstructor = ws;
 
 // ─── Helpers de configuração ────────────────────────────────
-// [FIX P1] valida inteiro positivo dentro de faixa; falha explícita em vez de
-// aceitar decimais, negativos ou strings inválidas silenciosamente.
 function positiveIntegerFromEnv(name, fallback, max = Number.MAX_SAFE_INTEGER) {
   const raw = process.env[name];
   if (raw === undefined || String(raw).trim() === '') return fallback;
@@ -46,7 +46,6 @@ function positiveIntegerFromEnv(name, fallback, max = Number.MAX_SAFE_INTEGER) {
 
 // ─── Validação da configuração ───────────────────────────────
 function getDatabaseUrl() {
-  // [FIX P2] normaliza espaços acidentais
   const value = process.env.DATABASE_URL?.trim();
   if (!value || typeof value !== 'string') {
     throw new Error('[DATABASE] DATABASE_URL não foi configurada.');
@@ -74,16 +73,18 @@ const databaseUrl = getDatabaseUrl();
 
 const sqlNeon = neon(databaseUrl);
 
-// [FIX P1] limites validados por positiveIntegerFromEnv
-// [FIX P2] contrato documentado: DATABASE_POOL_MAX × nº_instâncias ≤ limite Neon
+// Contrato operacional: POOL_MAX × nº de instâncias simultâneas ≤ limite do plano Neon.
+// Documentar e monitorar. Default conservador (5) para serverless.
 const POOL_MAX = positiveIntegerFromEnv('DATABASE_POOL_MAX', 5, 20);
 const POOL_CONNECTION_TIMEOUT_MS = positiveIntegerFromEnv(
   'DATABASE_CONNECTION_TIMEOUT_MS',
-  10_000
+  10_000,
+  120_000
 );
 const POOL_IDLE_TIMEOUT_MS = positiveIntegerFromEnv(
   'DATABASE_IDLE_TIMEOUT_MS',
-  30_000
+  30_000,
+  600_000
 );
 
 const pool = new Pool({
@@ -100,20 +101,18 @@ pool.on('error', (error) => {
 const db = drizzle({ client: pool, schema });
 
 // ─── Diagnóstico ─────────────────────────────────────────────
-// [FIX P1] timeout externo + timeout de consulta no driver.
-// O timeout externo libera a função; o timeout do driver tenta encerrar a
-// consulta para não ocupar conexão. O pool compartilhado NÃO é destruído.
+// O timeout externo libera a função. O query_timeout tenta encerrar a
+// consulta no driver; em @neondatabase/serverless ele pode não ser honrado
+// pela versão instalada — o timeout externo continua garantindo o retorno.
 const CHECK_DB_TIMEOUT_MS = positiveIntegerFromEnv(
   'DATABASE_CHECK_TIMEOUT_MS',
-  5_000
+  5_000,
+  60_000
 );
 
 async function checkDatabase() {
   let timer = null;
   try {
-    // query_timeout é suportado por drivers node-postgres (inclui o pool
-    // do neon-serverless). Se a versão instalada não honrar, o timeout
-    // externo continua garantindo o retorno da função.
     const queryPromise = pool.query({
       text: 'SELECT 1 AS connected',
       query_timeout: CHECK_DB_TIMEOUT_MS,
@@ -141,6 +140,10 @@ async function checkDatabase() {
 }
 
 // ─── Encerramento controlado (idempotente) ─────────────────
+// NÃO registramos process.on aqui: quem importa este módulo decide quando
+// encerrar. Em ambiente serverless, não dependa de sinal. Em processo
+// persistente, o ponto de entrada deve chamar closeDatabase() em
+// SIGTERM/SIGINT com timeout de segurança.
 let closePromise = null;
 
 function closeDatabase() {
