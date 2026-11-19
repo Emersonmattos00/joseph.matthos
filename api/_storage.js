@@ -1,12 +1,12 @@
 'use strict';
 
 /* ============================================================
-   api/_storage.js — Backblaze B2 via S3 API
+   api/_storage.js — Cloudflare R2 via S3 API (v2.0)
    ------------------------------------------------------------
-   - Um bucket físico (B2_MEDIA_BUCKET), prefixos por tipo
+   - Dois buckets lógicos: público (imagens/prévias) e privado (áudio completo)
    - Validação estrita de MIME, extensão e tamanho
-   - URLs assinadas com prazo curto
-   - Compatível com admin.js (buildPathForKind) e stream.js (getPlaybackUrl)
+   - URLs assinadas com prazo curto (15 min para upload, 5 min para download)
+   - Compatível com uploads.js v10.15 (buildPathForKind, getPlaybackUrl)
    ============================================================ */
 
 const {
@@ -26,26 +26,28 @@ let _configCache = null;
 function getStorageConfig() {
   if (_configCache) return _configCache;
 
-  const region = String(process.env.B2_REGION || '').trim();
-  const keyId = String(process.env.B2_KEY_ID || '').trim();
-  const applicationKey = String(process.env.B2_APPLICATION_KEY || '').trim();
-  const mediaBucket = String(process.env.B2_MEDIA_BUCKET || 'josephmatthos').trim();
+  const accountId = String(process.env.R2_ACCOUNT_ID || '').trim();
+  const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
+  
+  const publicBucket = String(process.env.R2_PUBLIC_BUCKET || 'public-assets').trim();
+  const privateBucket = String(process.env.R2_PRIVATE_BUCKET || 'private-audio').trim();
+  const publicDomain = String(process.env.R2_PUBLIC_DOMAIN || `https://${accountId}.r2.cloudflarestorage.com`).trim().replace(/\/+$/, '');
 
-  if (!region || !keyId || !applicationKey) {
-    const err = new Error('Backblaze B2 não configurado.');
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    const err = new Error('Cloudflare R2 não configurado. Verifique as variáveis de ambiente.');
     err.code = 'NOT_CONFIGURED';
     throw err;
   }
 
-  const publicBaseUrl = String(
-    process.env.B2_PUBLIC_BASE_URL || `https://f005.backblazeb2.com/file`
-  ).trim().replace(/\/+$/, '');
-
-  const endpoint = String(
-    process.env.B2_ENDPOINT || `https://s3.${region}.backblazeb2.com`
-  ).trim().replace(/\/+$/, '');
-
-  _configCache = { region, keyId, applicationKey, mediaBucket, publicBaseUrl, endpoint };
+  _configCache = { 
+    accountId, 
+    accessKeyId, 
+    secretAccessKey, 
+    publicBucket, 
+    privateBucket, 
+    publicDomain 
+  };
   return _configCache;
 }
 
@@ -53,10 +55,13 @@ function getS3Client() {
   if (!client) {
     const config = getStorageConfig();
     client = new S3Client({
-      region: config.region,
-      endpoint: config.endpoint,
-      forcePathStyle: true,
-      credentials: { accessKeyId: config.keyId, secretAccessKey: config.applicationKey }
+      region: 'auto',
+      endpoint: `https://${config.accountId}.r2.cloudflarestorage.com`,
+      forcePathStyle: true, // Obrigatório para Cloudflare R2
+      credentials: {
+        accessKeyId: config.accessKeyId,
+        secretAccessKey: config.secretAccessKey
+      }
     });
   }
   return client;
@@ -69,19 +74,23 @@ function getPrefixForKind(kind) {
   switch (kind) {
     case 'image':
     case 'site-assets':
-      return String(process.env.B2_BUCKET_SITE_ASSETS || 'images').replace(/^\/|\/$/g, '');
+      return String(process.env.R2_PREFIX_IMAGES || 'images').replace(/^\/|\/$/g, '');
     case 'audio-preview':
-      return String(process.env.B2_BUCKET_AUDIO_PREVIEW || 'preview').replace(/^\/|\/$/g, '');
+      return String(process.env.R2_PREFIX_PREVIEW || 'preview').replace(/^\/|\/$/g, '');
     case 'audio-full':
     case 'audio-premium':
-      return String(process.env.B2_BUCKET_AUDIO_PREMIUM || 'audio').replace(/^\/|\/$/g, '');
+      return String(process.env.R2_PREFIX_AUDIO || 'audio').replace(/^\/|\/$/g, '');
     default:
       return null;
   }
 }
 
-function resolveBucket() {
-  return getStorageConfig().mediaBucket;
+function resolveBucket(kind) {
+  // Áudio completo vai para o bucket privado; o resto para o público
+  if (kind === 'audio-full' || kind === 'audio-premium') {
+    return getStorageConfig().privateBucket;
+  }
+  return getStorageConfig().publicBucket;
 }
 
 function buildPathForKind(kind, filename) {
@@ -99,13 +108,13 @@ function buildPathForKind(kind, filename) {
 // ─────────────────────────────────────────────────────────────
 const MIME_BY_KIND = {
   'image': new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']),
-  'audio-preview': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm']),
+  'audio-preview': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm', 'audio/wav', 'audio/flac']),
   'audio-full': new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/webm', 'audio/flac', 'audio/wav', 'audio/x-wav'])
 };
 
 const EXT_BY_KIND = {
   'image': new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif']),
-  'audio-preview': new Set(['mp3', 'm4a', 'aac', 'ogg', 'webm']),
+  'audio-preview': new Set(['mp3', 'm4a', 'aac', 'ogg', 'webm', 'wav', 'flac']),
   'audio-full': new Set(['mp3', 'm4a', 'aac', 'ogg', 'webm', 'flac', 'wav'])
 };
 
@@ -144,15 +153,15 @@ function getPublicUrl(key) {
   if (!key) throw new Error('Caminho é obrigatório.');
   validateObjectKey(key);
 
-  const { publicBaseUrl, mediaBucket } = getStorageConfig();
-  const customImageUrl = String(process.env.B2_IMAGE_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  const { publicDomain, publicBucket } = getStorageConfig();
+  const customImageUrl = String(process.env.R2_CUSTOM_IMAGE_DOMAIN || '').trim().replace(/\/+$/, '');
   const imagePrefix = getPrefixForKind('image');
 
   if (customImageUrl && key.startsWith(imagePrefix + '/')) {
     return `${customImageUrl}/${encodeKey(key)}`;
   }
 
-  return `${publicBaseUrl}/${encodeURIComponent(mediaBucket)}/${encodeKey(key)}`;
+  return `${publicDomain}/${publicBucket}/${encodeKey(key)}`;
 }
 
 function encodeKey(key) {
@@ -162,16 +171,14 @@ function encodeKey(key) {
 // ─────────────────────────────────────────────────────────────
 // OPERAÇÕES S3
 // ─────────────────────────────────────────────────────────────
-async function uploadObject(key, body, contentType) {
+async function uploadObject(key, body, contentType, kind) {
   validateObjectKey(key);
-
-  const kind = inferKindFromKey(key);
   validateMimeForKind(kind, contentType);
 
   if (!body || body.length === 0) throw new Error('Arquivo vazio.');
-  if (body.length > 200 * 1024 * 1024) throw new Error('Arquivo excede o tamanho máximo.');
+  if (body.length > 200 * 1024 * 1024) throw new Error('Arquivo excede o tamanho máximo (200MB).');
 
-  const bucket = resolveBucket();
+  const bucket = resolveBucket(kind);
   return getS3Client().send(new PutObjectCommand({
     Bucket: bucket,
     Key: key,
@@ -187,10 +194,10 @@ async function createSignedUploadUrl(key, contentType, expiresInSec = 900) {
   validateMimeForKind(kind, contentType);
 
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
-    throw new Error('Prazo de assinatura inválido.');
+    throw new Error('Prazo de assinatura inválido (1 a 3600 segundos).');
   }
 
-  const bucket = resolveBucket();
+  const bucket = resolveBucket(kind);
   const command = new PutObjectCommand({
     Bucket: bucket,
     Key: key,
@@ -198,12 +205,12 @@ async function createSignedUploadUrl(key, contentType, expiresInSec = 900) {
   });
 
   const uploadUrl = await getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
-  return { uploadUrl };
+  return { uploadUrl, path: key, bucket, expiresIn: expiresInSec };
 }
 
 async function getObjectMetadata(key) {
   validateObjectKey(key);
-  const bucket = resolveBucket();
+  const bucket = resolveBucket(inferKindFromKey(key));
 
   try {
     const head = await getS3Client().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
@@ -225,14 +232,16 @@ async function objectExists(key) {
   return (await getObjectMetadata(key)) !== null;
 }
 
-async function createSignedDownloadUrl(key, expiresInSec, downloadFilename) {
+async function createSignedDownloadUrl(key, expiresInSec = 300, downloadFilename = null) {
   validateObjectKey(key);
 
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido.');
   }
 
-  const bucket = resolveBucket();
+  const kind = inferKindFromKey(key);
+  const bucket = resolveBucket(kind);
+  
   let safeFilename = null;
   if (downloadFilename) {
     safeFilename = String(downloadFilename).replace(/[\r\n"\\]/g, '_').replace(/[^\w.\- ]/g, '_').slice(0, 150);
@@ -242,16 +251,20 @@ async function createSignedDownloadUrl(key, expiresInSec, downloadFilename) {
   const command = new GetObjectCommand({
     Bucket: bucket,
     Key: key,
-    ...(safeFilename ? { ResponseContentDisposition: `attachment; filename="${safeFilename}"` } : {})
+    ...(safeFilename ? { ResponseContentDisposition: `attachment; filename="${encodeURIComponent(safeFilename)}"` } : {})
   });
 
-  return getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
+  const url = await getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
+  return { url, expiresIn: expiresInSec };
 }
 
 async function getPlaybackUrl(key, isFull = false) {
   if (!key) throw new Error('Chave do áudio não informada.');
   validateObjectKey(key);
-  return createSignedDownloadUrl(key, 300);
+  
+  // Playback usa URL assinada de 5 minutos sem forçar download (inline)
+  const { url } = await createSignedDownloadUrl(key, 300, null);
+  return url;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -280,5 +293,7 @@ module.exports = {
   uploadObject,
   buildPathForKind,
   validateExtForKind,
-  validateMimeForKind
+  validateMimeForKind,
+  resolveBucket,
+  inferKindFromKey
 };
