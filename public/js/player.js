@@ -1,4 +1,4 @@
-// js/player.js — v32.9 (Modificado com Sincronização de Curtida)
+// js/player.js — v33.6 (Curtida apenas no miniplayer)
 'use strict';
 
 const DEFAULT_COVER = '/assets/img/tema.webp';
@@ -6,6 +6,8 @@ const MAX_SHUFFLE_HISTORY = 50;
 const MAX_PLAYLIST_TRACKS = 50;
 const MAX_PLAYLIST_NAME = 100;
 const AUDIO_PREPARE_TIMEOUT_MS = 20000;
+const MAX_DATA_IMAGE_LENGTH = 2 * 1024 * 1024;
+const ALLOWED_DATA_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 // ─── UTILS ───
 function formatTime(secs) {
@@ -23,10 +25,19 @@ function normalizeTrackId(v) {
   return id;
 }
 function normalizeCoverUrl(url, fallback = DEFAULT_COVER) {
-  if (!url) return fallback;
-  if (url.startsWith('data:image/')) return url;
+  if (typeof url !== 'string') return fallback;
+  const trimmed = url.trim();
+  if (!trimmed) return fallback;
+  if (trimmed.startsWith('data:image/')) {
+    if (trimmed.length > MAX_DATA_IMAGE_LENGTH) return fallback;
+    const semi = trimmed.indexOf(';');
+    if (semi === -1) return fallback;
+    const mime = trimmed.slice(5, semi).toLowerCase();
+    if (!ALLOWED_DATA_IMAGE_TYPES.has(mime)) return fallback;
+    return trimmed;
+  }
   try {
-    const p = new URL(url, window.location.origin);
+    const p = new URL(trimmed, window.location.origin);
     if (p.protocol === 'https:' || (p.protocol === 'http:' && window.location.hostname === 'localhost')) return p.href;
   } catch {}
   return fallback;
@@ -39,6 +50,13 @@ function isValidTrack(t) {
   if (t.durationSeconds !== undefined && t.durationSeconds !== null && (!Number.isFinite(t.durationSeconds) || t.durationSeconds < 0)) return false;
   if (t.albumId !== undefined && t.albumId !== null && !normalizeTrackId(t.albumId)) return false;
   return true;
+}
+function isValidPlaybackContext(ctx) {
+  if (!ctx || typeof ctx !== 'object') return false;
+  if (typeof ctx.type !== 'string' || !ctx.type) return false;
+  if (!normalizeTrackId(ctx.id)) return false;
+  if (!Array.isArray(ctx.tracks)) return false;
+  return ctx.tracks.every(isValidTrack);
 }
 function formatDuration(sec, locked) {
   if (locked) return '🔒';
@@ -68,13 +86,8 @@ function setLikeState(k, v) { try { localStorage.setItem(k, v ? '1' : '0'); retu
 class AlbumError extends Error {
   constructor(msg, reason) { super(msg); this.name = 'AlbumError'; this.reason = reason; }
 }
-const NON_FALLBACK_ALBUM_REASONS = new Set([
-  'auth', 'rate-limit', 'integrity', 'unknown', 'server', 'network'
-]);
-const AUTH_ALBUM_CODES = new Set([
-  'ALBUM_PRIVATE', 'ACCESS_DENIED', 'ACCESS_FORBIDDEN',
-  'SUBSCRIPTION_REQUIRED', 'PREMIUM_REQUIRED', 'FORBIDDEN'
-]);
+const NON_FALLBACK_ALBUM_REASONS = new Set(['auth','rate-limit','integrity','unknown','server','network']);
+const AUTH_ALBUM_CODES = new Set(['ALBUM_PRIVATE','ACCESS_DENIED','ACCESS_FORBIDDEN','SUBSCRIPTION_REQUIRED','PREMIUM_REQUIRED','FORBIDDEN']);
 
 // ─── PLAYLIST STORAGE ───
 function getPlaylists() {
@@ -99,7 +112,9 @@ function getPlaylists() {
         tracks.push(tid);
         if (tracks.length >= MAX_PLAYLIST_TRACKS) break;
       }
-      result.push({ id, name, coverUrl: normalizeCoverUrl(p.coverUrl, ''), tracks });
+      let coverUrl = '';
+      try { coverUrl = normalizeCoverUrl(p.coverUrl, ''); } catch { coverUrl = ''; }
+      result.push({ id, name, coverUrl, tracks });
     }
     return result;
   } catch { return []; }
@@ -186,6 +201,8 @@ let selectedCatalogContext = null;
 let shuffleQueue = [];
 let shuffleHistory = [];
 let shuffleHistoryIndex = -1;
+let shuffleQueueContextKey = null;
+let shuffleQueueVersion = 0;
 let shuffleEnabled = false;
 let repeatMode = 'off';
 
@@ -194,6 +211,9 @@ let catalogRequestId = 0;
 let navigationRequestId = 0;
 let commitRequestId = 0;
 let activeRestoreId = 0;
+let playbackOwnerToken = 0;
+let playbackOwnerOperationId = 0;
+let manualPauseOperationId = 0;
 let playbackAbortController = null;
 let catalogAbortController = null;
 let updateInterval = null;
@@ -202,8 +222,24 @@ let isBooted = false;
 
 const snapshotRefs = new Map();
 
+// ─── Propriedade da reprodução ───
+function takePlaybackOwnership(operationId) {
+  ++playbackOwnerToken;
+  playbackOwnerOperationId = operationId;
+  cancelPendingPreparation();
+  return playbackOwnerToken;
+}
+function isPlaybackOwner(operationId, ownerToken) {
+  return operationId === playbackOwnerOperationId &&
+    (ownerToken === undefined || ownerToken === playbackOwnerToken);
+}
+function cancelPendingPreparation() {
+  if (!playbackAbortController) return;
+  try { playbackAbortController.abort(); } catch {}
+  playbackAbortController = null;
+}
 function createPlaybackRequest() {
-  if (playbackAbortController) { try { playbackAbortController.abort(); } catch {} }
+  cancelPendingPreparation();
   playbackAbortController = new AbortController();
   return playbackAbortController;
 }
@@ -247,6 +283,9 @@ async function fetchInBatches(ids, signal, fn, chunk = 3) {
   }
   return out;
 }
+function contextKey(ctx) {
+  return ctx ? `${ctx.type}:${ctx.id}` : null;
+}
 function generateShuffleQueue(tracks, currentId) {
   const seen = new Set();
   const idx = [];
@@ -263,6 +302,8 @@ function generateShuffleQueue(tracks, currentId) {
   return idx;
 }
 function initShuffleState(context, trackId) {
+  shuffleQueueContextKey = contextKey(context);
+  ++shuffleQueueVersion;
   if (!shuffleEnabled || !context || context.tracks.length <= 1) {
     shuffleQueue = [];
     shuffleHistory = trackId ? [String(trackId)] : [];
@@ -273,10 +314,17 @@ function initShuffleState(context, trackId) {
   shuffleHistory = [String(trackId)];
   shuffleHistoryIndex = 0;
 }
+function shuffleQueueMatchesContext(expectedVersion) {
+  if (!shuffleEnabled) return false;
+  if (shuffleQueueContextKey === null) return false;
+  if (shuffleQueueContextKey !== contextKey(currentPlaybackContext)) return false;
+  if (expectedVersion !== undefined && expectedVersion !== shuffleQueueVersion) return false;
+  return true;
+}
 function shouldAdvanceQueue(result) {
   if (!result || !result.committed) return false;
   if (result.playbackStarted) return true;
-  return result.reason === 'not-allowed';
+  return result.reason === 'not-allowed' || result.reason === 'manual-pause';
 }
 function setBuffering(value) {
   isBuffering = Boolean(value);
@@ -303,22 +351,44 @@ function setCatalogLoading(loading) {
   }
 }
 
-// ─── NOVA FUNÇÃO: Sincronização de Curtida ───
+// ─── Sincronização de Curtida (Agora apenas no miniplayer) ───
 function syncLikeUI(trackId, isLiked) {
   const miniLikeBtn = document.getElementById('miniLikeBtn');
   if (miniLikeBtn && currentTrackId === String(trackId)) {
     miniLikeBtn.classList.toggle('active', isLiked);
     miniLikeBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="${isLiked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
   }
-
-  const likeBtns = document.querySelectorAll(`.music-item[data-track-id="${trackId}"] .action-icon.like-btn`);
-  likeBtns.forEach(btn => {
-    btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${isLiked ? '#1DB954' : 'none'}" stroke="${isLiked ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-  });
 }
 
-async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
-  if (!snapshot) return { restored: false };
+// ─── Limpeza completa da UI ───
+function clearPlayerUI() {
+  try { if (els.title) els.title.textContent = 'Nenhuma faixa selecionada'; } catch (e) { console.warn(e); }
+  try { if (els.artist) els.artist.textContent = ''; } catch (e) { console.warn(e); }
+  try { if (els.cover) els.cover.src = DEFAULT_COVER; } catch (e) { console.warn(e); }
+  try { if (els.container) els.container.style.setProperty('--player-bg', `url('${DEFAULT_COVER}')`); } catch (e) { console.warn(e); }
+  try { if (els.miniCover) els.miniCover.style.backgroundImage = `url('${DEFAULT_COVER}')`; } catch (e) { console.warn(e); }
+  try { if (els.miniTitle) els.miniTitle.textContent = ''; } catch (e) { console.warn(e); }
+  try { if (els.miniArtist) els.miniArtist.textContent = ''; } catch (e) { console.warn(e); }
+  try {
+    if (els.playIcon) els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
+    if (els.miniPlayBtn) els.miniPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+  } catch (e) { console.warn(e); }
+  try { resetProgressUI(); } catch (e) { console.warn(e); }
+  try { if ('mediaSession' in navigator) navigator.mediaSession.metadata = null; } catch (e) { console.warn(e); }
+}
+
+async function restorePlaybackSnapshot(snapshot, operationId, restoreId, ownerToken) {
+  if (!snapshot) return { restored: false, reason: 'no-snapshot' };
+
+  const restoreIsCurrent = () =>
+    isPlaybackOwner(operationId, ownerToken) &&
+    operationId === commitRequestId &&
+    (restoreId === undefined || restoreId === activeRestoreId);
+
+  if (!restoreIsCurrent()) {
+    releaseAndDisposeSnapshot(snapshot);
+    return { restored: false, reason: 'restore-revoked-before-state' };
+  }
 
   releaseSnapshot(snapshot);
   currentAudio = snapshot.audio;
@@ -326,29 +396,25 @@ async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
   currentTrackMeta = snapshot.trackMeta;
   currentPlaybackContext = snapshot.playbackContext;
 
-  try { setBuffering(false); } catch (e) { console.warn('[player] setBuffering:', e); }
-  if (snapshot.trackMeta) {
-    try { updatePlayerUI(snapshot.trackMeta); } catch (e) { console.warn('[player] updatePlayerUI:', e); }
-  }
-  try { renderCurrentCatalog(snapshot.trackId); } catch (e) { console.warn('[player] renderCurrentCatalog:', e); }
+  try { setBuffering(false); } catch (e) { console.warn(e); }
 
   if (!snapshot.audio) {
-    try { resetProgressUI(); } catch (e) { console.warn(e); }
+    try { clearPlayerUI(); } catch (e) { console.warn(e); }
+    try { renderCurrentCatalog(snapshot.trackId); } catch (e) { console.warn(e); }
     return { restored: true, playbackStarted: false };
   }
+
+  if (snapshot.trackMeta) {
+    try { updatePlayerUI(snapshot.trackMeta); } catch (e) { console.warn(e); }
+  }
+  try { renderCurrentCatalog(snapshot.trackId); } catch (e) { console.warn(e); }
 
   try {
     if (Number.isFinite(snapshot.currentTime) && snapshot.currentTime >= 0) {
       snapshot.audio.currentTime = snapshot.currentTime;
     }
   } catch {}
-  try {
-    const dur = snapshot.audio.duration || 0;
-    const cur = snapshot.audio.currentTime || 0;
-    if (els.progressFill) els.progressFill.style.width = `${dur > 0 ? Math.min(100, (cur/dur)*100) : 0}%`;
-    if (els.currentTime) els.currentTime.textContent = formatTime(cur);
-    if (els.duration) els.duration.textContent = formatTime(dur);
-  } catch {}
+  try { updateProgressUI(); } catch (e) { console.warn(e); }
 
   if (snapshot.wasPaused) {
     try {
@@ -358,17 +424,18 @@ async function restorePlaybackSnapshot(snapshot, operationId, restoreId) {
     return { restored: true, playbackStarted: false };
   }
 
-  if (restoreId !== undefined && restoreId !== activeRestoreId) {
-    return { restored: false, playbackStarted: false, reason: 'restore-revoked-before-play' };
+  if (!restoreIsCurrent()) {
+    return { restored: false, reason: 'restore-revoked-before-play' };
   }
 
   const result = await attemptPlay(snapshot.audio);
 
-  if (restoreId !== undefined && restoreId !== activeRestoreId) {
+  if (!restoreIsCurrent()) {
     if (currentAudio !== snapshot.audio) {
       try { snapshot.audio.pause(); } catch {}
+      safeDisposeAudio(snapshot.audio);
     }
-    return { restored: false, playbackStarted: false, reason: 'restore-revoked-after-play' };
+    return { restored: false, reason: 'restore-revoked-after-play' };
   }
 
   return { restored: true, playbackStarted: result.started, reason: result.reason };
@@ -395,7 +462,16 @@ async function renderAlbumsTab() {
   if (!container) return;
   const ctrl = createCatalogRequest();
   const reqId = ++catalogRequestId;
-  container.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Carregando...</p>';
+  const loadingEl = document.createElement('p');
+  loadingEl.style.cssText = 'text-align:center;color:#aaa;padding:1rem;';
+  loadingEl.textContent = 'Carregando...';
+  if (!container.querySelector('.album-card')) {
+    container.innerHTML = '';
+    container.appendChild(loadingEl);
+  } else {
+    container.setAttribute('aria-busy', 'true');
+    container.style.opacity = '0.6';
+  }
   try {
     const res = await fetch('/api/public?t=' + Date.now(), { signal: ctrl.signal });
     if (!res.ok) throw new Error('Falha de rede');
@@ -423,7 +499,16 @@ async function renderAlbumsTab() {
     });
   } catch (e) {
     if (e.name === 'AbortError' || reqId !== catalogRequestId) return;
-    container.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(e.message)}</p>`;
+    if (!container.querySelector('.album-card')) {
+      container.innerHTML = `<p style="color:var(--danger);text-align:center;">${esc(e.message)}</p>`;
+    } else {
+      showToast(e.message || 'Falha ao carregar catálogo.');
+    }
+  } finally {
+    if (reqId === catalogRequestId) {
+      container.removeAttribute('aria-busy');
+      container.style.opacity = '';
+    }
   }
 }
 
@@ -517,15 +602,32 @@ window.editarCapaPlaylist = (id) => {
   fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      showToast('Imagem muito grande (máx 2MB).');
-      return;
-    }
+    const mime = typeof file.type === 'string' ? file.type.toLowerCase() : '';
+    if (!mime.startsWith('image/')) { showToast('Arquivo não é uma imagem.'); fileInput.value = ''; return; }
+    if (mime === 'image/svg+xml') { showToast('SVG não é permitido. Use PNG, JPEG ou WebP.'); fileInput.value = ''; return; }
+    if (file.size > 2 * 1024 * 1024) { showToast('Imagem muito grande (máx 2MB).'); fileInput.value = ''; return; }
     const reader = new FileReader();
     reader.onload = (ev) => {
-      urlInput.value = ev.target.result;
-      showToast('Imagem carregada!');
+      try {
+        if (typeof ev.target?.result !== 'string') { showToast('Falha ao ler imagem.'); return; }
+        const normalized = normalizeCoverUrl(ev.target.result, '');
+        if (!normalized) { showToast('Formato de imagem não suportado.'); return; }
+        const probe = new Image();
+        probe.onload = () => {
+          try {
+            if (probe.naturalWidth > 4096 || probe.naturalHeight > 4096) {
+              showToast('Dimensões de imagem muito grandes.');
+              return;
+            }
+            urlInput.value = normalized;
+            showToast('Imagem carregada!');
+          } catch { showToast('Falha ao processar imagem.'); }
+        };
+        probe.onerror = () => { showToast('Arquivo de imagem inválido ou corrompido.'); };
+        probe.src = normalized;
+      } catch { showToast('Falha ao ler imagem.'); }
     };
+    reader.onerror = () => { showToast('Falha ao ler imagem.'); };
     reader.readAsDataURL(file);
   });
 
@@ -545,14 +647,8 @@ window.editarCapaPlaylist = (id) => {
   sb.addEventListener('click', () => {
     const newUrl = urlInput.value.trim();
     p.coverUrl = normalizeCoverUrl(newUrl, '');
-    
-    if (savePlaylists(pl)) {
-      showToast('Capa atualizada!');
-      ov.remove();
-      window.abrirPlaylist(id);
-    } else {
-      showToast('Erro ao salvar.');
-    }
+    if (savePlaylists(pl)) { showToast('Capa atualizada!'); ov.remove(); window.abrirPlaylist(id); }
+    else showToast('Erro ao salvar.');
   });
 
   ac.append(cb, sb); 
@@ -600,14 +696,14 @@ window.criarPlaylistEAdicionar = (trackId) => {
   if (n && n.trim()) { const p = createPlaylistWithTrack(n, trackId); if (p) { renderPlaylistsTab(); showToast('Playlist criada!'); } else showToast('Erro.'); }
 };
 
-// ─── LISTA DE MÚSICAS ───
+// ─── LISTA DE MÚSICAS (Sem botão de curtir) ───
 function renderPlayerTrackList(context, currentId) {
   if (!els.musicList) return;
   els.musicList.replaceChildren();
   if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${context.tracks.length} faixas`;
   context.tracks.forEach((track, index) => {
     const item = document.createElement('div'); item.className = 'music-item';
-    item.setAttribute('data-track-id', track.id); // IMPORTANTE PARA SINCRONIZAR A CURTIDA
+    item.setAttribute('data-track-id', track.id);
     if (String(track.id) === String(currentId)) item.classList.add('playing');
     
     const nc = document.createElement('div'); nc.className = 'music-item-number';
@@ -629,20 +725,7 @@ function renderPlayerTrackList(context, currentId) {
     
     const act = document.createElement('div'); act.className = 'music-item-actions';
     
-    // Botão Curtir (Coração) - adicionada classe 'like-btn' para busca
-    const like = document.createElement('button'); like.className = 'action-icon like-btn';
-    like.setAttribute('aria-label', 'Curtir faixa');
-    const key = `jm_like_${track.id}`; const lk = getLikeState(key);
-    like.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="${lk ? '#1DB954' : 'none'}" stroke="${lk ? '#1DB954' : 'currentColor'}" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-    
-    like.addEventListener('click', (e) => {
-      e.stopPropagation(); const l = getLikeState(key);
-      if (setLikeState(key, !l)) {
-        syncLikeUI(track.id, !l); // Sincroniza interface
-        showToast(l ? 'Removido' : 'Curtido!');
-      } else showToast('Erro ao salvar.');
-    });
-    act.appendChild(like);
+    // Botão Curtir (Coração) REMOVIDO daqui
     
     const d = document.createElement('span'); d.className = 'music-item-duration';
     d.textContent = formatDuration(track.durationSeconds, track.locked); act.appendChild(d);
@@ -653,6 +736,7 @@ function renderPlayerTrackList(context, currentId) {
     mb.addEventListener('click', (e) => { e.stopPropagation(); openOptionsMenu(track, mb); });
     act.appendChild(mb);
     
+    // ESTRUTURA ORIGINAL MANTIDA PARA O CSS
     item.append(nc, info, act);
     item.addEventListener('click', () => window.tocarMusicaDaLista(String(track.id), 'user'));
     els.musicList.appendChild(item);
@@ -715,14 +799,41 @@ function updateMediaSessionMetadata(meta) {
     });
   } catch (e) { console.warn('[MediaSession]', e); }
 }
+
+function requestPlay() {
+  if (!currentAudio || !currentAudio.src) {
+    if (currentTrackId) {
+      playTrack(currentTrackId);
+    } else {
+      showToast('Selecione uma faixa para tocar.');
+      switchTab('albums');
+    }
+    return;
+  }
+  const op = ++commitRequestId;
+  takePlaybackOwnership(op);
+  attemptPlay(currentAudio);
+}
+function requestPause() {
+  if (!currentAudio) return;
+  manualPauseOperationId = playbackOwnerOperationId || commitRequestId;
+  cancelPendingPreparation();
+  if (!currentAudio.paused) { try { currentAudio.pause(); } catch {} }
+}
+function requestTogglePlay() {
+  if (!currentAudio || !currentAudio.src) { requestPlay(); return; }
+  if (!currentAudio.paused) { requestPause(); return; }
+  requestPlay();
+}
+
 function setupMediaSessionHandlers() {
   if (!('mediaSession' in navigator)) return;
-  [['play', () => { if (currentAudio) attemptPlay(currentAudio); }],
-   ['pause', () => { if (currentAudio && !currentAudio.paused) currentAudio.pause(); }],
+  [['play', () => requestPlay()],
+   ['pause', () => requestPause()],
    ['nexttrack', () => window.playerNext(false)],
    ['previoustrack', () => window.playerPrev()],
-   ['seekbackward', (d) => { if (currentAudio && Number.isFinite(currentAudio.duration)) currentAudio.currentTime = Math.max(0, currentAudio.currentTime - (Number(d.seekOffset) || 10)); }],
-   ['seekforward', (d) => { if (currentAudio && Number.isFinite(currentAudio.duration)) currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + (Number(d.seekOffset) || 10)); }]
+   ['seekbackward', (d) => { if (currentAudio && Number.isFinite(currentAudio.duration)) { currentAudio.currentTime = Math.max(0, currentAudio.currentTime - (Number(d.seekOffset) || 10)); updateProgressUI(); } }],
+   ['seekforward', (d) => { if (currentAudio && Number.isFinite(currentAudio.duration)) { currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + (Number(d.seekOffset) || 10)); updateProgressUI(); } }]
   ].forEach(([a, h]) => { try { navigator.mediaSession.setActionHandler(a, h); } catch {} });
 }
 
@@ -737,53 +848,62 @@ function updatePlayerUI(meta) {
   if (els.miniCover) els.miniCover.style.backgroundImage = `url('${c}')`;
   if (els.miniTitle) els.miniTitle.textContent = meta.title;
   if (els.miniArtist) els.miniArtist.textContent = meta.artist || 'Joseph Matthos';
-
+  
+  // Atualiza o coração no miniplayer
   const lk = getLikeState(`jm_like_${meta.id}`);
   syncLikeUI(meta.id, lk);
 
   const miniMuteBtn = document.getElementById('miniMuteBtn');
   if (miniMuteBtn) {
     const isMuted = currentAudio ? currentAudio.muted : false;
-    miniMuteBtn.innerHTML = isMuted 
+    miniMuteBtn.innerHTML = isMuted
       ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`
       : `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
   }
-
   updateMediaSessionMetadata(meta);
 }
 function resetProgressUI() {
   if (els.progressFill) els.progressFill.style.width = '0%';
   if (els.currentTime) els.currentTime.textContent = '0:00';
   if (els.duration) els.duration.textContent = '0:00';
-  
   const mainRing = document.getElementById('progressRingCircle');
-  if (mainRing) {
-    const circumference = 2 * Math.PI * 40;
-    mainRing.style.strokeDashoffset = circumference;
-  }
-
+  if (mainRing) { const c = 2 * Math.PI * 40; mainRing.style.strokeDashoffset = c; }
   const miniRing = document.getElementById('miniProgressRingCircle');
-  if (miniRing) {
-    const circumference = 2 * Math.PI * 22;
-    miniRing.style.strokeDashoffset = circumference;
+  if (miniRing) { const c = 2 * Math.PI * 22; miniRing.style.strokeDashoffset = c; }
+  if (els.progressBar) {
+    els.progressBar.setAttribute('aria-valuenow', 0);
+    els.progressBar.setAttribute('aria-valuetext', '0:00 de 0:00');
+  }
+}
+function updateProgressUI() {
+  if (!currentAudio) return;
+  const s = currentAudio.currentTime || 0;
+  const d = currentAudio.duration || 0;
+  const percent = d > 0 ? s / d : 0;
+  if (els.progressFill) els.progressFill.style.width = `${percent * 100}%`;
+  if (els.currentTime) els.currentTime.textContent = formatTime(s);
+  if (els.duration) els.duration.textContent = formatTime(d);
+  const mainRing = document.getElementById('progressRingCircle');
+  if (mainRing) { const c = 2 * Math.PI * 40; mainRing.style.strokeDashoffset = c - (percent * c); }
+  const miniRing = document.getElementById('miniProgressRingCircle');
+  if (miniRing) { const c = 2 * Math.PI * 22; miniRing.style.strokeDashoffset = c - (percent * c); }
+  if (els.progressBar) {
+    els.progressBar.setAttribute('aria-valuenow', d > 0 ? Math.round(percent * 100) : 0);
+    els.progressBar.setAttribute('aria-valuetext', `${formatTime(s)} de ${formatTime(d)}`);
   }
 }
 function attemptPlay(audioEl) {
   if (!audioEl || !audioEl.src) return Promise.resolve({ started: false, reason: 'no-src' });
   if (!audioEl.paused) return Promise.resolve({ started: true, reason: 'already-playing' });
   let playPromise;
-  try {
-    playPromise = audioEl.play();
-  } catch (syncErr) {
+  try { playPromise = audioEl.play(); }
+  catch (syncErr) {
     console.error('[player] play() lançou sincronamente:', syncErr);
     showToast('Não foi possível iniciar a reprodução.');
     return Promise.resolve({ started: false, reason: 'failed' });
   }
   if (!playPromise || typeof playPromise.then !== 'function') {
-    return Promise.resolve({
-      started: !audioEl.paused,
-      reason: audioEl.paused ? 'play-no-promise' : 'started'
-    });
+    return Promise.resolve({ started: !audioEl.paused, reason: audioEl.paused ? 'play-no-promise' : 'started' });
   }
   return playPromise
     .then(() => ({ started: true, reason: 'started' }))
@@ -803,32 +923,7 @@ function attachPlaybackListeners(a) {
     if (els.playIcon) els.playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" fill="currentColor"/>';
     if (els.miniPlayBtn) els.miniPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>';
     clearInterval(updateInterval);
-    updateInterval = setInterval(() => {
-      if (a !== currentAudio) return;
-      const s = a.currentTime || 0, d = a.duration || 0;
-      const percent = d > 0 ? s / d : 0;
-      
-      if (els.progressFill) els.progressFill.style.width = `${percent * 100}%`;
-      if (els.currentTime) els.currentTime.textContent = formatTime(s);
-      if (els.duration) els.duration.textContent = formatTime(d);
-      
-      const mainRing = document.getElementById('progressRingCircle');
-      if (mainRing) {
-        const circumference = 2 * Math.PI * 40;
-        mainRing.style.strokeDashoffset = circumference - (percent * circumference);
-      }
-
-      const miniRing = document.getElementById('miniProgressRingCircle');
-      if (miniRing) {
-        const circumference = 2 * Math.PI * 22;
-        miniRing.style.strokeDashoffset = circumference - (percent * circumference);
-      }
-
-      if (els.progressBar) {
-        els.progressBar.setAttribute('aria-valuenow', d > 0 ? Math.round(percent * 100) : 0);
-        els.progressBar.setAttribute('aria-valuetext', `${formatTime(s)} de ${formatTime(d)}`);
-      }
-    }, 250);
+    updateInterval = setInterval(() => { if (a !== currentAudio) return; updateProgressUI(); }, 250);
   });
   a.addEventListener('pause', () => {
     if (a !== currentAudio) return;
@@ -836,8 +931,9 @@ function attachPlaybackListeners(a) {
     if (els.miniPlayBtn) els.miniPlayBtn.innerHTML = '<svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
     clearInterval(updateInterval);
     setBuffering(false);
+    try { updateProgressUI(); } catch (e) { console.warn(e); }
   });
-  a.addEventListener('loadedmetadata', () => { if (a === currentAudio && els.duration) els.duration.textContent = formatTime(a.duration); });
+  a.addEventListener('loadedmetadata', () => { if (a === currentAudio) { if (els.duration) els.duration.textContent = formatTime(a.duration); updateProgressUI(); } });
   a.addEventListener('ended', () => { if (a === currentAudio) window.playerNext(true); });
   a.addEventListener('waiting', () => { if (a === currentAudio) setBuffering(true); });
   a.addEventListener('playing', () => { if (a === currentAudio) setBuffering(false); });
@@ -847,11 +943,7 @@ function attachPlaybackListeners(a) {
     if (a !== currentAudio) return;
     const code = a.error?.code || 0;
     setBuffering(false);
-    if (code === 2) {
-      console.warn('[player] Erro de rede (transitório):', a.error);
-      showToast('Conexão instável.');
-      return;
-    }
+    if (code === 2) { console.warn('[player] Erro de rede (transitório):', a.error); showToast('Conexão instável.'); return; }
     console.warn(`[player] Erro de mídia (code=${code}):`, a.error);
     showToast('Falha na reprodução.');
     if (els.playIcon) els.playIcon.innerHTML = '<path d="M8 5v14l11-7z" fill="currentColor"/>';
@@ -876,15 +968,15 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
     const trackMeta = { ...meta, coverUrl: normalizeCoverUrl(meta.coverUrl) };
     let playbackContext = null;
 
-    if (contextHint) {
+    if (contextHint && isValidPlaybackContext(contextHint)) {
       const ct = contextHint.tracks.find(t => String(t.id) === String(trackId));
       if (ct) {
         playbackContext = contextHint;
         trackMeta.coverUrl = normalizeCoverUrl(ct.coverUrl, trackMeta.coverUrl);
         if (ct.albumTitle) trackMeta.albumTitle = ct.albumTitle;
-      } else {
-        console.warn('[player] contextHint não contém a faixa; buscando álbum.');
-      }
+      } else console.warn('[player] contextHint não contém a faixa; buscando álbum.');
+    } else if (contextHint) {
+      console.warn('[player] contextHint inválido; ignorado.');
     }
 
     if (!playbackContext && allowAlbumFallback) {
@@ -893,21 +985,14 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
         try {
           const ar = await fetch(`/api/public?album=${encodeURIComponent(albumId)}&t=${Date.now()}`, { signal });
           if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
-          if (ar.status === 404) {
-            throw new AlbumError('Álbum não encontrado.', 'not-found');
-          } else if (ar.status === 401 || ar.status === 403) {
-            throw new AlbumError('Acesso negado ao álbum.', 'auth');
-          } else if (ar.status === 429) {
-            throw new AlbumError('Muitas requisições. Tente novamente.', 'rate-limit');
-          } else if (ar.status >= 500) {
-            throw new AlbumError(`Servidor de álbum indisponível (HTTP ${ar.status}).`, 'server');
-          } else if (!ar.ok) {
-            throw new AlbumError(`Erro HTTP ${ar.status} no álbum.`, 'server');
-          } else {
+          if (ar.status === 404) throw new AlbumError('Álbum não encontrado.', 'not-found');
+          else if (ar.status === 401 || ar.status === 403) throw new AlbumError('Acesso negado ao álbum.', 'auth');
+          else if (ar.status === 429) throw new AlbumError('Muitas requisições. Tente novamente.', 'rate-limit');
+          else if (ar.status >= 500) throw new AlbumError(`Servidor de álbum indisponível (HTTP ${ar.status}).`, 'server');
+          else if (!ar.ok) throw new AlbumError(`Erro HTTP ${ar.status} no álbum.`, 'server');
+          else {
             const ad = await ar.json();
             if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-
             if (!ad.ok) {
               const code = typeof ad.code === 'string' ? ad.code : '';
               if (code === 'ALBUM_NOT_FOUND') throw new AlbumError('Álbum não encontrado.', 'not-found');
@@ -915,12 +1000,10 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
               console.warn('[player] ok:false com código não reconhecido; fallback bloqueado:', ad);
               throw new AlbumError(ad.error || 'Álbum indisponível.', 'unknown');
             }
-
             if (!ad.album) throw new AlbumError('Álbum ausente na resposta.', 'integrity');
             if (normalizeTrackId(ad.album.id) !== albumId) throw new AlbumError('ID do álbum incompatível.', 'integrity');
             if (typeof ad.album.title !== 'string' || !ad.album.title.trim()) throw new AlbumError('Álbum sem título.', 'integrity');
             if (!Array.isArray(ad.tracks)) throw new AlbumError('Álbum sem lista de faixas.', 'integrity');
-
             const ac = normalizeCoverUrl(ad.album.coverUrl);
             const seen = new Set();
             const tracks = [];
@@ -934,12 +1017,8 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
               seen.add(tid);
               tracks.push({ ...t, coverUrl: ac });
             }
-            if (invalid > 0) {
-              throw new AlbumError(`Álbum contém ${invalid} faixa(s) inválida(s)/duplicada(s).`, 'integrity');
-            }
-            if (!tracks.some(t => String(t.id) === trackId)) {
-              throw new AlbumError('Faixa ausente no álbum retornado.', 'integrity');
-            }
+            if (invalid > 0) throw new AlbumError(`Álbum contém ${invalid} faixa(s) inválida(s)/duplicada(s).`, 'integrity');
+            if (!tracks.some(t => String(t.id) === trackId)) throw new AlbumError('Faixa ausente no álbum retornado.', 'integrity');
             trackMeta.coverUrl = ac;
             playbackContext = { type: 'album', id: ad.album.id, name: ad.album.title, coverUrl: ac, tracks };
           }
@@ -961,7 +1040,6 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
     const audioReady = new Promise((resolve, reject) => {
       let done = false;
       let tid = null;
-
       const cleanup = () => {
         if (done) return false;
         done = true;
@@ -971,20 +1049,15 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
         if (signal) signal.removeEventListener('abort', onAbort);
         return true;
       };
-
       const succeed = () => { if (cleanup()) resolve(); };
       const fail = (error) => { if (cleanup()) reject(error); };
-
       const onCanPlay = () => succeed();
       const onError = () => fail(new Error('Falha ao carregar áudio.'));
       const onAbort = () => fail(new DOMException('Aborted', 'AbortError'));
-
       failAudioReady = fail;
-
       createdAudio.addEventListener('canplay', onCanPlay);
       createdAudio.addEventListener('error', onError);
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
-
       tid = setTimeout(() => fail(new Error('Timeout ao carregar áudio.')), AUDIO_PREPARE_TIMEOUT_MS);
     });
 
@@ -992,15 +1065,12 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
       createdAudio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}&t=${Date.now()}`;
       createdAudio.load();
     } catch (loadErr) {
-      if (failAudioReady) {
-        failAudioReady(loadErr);
-        try { await audioReady; } catch {}
-      }
+      if (failAudioReady) { failAudioReady(loadErr); try { await audioReady; } catch {} }
       throw loadErr;
     }
 
     await audioReady;
-
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     return { audio: createdAudio, trackId, trackMeta, playbackContext };
   } catch (e) {
     if (createdAudio) safeDisposeAudio(createdAudio);
@@ -1009,9 +1079,10 @@ async function prepareTrack(trackId, { contextHint, signal, allowAlbumFallback =
 }
 
 // ─── FASE 2: COMMIT ───
-async function commitTrack(prepared, autoplay, operationId, navigationToken, restoreId) {
+async function commitTrack(prepared, autoplay, operationId, navigationToken, restoreId, ownerToken) {
   const isCurrentOp = () =>
     operationId === commitRequestId &&
+    isPlaybackOwner(operationId, ownerToken) &&
     (navigationToken === null || navigationToken === navigationRequestId);
 
   if (!isCurrentOp()) {
@@ -1038,56 +1109,58 @@ async function commitTrack(prepared, autoplay, operationId, navigationToken, res
     currentTrackId = prepared.trackId;
     currentTrackMeta = prepared.trackMeta;
     currentPlaybackContext = prepared.playbackContext || {
-      type: 'single',
-      id: prepared.trackId,
-      name: prepared.trackMeta.title,
-      coverUrl: prepared.trackMeta.coverUrl,
-      tracks: [prepared.trackMeta]
+      type: 'single', id: prepared.trackId, name: prepared.trackMeta.title,
+      coverUrl: prepared.trackMeta.coverUrl, tracks: [prepared.trackMeta]
     };
     stateSwapped = true;
 
-    try { attachPlaybackListeners(currentAudio); } catch (e) { console.warn('[player] attachPlaybackListeners:', e); }
-    try { setBuffering(false); } catch (e) { console.warn('[player] setBuffering:', e); }
-    try { updatePlayerUI(currentTrackMeta); } catch (e) { console.warn('[player] updatePlayerUI:', e); }
-    try { resetProgressUI(); } catch (e) { console.warn('[player] resetProgressUI:', e); }
-    try { renderCurrentCatalog(prepared.trackId); } catch (e) { console.warn('[player] renderCurrentCatalog:', e); }
+    try { attachPlaybackListeners(currentAudio); } catch (e) { console.warn(e); }
+    try { setBuffering(false); } catch (e) { console.warn(e); }
+    try { updatePlayerUI(currentTrackMeta); } catch (e) { console.warn(e); }
+    try { resetProgressUI(); } catch (e) { console.warn(e); }
+    try { renderCurrentCatalog(prepared.trackId); } catch (e) { console.warn(e); }
 
     if (!autoplay) {
       releaseAndDisposeSnapshot(snapshot);
       return { committed: true, playbackStarted: false, reason: 'no-autoplay' };
     }
 
+    manualPauseOperationId = 0;
     const playResult = await attemptPlay(currentAudio);
 
     if (!isCurrentOp()) {
-      const opCurrent = operationId === commitRequestId;
+      const opCurrent = operationId === commitRequestId && isPlaybackOwner(operationId, ownerToken);
       const ownsAudio = currentAudio === prepared.audio;
-
       if (opCurrent && ownsAudio) {
         const invalidated = prepared.audio;
-        await restorePlaybackSnapshot(snapshot, operationId, restoreId);
+        const rb = await restorePlaybackSnapshot(snapshot, operationId, restoreId, ownerToken);
         safeDisposeAudio(invalidated);
-        return { committed: false, playbackStarted: false, reason: 'nav-invalidated' };
+        return { committed: false, playbackStarted: false, reason: rb.restored ? 'nav-invalidated' : 'nav-invalidated-restore-revoked' };
       }
-
       safeDisposeAudio(prepared.audio);
       releaseAndDisposeSnapshot(snapshot);
       return { committed: false, playbackStarted: false, reason: 'superseded-commit' };
     }
 
+    if (!playResult.started && manualPauseOperationId === operationId) {
+      releaseAndDisposeSnapshot(snapshot);
+      return { committed: true, playbackStarted: false, reason: 'manual-pause' };
+    }
+
     if (!playResult.started && playResult.reason !== 'not-allowed') {
       const failedAudio = currentAudio;
-      await restorePlaybackSnapshot(snapshot, operationId, restoreId);
+      const rb = await restorePlaybackSnapshot(snapshot, operationId, restoreId, ownerToken);
       safeDisposeAudio(failedAudio);
-      return { committed: false, playbackStarted: false, reason: playResult.reason };
+      return { committed: false, playbackStarted: false, reason: rb.restored ? playResult.reason : 'rollback-revoked' };
     }
 
     releaseAndDisposeSnapshot(snapshot);
     return { committed: true, playbackStarted: playResult.started, reason: playResult.reason };
   } catch (err) {
-    if (stateSwapped && operationId === commitRequestId && currentAudio === prepared.audio) {
+    if (stateSwapped && operationId === commitRequestId && isPlaybackOwner(operationId, ownerToken) && currentAudio === prepared.audio) {
       try {
-        await restorePlaybackSnapshot(snapshot, operationId, restoreId);
+        const rb = await restorePlaybackSnapshot(snapshot, operationId, restoreId, ownerToken);
+        if (!rb.restored) console.warn('[player] Rollback revogado:', rb.reason);
       } catch (restoreErr) {
         console.error('[player] Falha no rollback:', restoreErr);
       } finally {
@@ -1107,8 +1180,9 @@ async function playTrackInternal(trackId, { contextHint = null, allowAlbumFallba
   if (!trackId) return { committed: false, playbackStarted: false, reason: 'invalid-id' };
 
   const operationId = ++commitRequestId;
-  const restoreId = ++activeRestoreId;
   const reqId = ++playbackRequestId;
+  const restoreId = ++activeRestoreId;
+  const ownerToken = takePlaybackOwnership(operationId);
   const ctrl = createPlaybackRequest();
 
   let prepared = null;
@@ -1116,31 +1190,31 @@ async function playTrackInternal(trackId, { contextHint = null, allowAlbumFallba
     prepared = await prepareTrack(trackId, { contextHint, signal: ctrl.signal, allowAlbumFallback });
   } catch (err) {
     if (err.name === 'AbortError') return { committed: false, playbackStarted: false, reason: 'aborted' };
-    if (operationId !== commitRequestId || reqId !== playbackRequestId) return { committed: false, playbackStarted: false, reason: 'superseded' };
+    if (operationId !== commitRequestId || !isPlaybackOwner(operationId, ownerToken) || reqId !== playbackRequestId) return { committed: false, playbackStarted: false, reason: 'superseded' };
 
     if (err.name === 'AlbumError') {
-      if (NON_FALLBACK_ALBUM_REASONS.has(err.reason)) {
-        showToast(err.message);
-        return { committed: false, playbackStarted: false, reason: 'album-' + err.reason };
-      }
+      if (NON_FALLBACK_ALBUM_REASONS.has(err.reason)) { showToast(err.message); return { committed: false, playbackStarted: false, reason: 'album-' + err.reason }; }
       showToast(`${err.message} Tocando faixa individual.`);
       try {
         prepared = await prepareTrack(trackId, { contextHint: null, signal: ctrl.signal, allowAlbumFallback: false });
       } catch (retryErr) {
         if (retryErr.name === 'AbortError') return { committed: false, playbackStarted: false, reason: 'aborted' };
-        if (operationId !== commitRequestId || reqId !== playbackRequestId) return { committed: false, playbackStarted: false, reason: 'superseded' };
+        if (operationId !== commitRequestId || !isPlaybackOwner(operationId, ownerToken) || reqId !== playbackRequestId) return { committed: false, playbackStarted: false, reason: 'superseded' };
         console.error('[player] Retry single falhou:', retryErr);
         showToast('Não foi possível carregar a faixa.');
         return { committed: false, playbackStarted: false, reason: 'prepare-failed' };
       }
     } else {
+      if (operationId !== commitRequestId || !isPlaybackOwner(operationId, ownerToken) || reqId !== playbackRequestId) {
+        return { committed: false, playbackStarted: false, reason: 'superseded' };
+      }
       console.error('[player] Falha na preparação:', err);
       showToast(err.message || 'Não foi possível preparar a faixa.');
       return { committed: false, playbackStarted: false, reason: 'prepare-failed' };
     }
   }
 
-  if (operationId !== commitRequestId || reqId !== playbackRequestId) {
+  if (operationId !== commitRequestId || !isPlaybackOwner(operationId, ownerToken) || reqId !== playbackRequestId) {
     if (prepared?.audio) safeDisposeAudio(prepared.audio);
     return { committed: false, playbackStarted: false, reason: 'superseded' };
   }
@@ -1151,13 +1225,13 @@ async function playTrackInternal(trackId, { contextHint = null, allowAlbumFallba
 
   let result;
   try {
-    result = await commitTrack(prepared, true, operationId, navigationToken, restoreId);
+    result = await commitTrack(prepared, true, operationId, navigationToken, restoreId, ownerToken);
   } catch (commitErr) {
     console.error('[player] Commit falhou (tratado):', commitErr);
     return { committed: false, playbackStarted: false, reason: 'commit-failed' };
   }
 
-  if (operationId !== commitRequestId || reqId !== playbackRequestId) {
+  if (operationId !== commitRequestId || !isPlaybackOwner(operationId, ownerToken) || reqId !== playbackRequestId) {
     return { committed: false, playbackStarted: false, reason: 'superseded' };
   }
   if (result.committed && currentTrackId === trackId) {
@@ -1168,54 +1242,28 @@ async function playTrackInternal(trackId, { contextHint = null, allowAlbumFallba
 }
 
 async function playTrack(trackId, options = {}) {
-  try {
-    return await playTrackInternal(trackId, options);
-  } catch (err) {
+  try { return await playTrackInternal(trackId, options); }
+  catch (err) {
     console.error('[player] Falha inesperada em playTrack:', err);
     return { committed: false, playbackStarted: false, reason: 'unexpected-error' };
   }
 }
 
 // ─── CONTROLES PÚBLICOS ───
-window.playerPlay = () => {
-  if (!currentAudio || !currentAudio.src) {
-    if (currentTrackId) {
-      playTrack(currentTrackId);
-    } else {
-      showToast('Selecione uma faixa para tocar.');
-      switchTab('albums');
-    }
-    return;
-  }
-  if (!currentAudio.paused) {
-    currentAudio.pause();
-    if (playbackAbortController) { try { playbackAbortController.abort(); } catch {} }
-    return;
-  }
-  attemptPlay(currentAudio);
-};
-
-function contextKey(ctx) {
-  return ctx ? `${ctx.type}:${ctx.id}` : null;
-}
+window.playerPlay = () => requestTogglePlay();
 
 window.tocarMusicaDaLista = async (id, mode = 'user') => {
   id = normalizeTrackId(id);
   if (!id) return false;
-
   const navId = ++navigationRequestId;
   const inCatalog = selectedCatalogContext?.tracks?.some(t => String(t.id) === id);
   const contextHint = inCatalog ? selectedCatalogContext : null;
-
   const ctxBeforeKey = contextKey(currentPlaybackContext);
   const result = await playTrack(id, { contextHint, navigationToken: navId });
   if (!shouldAdvanceQueue(result)) return false;
-
   const ctxAfterKey = contextKey(currentPlaybackContext);
   const contextChanged = ctxBeforeKey !== ctxAfterKey;
-  if (mode === 'user' || contextChanged) {
-    initShuffleState(currentPlaybackContext, id);
-  }
+  if (mode === 'user' || contextChanged) initShuffleState(currentPlaybackContext, id);
   return true;
 };
 
@@ -1233,13 +1281,15 @@ window.playerNext = async (isAuto = false) => {
   }
 
   if (shuffleEnabled) {
+    if (!shuffleQueueMatchesContext()) initShuffleState(currentPlaybackContext, currentTrackId);
     if (!isAuto && shuffleHistoryIndex < shuffleHistory.length - 1) {
+      const queueVersion = shuffleQueueVersion;
       const ti = shuffleHistoryIndex + 1;
       const tid = shuffleHistory[ti];
       const navId = ++navigationRequestId;
       const result = await playTrack(String(tid), { contextHint: currentPlaybackContext, navigationToken: navId });
       if (navId !== navigationRequestId) return;
-      if (shouldAdvanceQueue(result)) shuffleHistoryIndex = ti;
+      if (shouldAdvanceQueue(result) && shuffleQueueMatchesContext(queueVersion)) shuffleHistoryIndex = ti;
       return;
     }
     if (shuffleHistoryIndex < shuffleHistory.length - 1) {
@@ -1248,19 +1298,21 @@ window.playerNext = async (isAuto = false) => {
     if (shuffleQueue.length === 0) {
       if (repeatMode === 'all' || !isAuto) {
         shuffleQueue = generateShuffleQueue(currentPlaybackContext.tracks, currentTrackId);
+        ++shuffleQueueVersion;
       } else {
         if (currentAudio) currentAudio.pause();
         return;
       }
     }
+    const queueVersion = shuffleQueueVersion;
     if (shuffleQueue.length > 0) {
       const ni = shuffleQueue[0];
       const nt = currentPlaybackContext.tracks[ni];
-      if (!nt) { shuffleQueue.shift(); return; }
+      if (!nt) { shuffleQueue.shift(); ++shuffleQueueVersion; return; }
       const navId = ++navigationRequestId;
       const result = await playTrack(String(nt.id), { contextHint: currentPlaybackContext, navigationToken: navId });
       if (navId !== navigationRequestId) return;
-      if (shouldAdvanceQueue(result)) {
+      if (shouldAdvanceQueue(result) && shuffleQueueMatchesContext(queueVersion)) {
         shuffleQueue.shift();
         shuffleHistory.push(String(nt.id));
         shuffleHistoryIndex = shuffleHistory.length - 1;
@@ -1290,13 +1342,15 @@ window.playerPrev = async () => {
   if (!currentPlaybackContext?.tracks || currentPlaybackContext.tracks.length === 0) return;
 
   if (shuffleEnabled) {
+    if (!shuffleQueueMatchesContext()) initShuffleState(currentPlaybackContext, currentTrackId);
+    const queueVersion = shuffleQueueVersion;
     if (shuffleHistoryIndex > 0) {
       const ti = shuffleHistoryIndex - 1;
       const tid = shuffleHistory[ti];
       const navId = ++navigationRequestId;
       const result = await playTrack(String(tid), { contextHint: currentPlaybackContext, navigationToken: navId });
       if (navId !== navigationRequestId) return;
-      if (shouldAdvanceQueue(result)) shuffleHistoryIndex = ti;
+      if (shouldAdvanceQueue(result) && shuffleQueueMatchesContext(queueVersion)) shuffleHistoryIndex = ti;
     }
     return;
   }
@@ -1313,7 +1367,7 @@ window.playerPrev = async () => {
 window.toggleShuffle = () => {
   shuffleEnabled = !shuffleEnabled;
   if (shuffleEnabled && currentPlaybackContext) initShuffleState(currentPlaybackContext, currentTrackId);
-  else { shuffleQueue = []; shuffleHistory = []; shuffleHistoryIndex = -1; }
+  else { shuffleQueue = []; shuffleHistory = []; shuffleHistoryIndex = -1; shuffleQueueContextKey = null; ++shuffleQueueVersion; }
   const b = document.getElementById('shuffleBtn');
   if (b) { b.style.color = shuffleEnabled ? 'var(--green)' : 'var(--text-dim)'; b.setAttribute('aria-pressed', shuffleEnabled ? 'true' : 'false'); }
   showToast(shuffleEnabled ? 'Aleatório ativado' : 'Aleatório desativado');
@@ -1335,7 +1389,6 @@ window.abrirAlbum = async (albumId) => {
   const reqId = ++catalogRequestId;
   switchTab('music');
   setCatalogLoading(true);
-
   try {
     const res = await fetch(`/api/public?album=${encodeURIComponent(albumId)}&t=${Date.now()}`, { cache: 'no-store', signal: ctrl.signal });
     if (!res.ok) throw new Error('Falha de rede');
@@ -1345,7 +1398,6 @@ window.abrirAlbum = async (albumId) => {
     if (normalizeTrackId(data.album.id) !== albumId) throw new Error('ID do álbum incompatível.');
     if (typeof data.album.title !== 'string' || !data.album.title.trim()) throw new Error('Álbum sem título.');
     if (!Array.isArray(data.tracks)) throw new Error('Resposta sem lista de faixas válida.');
-
     const ac = normalizeCoverUrl(data.album.coverUrl);
     const seen = new Set();
     const tracks = [];
@@ -1359,13 +1411,8 @@ window.abrirAlbum = async (albumId) => {
       seen.add(tid);
       tracks.push({ ...t, coverUrl: ac });
     }
-
-    if (invalid > 0) {
-      throw new Error(`Álbum com ${invalid} faixa(s) inválida(s). Contate o suporte.`);
-    }
-
+    if (invalid > 0) throw new Error(`Álbum com ${invalid} faixa(s) inválida(s). Contate o suporte.`);
     selectedCatalogContext = { type: 'album', id: data.album.id, name: data.album.title, coverUrl: ac, tracks };
-
     const header = document.getElementById('albumTracklistHeader');
     if (header) {
       header.style.display = 'flex';
@@ -1377,7 +1424,6 @@ window.abrirAlbum = async (albumId) => {
     if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = data.album.title;
     if (els.albumHeaderArtist) els.albumHeaderArtist.textContent = data.album.artist || 'Joseph Matthos';
     if (els.albumHeaderCount) els.albumHeaderCount.textContent = `${tracks.length} faixas`;
-
     if (tracks.length === 0) {
       if (els.musicList) els.musicList.innerHTML = '<p style="text-align:center;color:#aaa;padding:1rem;">Álbum sem faixas cadastradas.</p>';
       return;
@@ -1397,12 +1443,10 @@ window.abrirPlaylist = async (playlistId) => {
   const pl = getPlaylists(); const playlist = pl.find(p => p.id === playlistId);
   if (!playlist) return;
   if (playlist.tracks.length === 0) { showToast('Playlist vazia.'); return; }
-
   const ctrl = createCatalogRequest();
   const reqId = ++catalogRequestId;
   switchTab('music');
   setCatalogLoading(true);
-
   try {
     const covers = new Map();
     try {
@@ -1415,7 +1459,6 @@ window.abrirPlaylist = async (playlistId) => {
       }
     } catch (e) { if (e.name === 'AbortError') return; }
     if (reqId !== catalogRequestId) return;
-
     const failures = [];
     const fetchTrack = async (id, signal) => {
       try {
@@ -1433,7 +1476,6 @@ window.abrirPlaylist = async (playlistId) => {
         return null;
       }
     };
-
     const res = await fetchInBatches(playlist.tracks, ctrl.signal, fetchTrack);
     if (reqId !== catalogRequestId) return;
     const seen = new Set(); const valid = [];
@@ -1443,22 +1485,18 @@ window.abrirPlaylist = async (playlistId) => {
       if (seen.has(tid)) continue;
       seen.add(tid); valid.push(t);
     }
-    if (valid.length === 0) {
-      showToast('Não foi possível carregar as faixas.');
-      return;
-    }
+    if (valid.length === 0) { showToast('Não foi possível carregar as faixas.'); return; }
     if (failures.length > 0) {
       console.warn('[player] Faixas indisponíveis na playlist:', failures);
       showToast(`${failures.length} faixa(s) indisponível(is).`);
     }
-
     selectedCatalogContext = { type: 'playlist', id: playlist.id, name: playlist.name, coverUrl: playlist.coverUrl || DEFAULT_COVER, tracks: valid };
-
     const header = document.getElementById('albumTracklistHeader');
     if (header) {
       header.style.display = 'flex';
+      const playlistCover = normalizeCoverUrl(playlist.coverUrl, '');
       if (els.albumHeaderCover) {
-        els.albumHeaderCover.style.backgroundImage = playlist.coverUrl ? `url('${playlist.coverUrl}')` : 'none';
+        els.albumHeaderCover.style.backgroundImage = playlistCover ? `url("${playlistCover}")` : 'none';
         els.albumHeaderCover.style.backgroundColor = '#333';
       }
       if (els.albumHeaderTitle) els.albumHeaderTitle.textContent = playlist.name;
@@ -1497,11 +1535,17 @@ async function bootPlayer() {
     if (r.width <= 0) return;
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     currentAudio.currentTime = p * currentAudio.duration;
+    try { updateProgressUI(); } catch (err) { console.warn(err); }
   });
   els.progressBar?.addEventListener('keydown', (e) => {
     if (!currentAudio || !Number.isFinite(currentAudio.duration) || currentAudio.duration <= 0) return;
+    let handled = true;
     if (e.key === 'ArrowRight') { e.preventDefault(); currentAudio.currentTime = Math.min(currentAudio.duration, currentAudio.currentTime + 5); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); currentAudio.currentTime = Math.max(0, currentAudio.currentTime - 5); }
+    else if (e.key === 'Home') { e.preventDefault(); currentAudio.currentTime = 0; }
+    else if (e.key === 'End') { e.preventDefault(); currentAudio.currentTime = currentAudio.duration; }
+    else { handled = false; }
+    if (handled) { try { updateProgressUI(); } catch (err) { console.warn(err); } }
   });
   els.fullscreenBtn?.addEventListener('click', () => {
     if (!els.container || typeof els.container.requestFullscreen !== 'function') return;
@@ -1515,26 +1559,20 @@ async function bootPlayer() {
   document.getElementById('shuffleBtn')?.addEventListener('click', window.toggleShuffle);
   document.getElementById('repeatBtn')?.addEventListener('click', window.toggleRepeat);
 
-  document.getElementById('miniLikeBtn')?.addEventListener('click', (e) => {
+  // Botão de curtir do miniplayer mantido aqui
+  document.getElementById('miniLikeBtn')?.addEventListener('click', () => {
     if (!currentTrackId) return;
     const key = `jm_like_${currentTrackId}`;
     const lk = getLikeState(key);
-    if (setLikeState(key, !lk)) {
-      syncLikeUI(currentTrackId, !lk);
-      showToast(!lk ? 'Curtido!' : 'Removido');
-    }
+    if (setLikeState(key, !lk)) { syncLikeUI(currentTrackId, !lk); showToast(!lk ? 'Curtido!' : 'Removido'); }
   });
 
   document.getElementById('miniShareBtn')?.addEventListener('click', async () => {
     if (!currentTrackMeta) return;
     const url = `${location.origin}/player.html?id=${encodeURIComponent(currentTrackId)}`;
     const sd = { title: `${currentTrackMeta.title} — Joseph Matthos`, url };
-    if (navigator.share) {
-      try { await navigator.share(sd); return; } catch {}
-    }
-    if (navigator.clipboard) {
-      try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); } catch { showToast('Erro.'); }
-    }
+    if (navigator.share) { try { await navigator.share(sd); return; } catch {} }
+    if (navigator.clipboard) { try { await navigator.clipboard.writeText(url); showToast('Link copiado!'); } catch { showToast('Erro.'); } }
   });
 
   document.getElementById('miniMuteBtn')?.addEventListener('click', () => {
@@ -1542,7 +1580,7 @@ async function bootPlayer() {
     currentAudio.muted = !currentAudio.muted;
     const btn = document.getElementById('miniMuteBtn');
     if (btn) {
-      btn.innerHTML = currentAudio.muted 
+      btn.innerHTML = currentAudio.muted
         ? `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`
         : `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`;
     }
@@ -1572,9 +1610,7 @@ async function bootPlayer() {
   const trackId = params.get('id');
   if (trackId) {
     const result = await playTrack(trackId, { contextHint: null });
-    if (shouldAdvanceQueue(result) && shuffleEnabled && currentPlaybackContext) {
-      initShuffleState(currentPlaybackContext, trackId);
-    }
+    if (shouldAdvanceQueue(result) && shuffleEnabled && currentPlaybackContext) initShuffleState(currentPlaybackContext, trackId);
   } else if (els.title) els.title.textContent = 'Nenhuma faixa selecionada';
 }
 
