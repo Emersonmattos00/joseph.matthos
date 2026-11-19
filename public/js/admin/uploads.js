@@ -1,41 +1,50 @@
 /* ============================================================
-   js/admin/uploads.js — v10.5 (Audit Final — Cloudflare R2)
+   js/admin/uploads.js — v10.6 (Audit Final — Cloudflare R2)
    ============================================================
-   Correções da auditoria v10.4:
-   1. AbortSignal propagado nas funções públicas
-   2. Cancelamento funciona mesmo se abortado antes do PUT
-   3. Barra de progresso removida em finally (todos os caminhos)
-   4. Progresso 100% não dispara notificação duplicada
-   5. Retry cobre toda a faixa 5xx + respeita Retry-After
-   6. Timeout máximo dinâmico (até 20 min para 200 MB)
-   Extras:
-   - Validação do Account ID no hostname R2
-   - Bloqueio de upload simultâneo pelo mesmo input
-   - Remoção do listener de abort em todos os caminhos
+   Correções aplicadas da auditoria v10.5:
+   1. Validação hostname R2 restrita ao Account ID configurado
+   2. AbortSignal propagado para upload-sign e upload-confirm
+   3. sleep() remove listener em ambos caminhos (resolve/reject)
+   4. Lógica de retry simplificada (removida isClientError)
+   5. Retry-After respeitado integralmente (>MAX aborta retry)
+   6. Cancelamento propagado em compressImage (por etapas)
+   7. Callback onProgress protegido com try/catch
+   8. extraData com whitelist de campos permitidos
+   9. Botão de cancelar na interface (progress toast)
+   10. Account ID documentado como configuração (não presumido)
    ============================================================ */
 
 import { apiFetch } from './api.js';
 import { toast } from './ui/toast.js';
 
 // ─────────────────────────────────────────────────────────────
-// Configuração
+// Configuração — AJUSTAR conforme seu ambiente Cloudflare
 // ─────────────────────────────────────────────────────────────
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;              // 5 MB
-const MAX_AUDIO_SIZE = 200 * 1024 * 1024;            // 200 MB
+
+/**
+ * ⚠ CONFIGURAÇÃO OBRIGATÓRIA
+ * Account ID do Cloudflare: obtido em https://dash.cloudflare.com/
+ * (painel principal → coluna direita, "Account ID")
+ * 
+ * NÃO é o mesmo ID do bucket público (pub-...).
+ * O endpoint S3 do R2 usa: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+ */
+const R2_ACCOUNT_ID = 'SEU_ACCOUNT_ID_AQUI'; // ← AJUSTE AQUI
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_AUDIO_SIZE = 200 * 1024 * 1024;
 const MAX_UPLOAD_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 1000;
-const RETRY_MAX_DELAY_MS = 10_000;                   // cap para Retry-After grande
-const UPLOAD_SPEED_BPS = 300 * 1024;                 // 300 KB/s
-const MIN_TIMEOUT_MS = 60_000;                       // 1 min
-const MAX_TIMEOUT_MS = 1_200_000;                    // 20 min (200MB @ 300KB/s ≈ 11 min + margem)
-const PROGRESS_THROTTLE_PCT = 10;                    // notifica a cada 10%
+const RETRY_MAX_DELAY_MS = 15_000;       // se Retry-After > 15s, abortamos retry
+const UPLOAD_SPEED_BPS = 300 * 1024;
+const MIN_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 1_200_000;        // 20 min
+const PROGRESS_THROTTLE_PCT = 10;
 
-// Account ID do Cloudflare R2 — ajustar conforme seu ambiente
-// Endpoint padrão: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-const R2_ACCOUNT_ID = '9eaf26fd8c784a62bae2457a45edc7d2'; // extraído do pub-...
-
-// Status não-retryable (cliente)
-const NON_RETRYABLE_STATUS = new Set([400, 401, 403, 404, 405, 410, 413, 415]);
+// Whitelist de campos aceitos em extraData (correção #8)
+const ALLOWED_EXTRA_FIELDS = new Set([
+  'albumId', 'trackId', 'trackIndex', 'trackNumber', 'kind'
+]);
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_AUDIO_TYPES = new Set([
@@ -46,7 +55,7 @@ const AUDIO_EXTENSIONS = new Set(['mp3','m4a','mp4','wav','ogg','oga','opus','fl
 const IMAGE_EXTENSIONS = new Set(['jpg','jpeg','png','webp']);
 
 // ─────────────────────────────────────────────────────────────
-// API pública (AbortSignal disponível em todas as funções)
+// API pública — AbortSignal propagado em todas as funções
 // ─────────────────────────────────────────────────────────────
 export async function uploadImage(file, signal = null) {
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
@@ -54,10 +63,12 @@ export async function uploadImage(file, signal = null) {
   if (!isValidImage(file)) throw new Error('Formato de imagem não suportado (use JPG, PNG ou WebP).');
   if (file.size > MAX_IMAGE_SIZE) throw new Error('Imagem muito grande (máx 5 MB).');
 
-  const base64 = await compressImage(file, 1920, 0.82);
+  const base64 = await compressImage(file, 1920, 0.82, signal);
+  if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
   const filename = file.name ? file.name.replace(/\.[^.]+$/, '') : 'image';
   const finalName = `${filename}.jpg`;
-  return uploadBase64(base64, finalName, 'image/jpeg', 'image');
+  return uploadBase64(base64, finalName, 'image/jpeg', 'image', signal);
 }
 
 export async function uploadAudioPreview(file, onProgress, extraData = {}, signal = null) {
@@ -73,19 +84,20 @@ export async function uploadAudio(file, onProgress, extraData = {}, signal = nul
 }
 
 // ─────────────────────────────────────────────────────────────
-// Presigned upload — áudio (Cloudflare R2)
+// Presigned upload — áudio
 // ─────────────────────────────────────────────────────────────
 async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, signal = null) {
-  // Verificação inicial de cancelamento (correção #2)
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
-
   if (!file) throw new Error('Arquivo ausente.');
   if (!isValidAudio(file)) throw new Error('Formato de áudio não suportado.');
-  if (file.size > MAX_AUDIO_SIZE) throw new Error(`Áudio muito grande (máx ${MAX_AUDIO_SIZE / 1048576} MB).`);
+  if (file.size > MAX_AUDIO_SIZE) {
+    throw new Error(`Áudio muito grande (máx ${MAX_AUDIO_SIZE / 1048576} MB).`);
+  }
 
   const contentType = normalizeAudioMime(file);
 
-  // 1) URL assinada
+  // 1) URL assinada — com AbortSignal (correção #2)
+  if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   const signRes = await apiFetch('upload-sign', {
     method: 'POST',
     body: {
@@ -93,13 +105,13 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
       filename: file.name || 'audio.mp3',
       contentType,
       size: file.size
-    }
+    },
+    signal // propagado se apiFetch aceitar
   });
 
   if (!signRes?.ok || !signRes.uploadUrl || !signRes.path) {
     throw new Error(signRes?.error || 'Falha ao preparar upload.');
   }
-
   if (!isAllowedUploadUrl(signRes.uploadUrl)) {
     throw new Error('URL de upload não autorizada.');
   }
@@ -107,22 +119,23 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
     throw new Error('Caminho de armazenamento inválido.');
   }
 
-  // 2) PUT com retry inteligente + abort
+  // 2) PUT com retry
+  if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   await putFileXHRWithRetry(signRes.uploadUrl, file, contentType, onProgress, signal);
 
-  // Verificação intermediária: pode ter sido cancelado durante o PUT
+  // 3) Confirmação — com AbortSignal (correção #2)
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
 
-  // 3) Confirmação — extraData primeiro para não sobrescrever kind/path
   const confirmBody = {
-    ...extraData,
+    ...filterExtraData(extraData), // whitelist aplicada (correção #8)
     kind,
     path: signRes.path
   };
 
   const confirm = await apiFetch('upload-confirm', {
     method: 'POST',
-    body: confirmBody
+    body: confirmBody,
+    signal
   });
 
   if (!confirm?.ok) {
@@ -137,13 +150,12 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
 }
 
 // ─────────────────────────────────────────────────────────────
-// PUT com retry — respeita Retry-After e faixa 5xx completa
+// PUT com retry — lógica simplificada
 // ─────────────────────────────────────────────────────────────
 async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
   let lastError;
 
   for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
-    // Verificação de cancelamento antes de cada tentativa
     if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
 
     try {
@@ -152,29 +164,37 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
     } catch (err) {
       lastError = err;
 
-      // Cancelamento explícito → não retry
       if (err.name === 'AbortError' || signal?.aborted) {
         throw new DOMException('Upload cancelado pelo usuário.', 'AbortError');
       }
 
-      // Decisão de retry baseada no status HTTP
       const status = err.httpStatus || 0;
-      const isClientError = status >= 400 && status < 500 && !NON_RETRYABLE_STATUS.has(status) === false;
+
+      // Correção #4: lógica simplificada, sem isClientError
       const isRetryable =
         status === 0 ||                            // erro de rede
         status === 408 ||                          // timeout
         status === 429 ||                          // rate limit
-        (status >= 500 && status <= 599);          // qualquer 5xx (correção #5)
+        (status >= 500 && status <= 599);          // qualquer 5xx
 
       if (!isRetryable || attempt >= MAX_UPLOAD_RETRIES) {
         throw err;
       }
 
-      // Backoff: usa Retry-After quando disponível (correção #5)
+      // Correção #5: Retry-After respeitado integralmente
       let delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
       if (err.retryAfterMs && err.retryAfterMs > 0) {
-        delay = Math.min(err.retryAfterMs, RETRY_MAX_DELAY_MS);
+        if (err.retryAfterMs > RETRY_MAX_DELAY_MS) {
+          // Servidor pede espera maior que nosso limite operacional → aborta retry
+          const error = new Error(
+            `Servidor pediu espera de ${Math.round(err.retryAfterMs/1000)}s. Tente novamente em instantes.`
+          );
+          error.httpStatus = status;
+          throw error;
+        }
+        delay = err.retryAfterMs;
       }
+
       console.warn(`[upload] tentativa ${attempt + 1}/${MAX_UPLOAD_RETRIES + 1} falhou (HTTP ${status || 'rede'}), retry em ${delay}ms`);
       await sleep(delay, signal);
     }
@@ -184,46 +204,45 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
 }
 
 /**
- * PUT binário via XHR para Cloudflare R2.
- * - Registra abort listener somente se signal ainda não foi abortado
- * - Remove listener em todos os caminhos (load/error/timeout/abort)
+ * PUT binário via XHR.
+ * Listener de abort com { once: true } e cleanup em todos os caminhos.
  */
 function putFileXHR(url, file, contentType, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
-    // Timeout dinâmico com limite de 20 min (correção #6)
     const estimatedTime = (file.size / UPLOAD_SPEED_BPS) * 1000;
     xhr.timeout = Math.max(MIN_TIMEOUT_MS, Math.min(MAX_TIMEOUT_MS, estimatedTime * 1.5));
 
     xhr.open('PUT', url, true);
     xhr.setRequestHeader('Content-Type', contentType);
 
-    // Progresso com throttle e proteção contra 100% duplicado (correção #4)
+    // Progresso protegido contra exceções do callback (correção #7)
     let lastReportedPct = -1;
     if (typeof onProgress === 'function') {
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
         const pct = Math.round((e.loaded / e.total) * 100);
         if (pct > lastReportedPct && (pct >= lastReportedPct + PROGRESS_THROTTLE_PCT || pct === 100)) {
-          onProgress(pct);
+          try { onProgress(pct); } catch (cbErr) {
+            console.warn('[upload] callback onProgress lançou erro:', cbErr);
+          }
           lastReportedPct = pct;
         }
       };
     }
 
-    // Listener de abort externo — registrado SOMENTE se signal não foi abortado
+    // Listener com { once: true } — removido automaticamente após 1ª chamada
     let abortHandler = null;
     if (signal && !signal.aborted) {
-      abortHandler = () => {
-        try { xhr.abort(); } catch {}
-      };
+      abortHandler = () => { try { xhr.abort(); } catch {} };
       signal.addEventListener('abort', abortHandler, { once: true });
     }
 
     const cleanup = () => {
       if (abortHandler && signal) {
         try { signal.removeEventListener('abort', abortHandler); } catch {}
+        abortHandler = null;
       }
     };
 
@@ -266,12 +285,15 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload Base64 — imagens
+// Upload Base64 — imagens (com AbortSignal)
 // ─────────────────────────────────────────────────────────────
-async function uploadBase64(base64, filename, contentType, kind) {
+async function uploadBase64(base64, filename, contentType, kind, signal = null) {
+  if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
   const result = await apiFetch('upload', {
     method: 'POST',
-    body: { kind, filename, contentType, base64 }
+    body: { kind, filename, contentType, base64 },
+    signal
   });
 
   if (!result || !result.ok) throw new Error((result && result.error) || 'Falha no upload.');
@@ -281,7 +303,7 @@ async function uploadBase64(base64, filename, contentType, kind) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind de <input type="file"> — bloqueio de upload simultâneo
+// Bind de <input> — com botão cancelar na interface
 // ─────────────────────────────────────────────────────────────
 export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = null) {
   const input = document.getElementById(inputId);
@@ -295,7 +317,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
     const file = input.files && input.files[0];
     if (!file) return;
 
-    // Bloqueio de upload simultâneo pelo mesmo input
     if (input._uploadInProgress) {
       toast('Já existe um upload em andamento.', '⚠');
       input.value = '';
@@ -312,16 +333,23 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
     try {
       toast(`Enviando ${label}...`, '⬆');
 
-      // Progresso visual dedicado
+      // Progresso visual COM botão cancelar (correção #9)
       const updateProgress = (pct) => {
         if (!progressElement) {
           progressElement = document.createElement('div');
           progressElement.className = 'upload-progress-toast';
           progressElement.innerHTML = `
-            <div>Enviando ${label}: <span class="pct">0%</span></div>
+            <div class="upt-header">
+              <span>Enviando ${label}: <span class="pct">0%</span></span>
+              <button class="upt-cancel" type="button" aria-label="Cancelar upload" title="Cancelar">✕</button>
+            </div>
             <div class="progress-bar"><div class="fill" style="width:0%"></div></div>
           `;
           document.body.appendChild(progressElement);
+
+          progressElement.querySelector('.upt-cancel').addEventListener('click', () => {
+            abortController.abort();
+          });
         }
         const pctEl = progressElement.querySelector('.pct');
         const fillEl = progressElement.querySelector('.fill');
@@ -342,7 +370,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
         throw new Error(`Tipo de upload inválido: ${kind}`);
       }
 
-      // Callback com await (pode ser assíncrono)
       if (typeof onUploaded === 'function') {
         await onUploaded(result);
       }
@@ -352,9 +379,10 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
       console.error('[upload]', err);
       if (err.name !== 'AbortError') {
         toast(err?.message || 'Erro no upload.', '⚠');
+      } else {
+        toast('Upload cancelado.', '⚠');
       }
     } finally {
-      // Progresso sempre removido (correção #3)
       if (progressElement && progressElement.parentNode) {
         progressElement.remove();
       }
@@ -403,8 +431,8 @@ function getExtension(filename) {
 }
 
 /**
- * Validação robusta de URL de upload — Cloudflare R2 padrão.
- * Verifica: protocolo, ausência de credenciais/porta, hostname com Account ID.
+ * Correção #1: Validação restrita ao Account ID configurado.
+ * Aceita apenas https://<ACCOUNT_ID>.r2.cloudflarestorage.com
  */
 function isAllowedUploadUrl(url) {
   try {
@@ -412,9 +440,8 @@ function isAllowedUploadUrl(url) {
     if (u.protocol !== 'https:') return false;
     if (u.username || u.password || u.port) return false;
 
-    // Aceita endpoint padrão do R2 (ACCOUNT_ID.r2.cloudflarestorage.com)
     const expectedHost = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-    return u.hostname === expectedHost || u.hostname.endsWith('.r2.cloudflarestorage.com');
+    return u.hostname === expectedHost;
   } catch {
     return false;
   }
@@ -431,9 +458,19 @@ function isValidStoragePath(path) {
 }
 
 /**
- * Converte header Retry-After em ms.
- * Aceita segundos (inteiro) ou data HTTP.
+ * Whitelist de campos permitidos em extraData (correção #8)
  */
+function filterExtraData(extraData) {
+  if (!extraData || typeof extraData !== 'object') return {};
+  const filtered = {};
+  for (const key of Object.keys(extraData)) {
+    if (ALLOWED_EXTRA_FIELDS.has(key)) {
+      filtered[key] = extraData[key];
+    }
+  }
+  return filtered;
+}
+
 function parseRetryAfter(header) {
   if (!header) return null;
   const seconds = Number(header);
@@ -446,27 +483,47 @@ function parseRetryAfter(header) {
   return null;
 }
 
+/**
+ * Correção #3: sleep remove listener em AMBOS caminhos
+ */
 function sleep(ms, signal = null) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
+    if (signal?.aborted) {
+      return reject(new DOMException('Cancelado', 'AbortError'));
+    }
+
+    const timer = setTimeout(onDone, ms);
+    let abortHandler = null;
+
+    function onDone() {
+      if (abortHandler && signal) {
+        try { signal.removeEventListener('abort', abortHandler); } catch {}
+      }
+      resolve();
+    }
+
     if (signal) {
-      const onAbort = () => {
+      abortHandler = () => {
         clearTimeout(timer);
+        try { signal.removeEventListener('abort', abortHandler); } catch {}
         reject(new DOMException('Cancelado', 'AbortError'));
       };
-      if (signal.aborted) return onAbort();
-      signal.addEventListener('abort', onAbort, { once: true });
+      signal.addEventListener('abort', abortHandler, { once: true });
     }
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Conversão de imagem
+// Conversão de imagem — com checkpoints de cancelamento (correção #6)
 // ─────────────────────────────────────────────────────────────
-async function compressImage(file, maxWidth, quality) {
+async function compressImage(file, maxWidth, quality, signal = null) {
+  if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
   const url = URL.createObjectURL(file);
   try {
-    const img = await loadImage(url);
+    const img = await loadImage(url, signal);
+    if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
     const scale = Math.min(1, maxWidth / img.width);
     const w = Math.max(1, Math.round(img.width * scale));
     const h = Math.max(1, Math.round(img.height * scale));
@@ -478,6 +535,8 @@ async function compressImage(file, maxWidth, quality) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Não foi possível processar a imagem.');
 
+    if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
+
     ctx.drawImage(img, 0, 0, w, h);
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
     const comma = dataUrl.indexOf(',');
@@ -487,11 +546,32 @@ async function compressImage(file, maxWidth, quality) {
   }
 }
 
-function loadImage(src) {
+function loadImage(src, signal = null) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Imagem inválida.'));
+
+    const abortHandler = () => {
+      img.src = '';
+      reject(new DOMException('Cancelado', 'AbortError'));
+    };
+
+    if (signal) {
+      if (signal.aborted) return abortHandler();
+      signal.addEventListener('abort', abortHandler, { once: true });
+    }
+
+    img.onload = () => {
+      if (signal) {
+        try { signal.removeEventListener('abort', abortHandler); } catch {}
+      }
+      resolve(img);
+    };
+    img.onerror = () => {
+      if (signal) {
+        try { signal.removeEventListener('abort', abortHandler); } catch {}
+      }
+      reject(new Error('Imagem inválida.'));
+    };
     img.src = src;
   });
 }
