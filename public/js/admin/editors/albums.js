@@ -98,22 +98,42 @@ function buildPlayerBar() {
 }
 
 async function getTrackAudioUrl(track, version) {
-  // 1ª opção: URL assinada (mesmo endpoint do download, agora com ?type=)
-  try {
-    const res = await apiFetch('download-url', {
-      method: 'GET', query: { id: String(track.id), type: version }
-    });
-    if (res?.ok && res.url) return res.url;
-  } catch { /* cai no fallback */ }
-
-  // 2ª opção: path direto do bucket
   const path = version === 'preview'
     ? (track.previewPath || track.preview_path)
     : (track.fullPath || track.full_path);
-  const direct = path && safeMediaUrl(path);
-  if (direct) return direct;
 
-  throw new Error(version === 'preview' ? 'Prévia indisponível.' : 'Áudio completo indisponível.');
+  if (!path) {
+    throw new Error(version === 'preview' ? 'Prévia não cadastrada.' : 'Áudio completo não cadastrado.');
+  }
+
+  // 1) URL completa (https://...) → usa direto
+  if (/^https?:\/\//i.test(path)) {
+    console.info('[player] URL completa detectada:', path);
+    return path;
+  }
+
+  // 2) Path relativo (premium/album/track.mp3) → constrói URL pública do R2
+  if (path.includes('.mp3') || path.includes('.wav') || path.includes('.m4a')) {
+    // Ajuste este domínio base conforme seu bucket
+    const r2Base = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+    const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
+    const directUrl = `${r2Base}/${normalizedPath}`;
+    console.info('[player] URL construída:', directUrl);
+    return directUrl;
+  }
+
+  // 3) Fallback: tenta o endpoint assinado
+  try {
+    const res = await apiFetch('download-url', { method: 'GET', query: { id: String(track.id), type: version } });
+    if (res?.ok && res.url) {
+      console.info('[player] URL assinada:', res.url);
+      return res.url;
+    }
+  } catch (e) {
+    console.warn('[player] download-url falhou:', e?.message);
+  }
+
+  throw new Error('Não foi possível obter URL de reprodução.');
 }
 
 async function playTrack(albumId, trackId, version) {
