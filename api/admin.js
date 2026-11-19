@@ -1,17 +1,54 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (v3.5)
+   api/admin.js — Painel administrativo (v4 — final conservadora)
    ------------------------------------------------------------
-   Correções da auditoria v3.4:
-   P0.1 Quarentena: URL assinada só toca _quarantine/. Após
-        validação, promoteFromQuarantine() copia para caminho
-        definitivo e apaga o temporário.
-   P0.2 Janela entre validação e consumo: reduzida com promoção
-        atômica seguida de UPDATE da faixa na mesma transação.
-   P0.3 validateDuration estrito (rejeita números/booleanos/objetos).
-   P1.2 Auditoria antes de responder; falha de audit não mascara
-        operação já commitada.
-   P1.3 Advisory lock também em delete track/album.
-   P1.4 ADMIN_USER_ID validado como UUID quando presente.
+   Compatível com admin.js v3.5 + uploads.js v11.0 no que diz
+   respeito a contrato de request/response. Mudanças de
+   comportamento estão listadas abaixo.
+
+   P0 (correções da auditoria)
+   - upload-confirm: transação (consumir intenção + atualizar
+     faixa) ANTES da promoção. O caminho definitivo é gerado
+     dentro da transação e passado para promoteFromQuarantine
+     via opts.definitiveKey (evita dois UPDATEs em tracks).
+     Se a promoção falhar, a intenção fica consumida, a faixa
+     aponta para o definitivo e a quarentena permanece; a ação
+     reconcile-uploads reprocessa.
+   - upload-sign/upload-confirm: usa upload_intents.size_limit
+     (schema real; não existe expected_size).
+   - update-track: fullPath/previewPath exigem upload_intent
+     consumida do mesmo admin (fecha porta dos fundos).
+   - remove priceCents de tracks (não existe no schema).
+   - gen-hash retorna hash scrypt$salt$hash válido para
+     verifyScrypt (usa generateScryptHash de _lib).
+   - upload direto (imagem): promove com expectedSize/MIME e,
+     se getPublicUrl falhar, apaga o definitivo órfão.
+
+   P1
+   - delete-track: advisory lock adquirido DENTRO da transação,
+     com SELECT ... FOR UPDATE do albumId.
+   - patch-user: planDays derivado de plans.intervalUnit/
+     intervalCount; externalSubscriptionId com UUID.
+   - content PUT grava updatedBy quando ADMIN_USER_ID é UUID.
+   - create-album: lock em hashtext('album:create:' || slug)
+     para não colidir com o lock de albumId em delete/reorder.
+   - reorder: sem hack de trackNumber negativo (schema não tem
+     unique em (album_id, track_number)).
+   - delete-album: usa o mesmo lock de albumId de create/reorder.
+
+   NOVO
+   - reconcile-uploads: ação on-demand que re-promove uploads
+     cuja promoção falhou após a transação. Varre intenções
+     consumidas nos últimos RECONCILE_WINDOW_MS, checa se o
+     fullPath/previewPath da faixa existe no R2 e, se não,
+     re-promove a partir da quarentena (se o temporário ainda
+     existir). Idempotente.
+
+   REQUER (não quebra se ausente)
+   - _storage.promoteFromQuarantine aceita opts.definitiveKey.
+     Ver bloco no final deste arquivo com a substituição
+     necessária em _storage.js.
+   - _storage.buildDefinitivePath é exportado (já é).
+   - _lib.generateScryptHash é exportado (já é).
    ============================================================ */
 
 'use strict';
@@ -21,18 +58,20 @@ const crypto = require('crypto');
 const {
   sendJson, methodNotAllowed, parseBody, parseCookies, clientIp,
   checkAndIncrement, resetBucket, audit, VALID_PLANS,
-  signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
+  signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
 const { db, eq, and, asc, desc, drizzleSql, inArray, sql, isNull } = require('./_db');
 const schema = require('./_db').schema;
-const { tracks, albums, artists, orders, adminAudit, uploadIntents, users } = schema;
+const {
+  tracks, albums, artists, orders, adminAudit, uploadIntents, users,
+  subscriptions, plans
+} = schema;
 
 const {
   uploadObject, createSignedUploadUrl, createSignedDownloadUrl,
-  getPublicUrl, getObjectMetadata, buildPathForKind, inferKindFromKey,
-  getPublicR2Config, ALLOWED_MEDIA,
-  // Novas funções (precisam existir no _storage.js — ver final do arquivo)
+  getPublicUrl, getObjectMetadata, buildPathForKind, buildDefinitivePath,
+  inferKindFromKey, getPublicR2Config, ALLOWED_MEDIA,
   promoteFromQuarantine, isQuarantinePath, deleteObject
 } = require('./_storage');
 
@@ -52,9 +91,13 @@ const DOWNLOAD_TTL_SEC = 3600;
 const SIGNED_UPLOAD_TTL_SEC = 900;
 const UPLOAD_INTENT_TTL_MS = SIGNED_UPLOAD_TTL_SEC * 1000;
 
+// reconcile-uploads: janela de varredura e limite de itens por chamada.
+const RECONCILE_WINDOW_MS = 7 * 24 * 3600 * 1000;
+const RECONCILE_MAX_ITEMS = 50;
+
 const VALID_ACTIONS = new Set([
   'login', 'session', 'logout', 'content', 'storage-config',
-  'upload', 'upload-sign', 'upload-confirm',
+  'upload', 'upload-sign', 'upload-confirm', 'reconcile-uploads',
   'users', 'sales', 'audit', 'gen-hash',
   'albums', 'album', 'tracks', 'track', 'track-order',
   'download-url', 'download-album', 'delete-user', 'update-lyrics'
@@ -80,7 +123,6 @@ function getSessionSecret() {
   return secret;
 }
 
-// P1.3: Validar ADMIN_USER_ID como UUID se estiver presente.
 let _adminIdentityCache = null;
 function getAdminIdentity() {
   if (_adminIdentityCache) return _adminIdentityCache;
@@ -107,6 +149,11 @@ function checkConfig() {
   } catch (err) {
     return { ok: false, error: err.message };
   }
+}
+
+function getAdminUpdatedBy() {
+  const id = String(process.env.ADMIN_USER_ID || '').trim();
+  return isUuid(id) ? id : null;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -158,6 +205,7 @@ module.exports = async function handler(req, res) {
       case 'upload': if (method === 'POST') return handleUpload(req, res, session); break;
       case 'upload-sign': if (method === 'POST') return handleUploadSign(req, res, session); break;
       case 'upload-confirm': if (method === 'POST') return handleUploadConfirm(req, res, session); break;
+      case 'reconcile-uploads': if (method === 'POST') return handleReconcileUploads(req, res, session); break;
       case 'users':
         if (method === 'GET') return handleGetUsers(req, res);
         if (method === 'PATCH') return handlePatchUser(req, res, session);
@@ -284,6 +332,8 @@ async function handlePutContent(req, res, session) {
     if (data.filosofia.frases.length > 500) return sendJson(res, 400, { ok: false, error: 'Limite de frases excedido.' });
   }
 
+  const updatedBy = getAdminUpdatedBy();
+
   let newVersion;
   try {
     newVersion = await db.transaction(async (tx) => {
@@ -292,7 +342,7 @@ async function handlePutContent(req, res, session) {
 
       if (expectedVersion === 0) {
         const inserted = await tx.insert(schema.siteContent)
-          .values({ key: CONTENT_KEY, data, version: next, updatedAt: now })
+          .values({ key: CONTENT_KEY, data, version: next, updatedAt: now, updatedBy })
           .onConflictDoNothing({ target: schema.siteContent.key })
           .returning({ version: schema.siteContent.version });
         if (inserted.length !== 1) {
@@ -302,7 +352,7 @@ async function handlePutContent(req, res, session) {
       }
 
       const updated = await tx.update(schema.siteContent)
-        .set({ data, version: next, updatedAt: now })
+        .set({ data, version: next, updatedAt: now, updatedBy })
         .where(and(
           eq(schema.siteContent.key, CONTENT_KEY),
           eq(schema.siteContent.version, expectedVersion)
@@ -319,7 +369,6 @@ async function handlePutContent(req, res, session) {
     throw err;
   }
 
-  // P1.2: auditoria não derruba a operação já commitada
   try { await audit('content.update', { actor: session.user, metadata: { version: newVersion } }); }
   catch (e) { console.warn('[admin] audit content.update falhou:', e.message); }
 
@@ -364,7 +413,6 @@ function validateFilePayload({ kind, filename, contentType, base64 }) {
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || raw.length % 4 !== 0) {
       return { ok: false, error: 'Conteúdo base64 inválido.' };
     }
-    // Base64 ~4/3 do binário + padding; limite antes de decodificar
     const maxBase64Chars = Math.ceil(media.maxBytes * 4 / 3) + 8;
     if (raw.length > maxBase64Chars) return { ok: false, error: 'Arquivo base64 excede o tamanho máximo permitido.' };
 
@@ -391,36 +439,51 @@ async function handleUpload(req, res, session) {
 
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
 
-  // Upload direto também usa quarentena, para manter a invariante.
   let quarantinePath;
   try {
-    quarantinePath = buildPathForKind(kind, uniqueName); // vira _quarantine/image/...
+    quarantinePath = buildPathForKind(kind, uniqueName);
   } catch (err) {
     return sendJson(res, 400, { ok: false, error: err.message });
   }
 
   try {
     await uploadObject(quarantinePath, validation.buffer, validation.mime);
-
-    // Promoção imediata (imagem é pequena e validada por assinatura mágica)
-    const promoted = await promoteFromQuarantine(quarantinePath, kind);
-    const publicUrl = getPublicUrl(promoted.definitiveKey);
-
-    try {
-      await audit('upload.direct', {
-        actor: session.user,
-        metadata: { kind, path: promoted.definitiveKey, size: validation.buffer.length }
-      });
-    } catch (e) { console.warn('[admin] audit upload.direct falhou:', e.message); }
-
-    return sendJson(res, 200, { ok: true, url: publicUrl, path: promoted.definitiveKey });
   } catch (err) {
+    if (err.code === 'DIRECT_UPLOAD_FORBIDDEN' || err.code === 'INVALID_KIND') {
+      return sendJson(res, 400, { ok: false, error: err.message });
+    }
     if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
     console.error('[admin] falha upload direto:', err.message);
-    // Limpa a quarentena se a promoção falhou
-    try { await deleteObject(quarantinePath); } catch {}
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
   }
+
+  let promoted;
+  try {
+    promoted = await promoteFromQuarantine(quarantinePath, kind, {
+      expectedSize: validation.buffer.length,
+      expectedMime: validation.mime
+    });
+  } catch (err) {
+    console.error('[admin] falha promoção upload direto:', err.code || err.message);
+    try { await deleteObject(quarantinePath); } catch {}
+    return sendJson(res, 502, { ok: false, error: 'Falha ao finalizar upload.' });
+  }
+
+  let publicUrl;
+  try { publicUrl = getPublicUrl(promoted.definitiveKey); }
+  catch (err) {
+    try { await deleteObject(promoted.definitiveKey); } catch {}
+    return sendJson(res, 502, { ok: false, error: 'Falha ao publicar imagem.' });
+  }
+
+  try {
+    await audit('upload.direct', {
+      actor: session.user,
+      metadata: { kind, path: promoted.definitiveKey, size: validation.buffer.length }
+    });
+  } catch (e) { console.warn('[admin] audit upload.direct falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, url: publicUrl, path: promoted.definitiveKey });
 }
 
 async function handleUploadSign(req, res, session) {
@@ -442,7 +505,7 @@ async function handleUploadSign(req, res, session) {
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
   let quarantinePath;
   try {
-    quarantinePath = buildPathForKind(kind, uniqueName); // _quarantine/...
+    quarantinePath = buildPathForKind(kind, uniqueName);
   } catch (err) {
     return sendJson(res, 400, { ok: false, error: err.message });
   }
@@ -466,7 +529,7 @@ async function handleUploadSign(req, res, session) {
       kind,
       path: quarantinePath,
       contentType: validation.mime,
-      expectedSize: sizeBytes,
+      sizeLimit: sizeBytes,
       expiresAt,
       consumedAt: null,
       createdAt: new Date().toISOString()
@@ -503,7 +566,6 @@ async function handleUploadConfirm(req, res, session) {
   if (!kind || !path || !intentionId) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
   if (!isUuid(intentionId)) return sendJson(res, 400, { ok: false, error: 'intentionId inválido.' });
 
-  // Confirma que o path é de quarentena e o kind bate
   if (!['audio-full', 'audio-preview'].includes(kind)) {
     return sendJson(res, 400, { ok: false, error: 'Tipo não permitido para associação com faixa.' });
   }
@@ -517,7 +579,6 @@ async function handleUploadConfirm(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'O tipo informado não corresponde ao caminho no Storage.' });
   }
 
-  // Associação exclusiva
   const hasTrackIndex = body.trackIndex !== undefined && body.trackIndex !== null && body.trackIndex !== '';
   const trackIndex = hasTrackIndex ? Number(body.trackIndex) : null;
   const albumId = body.albumId ? String(body.albumId).trim() : null;
@@ -532,46 +593,11 @@ async function handleUploadConfirm(req, res, session) {
     return sendJson(res, 400, { ok: false, error: 'Informe exclusivamente trackId OU (albumId e trackIndex).' });
   }
 
-  // 1) Intenção válida (isNull + expiração)
-  const [intent] = await db.select().from(uploadIntents).where(and(
-    eq(uploadIntents.id, intentionId),
-    eq(uploadIntents.adminUser, session.user),
-    eq(uploadIntents.path, path),
-    eq(uploadIntents.kind, kind),
-    isNull(uploadIntents.consumedAt),
-    sql`${uploadIntents.expiresAt} > NOW()`
-  )).limit(1);
-
-  if (!intent) {
-    return sendJson(res, 400, { ok: false, error: 'Intenção de upload inválida, expirada ou já consumida.' });
-  }
-
-  // 2) Objeto existe na quarentena
-  let meta;
-  try { meta = await getObjectMetadata(path); }
-  catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
-  if (!meta) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no Storage.' });
-
-  const returnedMime = (meta.contentType || '').split(';')[0].trim().toLowerCase();
-  const expectedMime = (intent.contentType || '').split(';')[0].trim().toLowerCase();
-  if (returnedMime !== expectedMime) {
-    return sendJson(res, 400, { ok: false, error: `MIME do objeto (${returnedMime}) não corresponde ao registrado (${expectedMime}).` });
-  }
-  if (Number(meta.contentLength) !== Number(intent.expectedSize)) {
-    return sendJson(res, 400, { ok: false, error: `Tamanho do objeto (${meta.contentLength}) não corresponde ao esperado (${intent.expectedSize}).` });
-  }
-
-  // 3) Promoção para caminho definitivo
-  let promoted;
-  try {
-    promoted = await promoteFromQuarantine(path, kind);
-  } catch (err) {
-    console.error('[admin] falha ao promover objeto:', err);
-    return sendJson(res, 502, { ok: false, error: 'Falha ao promover upload.' });
-  }
-  const definitiveKey = promoted.definitiveKey;
-
-  // 4) Transação atômica: consumir intenção + atualizar faixa
+  // 1) Transação: consumir intenção + atualizar faixa, ANTES da promoção.
+  //    O caminho definitivo é gerado deterministicamente aqui e passado
+  //    para promoteFromQuarantine via opts.definitiveKey.
+  let intentSnapshot = null;
+  let definitiveKey = null;
   try {
     await db.transaction(async (tx) => {
       const consumed = await tx.update(uploadIntents)
@@ -584,13 +610,23 @@ async function handleUploadConfirm(req, res, session) {
           isNull(uploadIntents.consumedAt),
           sql`${uploadIntents.expiresAt} > NOW()`
         ))
-        .returning({ id: uploadIntents.id });
+        .returning({
+          id: uploadIntents.id,
+          path: uploadIntents.path,
+          kind: uploadIntents.kind,
+          contentType: uploadIntents.contentType,
+          sizeLimit: uploadIntents.sizeLimit
+        });
 
       if (consumed.length !== 1) {
         const err = new Error('UPLOAD_INTENT_ALREADY_CONSUMED');
         err.code = 'UPLOAD_INTENT_ALREADY_CONSUMED';
         throw err;
       }
+      intentSnapshot = consumed[0];
+
+      const ext = String(path).split('.').pop();
+      definitiveKey = buildDefinitivePath(kind, ext);
 
       const patch = kind === 'audio-full'
         ? { fullPath: definitiveKey, streamKey: definitiveKey, updatedAt: new Date().toISOString() }
@@ -598,11 +634,11 @@ async function handleUploadConfirm(req, res, session) {
 
       let updated;
       if (byTrackId) {
-        [updated] = await tx.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
+        [updated] = await tx.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning({ id: tracks.id });
       } else {
         [updated] = await tx.update(tracks).set(patch)
           .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
-          .returning();
+          .returning({ id: tracks.id });
       }
 
       if (!updated) {
@@ -612,9 +648,6 @@ async function handleUploadConfirm(req, res, session) {
       }
     });
   } catch (err) {
-    // Se a transação falhou, o definitivo ficou órfão. Apaga para não vazar.
-    try { await deleteObject(definitiveKey); } catch {}
-
     if (err.code === 'UPLOAD_INTENT_ALREADY_CONSUMED') {
       return sendJson(res, 409, { ok: false, error: 'Intenção já consumida por outra requisição.' });
     }
@@ -625,14 +658,158 @@ async function handleUploadConfirm(req, res, session) {
     return sendJson(res, 500, { ok: false, error: 'Falha interna ao confirmar upload.' });
   }
 
+  // 2) Objeto na quarentena + promoção para o caminho já gravado.
+  let meta;
+  try { meta = await getObjectMetadata(path); }
+  catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
+  if (!meta) {
+    // A faixa aponta para definitivo que ainda não existe; quarentena sumiu.
+    // reconcile-uploads detecta e, se o temporário reaparecer, re-promove.
+    return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no Storage. Reprocesse via reconciliação.' });
+  }
+
+  try {
+    await promoteFromQuarantine(path, kind, {
+      expectedSize: intentSnapshot.sizeLimit ? Number(intentSnapshot.sizeLimit) : undefined,
+      expectedMime: intentSnapshot.contentType || undefined,
+      definitiveKey
+    });
+  } catch (err) {
+    console.error('[admin] falha ao promover objeto:', err.code || err.message);
+    return sendJson(res, 502, { ok: false, error: 'Falha ao promover upload. Reprocesse via reconciliação.' });
+  }
+
   let publicUrl = null;
-  try { publicUrl = getPublicUrl(definitiveKey); } catch { /* pode ser private */ }
+  try { publicUrl = getPublicUrl(definitiveKey); } catch { /* private */ }
 
   try {
     await audit('upload.confirm', { actor: session.user, metadata: { kind, path: definitiveKey, intentionId } });
   } catch (e) { console.warn('[admin] audit upload.confirm falhou:', e.message); }
 
   return sendJson(res, 200, { ok: true, url: publicUrl, path: definitiveKey });
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECONCILIAÇÃO — on-demand
+// ─────────────────────────────────────────────────────────────
+async function handleReconcileUploads(req, res, session) {
+  const cutoffIso = new Date(Date.now() - RECONCILE_WINDOW_MS).toISOString();
+
+  let intents;
+  try {
+    intents = await db.select({
+      id: uploadIntents.id,
+      kind: uploadIntents.kind,
+      path: uploadIntents.path,
+      contentType: uploadIntents.contentType,
+      sizeLimit: uploadIntents.sizeLimit,
+      consumedAt: uploadIntents.consumedAt
+    }).from(uploadIntents)
+      .where(and(
+        isNull(uploadIntents.consumedAt) === false ? sql`TRUE` : sql`TRUE`,
+        sql`${uploadIntents.consumedAt} IS NOT NULL`,
+        sql`${uploadIntents.consumedAt} > ${cutoffIso}`,
+        eq(uploadIntents.adminUser, session.user)
+      ))
+      .orderBy(desc(uploadIntents.consumedAt))
+      .limit(RECONCILE_MAX_ITEMS);
+  } catch (err) {
+    console.error('[admin] reconcile: falha ao consultar intenções:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Falha ao consultar intenções.' });
+  }
+
+  const results = [];
+
+  for (const it of intents) {
+    const item = { intentionId: it.id, kind: it.kind, path: it.path, action: 'skipped', reason: null };
+
+    // Localizar a faixa que aponta para o definitivo gerado a partir desta intenção.
+    // Como o caminho definitivo é determinístico (gerado no confirm a partir de
+    // path+kind), reconstruímos o candidato e procuramos.
+    let candidateDefinitive = null;
+    try {
+      const ext = String(it.path).split('.').pop();
+      candidateDefinitive = buildDefinitivePath(it.kind, ext);
+    } catch (e) {
+      item.reason = 'invalid_kind_or_ext';
+      results.push(item);
+      continue;
+    }
+
+    // A faixa pode ter sido re-apontada; então checamos por path OU o candidato.
+    let track = null;
+    try {
+      const rows = await db.select({ id: tracks.id, fullPath: tracks.fullPath, previewPath: tracks.previewPath })
+        .from(tracks)
+        .where(it.kind === 'audio-full'
+          ? eq(tracks.fullPath, candidateDefinitive)
+          : eq(tracks.previewPath, candidateDefinitive))
+        .limit(1);
+      track = rows[0] || null;
+    } catch (e) {
+      item.reason = 'db_error';
+      results.push(item);
+      continue;
+    }
+
+    if (!track) {
+      item.reason = 'no_track_ref';
+      results.push(item);
+      continue;
+    }
+
+    const currentPath = it.kind === 'audio-full' ? track.fullPath : track.previewPath;
+
+    // Se o definitivo já existe, nada a fazer.
+    let definitiveMeta = null;
+    try { definitiveMeta = await getObjectMetadata(currentPath); }
+    catch (e) { item.reason = 'storage_error'; results.push(item); continue; }
+
+    if (definitiveMeta) {
+      item.action = 'already_ok';
+      results.push(item);
+      continue;
+    }
+
+    // Definitivo ausente. Quarentena ainda existe?
+    let quarantineMeta = null;
+    try { quarantineMeta = await getObjectMetadata(it.path); }
+    catch (e) { item.reason = 'storage_error'; results.push(item); continue; }
+
+    if (!quarantineMeta) {
+      item.reason = 'quarantine_expired';
+      results.push(item);
+      continue;
+    }
+
+    // Re-promover para o caminho que a faixa já referencia.
+    try {
+      await promoteFromQuarantine(it.path, it.kind, {
+        expectedSize: it.sizeLimit ? Number(it.sizeLimit) : undefined,
+        expectedMime: it.contentType || undefined,
+        definitiveKey: currentPath
+      });
+      item.action = 'repromoted';
+      results.push(item);
+
+      try {
+        await audit('upload.reconcile', {
+          actor: session.user,
+          target: it.id,
+          metadata: { kind: it.kind, path: currentPath }
+        });
+      } catch (e) { console.warn('[admin] audit upload.reconcile falhou:', e.message); }
+    } catch (err) {
+      item.reason = err.code || 'promote_failed';
+      results.push(item);
+    }
+  }
+
+  return sendJson(res, 200, {
+    ok: true,
+    scanned: intents.length,
+    results
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -660,16 +837,21 @@ async function handleGetUsers(req, res) {
   });
 }
 
+function daysFromPlan(planRow) {
+  const unit = String(planRow.intervalUnit || '').toLowerCase();
+  const count = Number(planRow.intervalCount) || 1;
+  if (unit === 'day') return count;
+  if (unit === 'week') return count * 7;
+  if (unit === 'month') return count * 30;
+  if (unit === 'year') return count * 365;
+  return 30;
+}
+
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
   if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
-
-  const planDays = plan === 'anual' ? 365
-    : plan === 'trimestral' ? 90
-    : plan === 'semestral' ? 180
-    : 30;
 
   try {
     await db.transaction(async (tx) => {
@@ -678,21 +860,24 @@ async function handlePatchUser(req, res, session) {
 
       let planRow = null;
       if (plan !== 'free') {
-        const rows = await tx.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
+        const rows = await tx.select({
+          id: plans.id, intervalUnit: plans.intervalUnit, intervalCount: plans.intervalCount
+        }).from(plans).where(eq(plans.name, plan)).limit(1);
         planRow = rows[0] || null;
         if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
       }
 
-      await tx.update(schema.subscriptions)
+      await tx.update(subscriptions)
         .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
-        .where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE','PENDING'])));
+        .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE','PENDING'])));
 
       if (planRow) {
-        await tx.insert(schema.subscriptions).values({
+        const planDays = daysFromPlan(planRow);
+        await tx.insert(subscriptions).values({
           id: crypto.randomUUID(),
           userId,
           planId: planRow.id,
-          externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          externalSubscriptionId: `manual_${crypto.randomUUID()}`,
           status: 'ACTIVE',
           currentPeriodStart: new Date().toISOString(),
           currentPeriodEnd: addDaysIso(planDays),
@@ -716,7 +901,6 @@ async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  // P1.3: usa identidade admin corretamente
   try {
     const adminIdentity = getAdminIdentity();
     const [adminUser] = await db.select({ id: users.id }).from(users)
@@ -730,7 +914,7 @@ async function handleDeleteUser(req, res, session) {
   }
 
   try {
-    const deleted = await db.delete(users).where(eq(users.id, userId)).returning();
+    const deleted = await db.delete(users).where(eq(users.id, userId)).returning({ id: users.id });
     if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
 
     try { await audit('user.delete', { actor: session.user, target: userId, success: true }); }
@@ -780,7 +964,8 @@ async function handleCreateAlbum(req, res, session) {
       const [artist] = await tx.select({ id: artists.id }).from(artists).limit(1);
       if (!artist) { const err = new Error('ARTIST_NOT_FOUND'); err.code = 'ARTIST_NOT_FOUND'; throw err; }
 
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${slug}))`);
+      // Lock separado do lock de albumId usado em delete/reorder.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'album:create:' + slug}))`);
 
       const [dup] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.slug, slug)).limit(1);
       if (dup) { const err = new Error('SLUG_CONFLICT'); err.code = 'SLUG_CONFLICT'; throw err; }
@@ -825,7 +1010,6 @@ async function handleUpdateAlbum(req, res, session) {
     patch.year = y;
   }
 
-  // Não sobrescrever silenciosamente: se ambos vierem, rejeita.
   if (body.coverUrl !== undefined && body.cover_image !== undefined) {
     return sendJson(res, 400, { ok: false, error: 'Use coverUrl ou cover_image, não ambos.' });
   }
@@ -864,7 +1048,6 @@ async function handleDeleteAlbum(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
-      // P1.3: mesmo advisory lock da reordenação/criação
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
 
       const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
@@ -887,7 +1070,6 @@ async function handleDeleteAlbum(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 // FAIXAS
 // ─────────────────────────────────────────────────────────────
-// P0.3: validação estrita. undefined/null passam; qualquer outro tipo é rejeitado.
 function validateDuration(v) {
   if (v === undefined || v === null) return true;
   if (typeof v !== 'string') return false;
@@ -896,17 +1078,13 @@ function validateDuration(v) {
   return /^(\d{1,3}):([0-5]\d)$/.test(s);
 }
 
-function normalizeDuration(v) {
+function durationToSeconds(v) {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
-  return s || null;
-}
-
-function validatePriceCents(v) {
-  if (v === undefined) return { ok: true, value: 0 };
-  const n = Number(v);
-  if (!Number.isSafeInteger(n) || n < 0) return { ok: false };
-  return { ok: true, value: n };
+  if (!s) return null;
+  const m = s.match(/^(\d{1,3}):([0-5]\d)$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
 }
 
 async function handleListTracks(req, res) {
@@ -925,9 +1103,6 @@ async function handleCreateTrack(req, res, session) {
   if (!validateDuration(body.duration)) {
     return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
   }
-
-  const priceCheck = validatePriceCents(body.priceCents);
-  if (!priceCheck.ok) return sendJson(res, 400, { ok: false, error: 'Preço inválido.' });
 
   const slug = createSlug(title);
   if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
@@ -950,8 +1125,7 @@ async function handleCreateTrack(req, res, session) {
         artistId: album.artistId,
         title,
         slug,
-        duration: normalizeDuration(body.duration),
-        priceCents: priceCheck.value,
+        durationSeconds: durationToSeconds(body.duration),
         trackNumber: nextNumber,
         status: 'DRAFT'
       }).returning();
@@ -967,6 +1141,18 @@ async function handleCreateTrack(req, res, session) {
   catch (e) { console.warn('[admin] audit track.create falhou:', e.message); }
 
   return sendJson(res, 200, { ok: true, track: created });
+}
+
+async function assertPathFromConsumedIntent(path, adminUser) {
+  const [row] = await db.select({ id: uploadIntents.id })
+    .from(uploadIntents)
+    .where(and(
+      eq(uploadIntents.path, path),
+      eq(uploadIntents.adminUser, adminUser),
+      sql`${uploadIntents.consumedAt} IS NOT NULL`
+    ))
+    .limit(1);
+  return Boolean(row);
 }
 
 async function handleUpdateTrack(req, res, session) {
@@ -988,13 +1174,7 @@ async function handleUpdateTrack(req, res, session) {
     if (!validateDuration(body.duration)) {
       return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
     }
-    patch.duration = normalizeDuration(body.duration);
-  }
-
-  if (body.priceCents !== undefined) {
-    const p = Number(body.priceCents);
-    if (!Number.isSafeInteger(p) || p < 0) return sendJson(res, 400, { ok: false, error: 'Preço inválido.' });
-    patch.priceCents = p;
+    patch.durationSeconds = durationToSeconds(body.duration);
   }
 
   if (body.status !== undefined) {
@@ -1008,35 +1188,53 @@ async function handleUpdateTrack(req, res, session) {
     if (body.status === undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
   }
 
-  // Validação de paths
+  // fullPath/previewPath: só aceita se o path veio de upload_intent consumida
+  // do mesmo admin. Isso fecha a porta dos fundos sem quebrar o fluxo atual.
   const fullP = body.fullPath !== undefined ? body.fullPath : body.full_path;
   const previewP = body.previewPath !== undefined ? body.previewPath : body.preview_path;
 
-  try {
-    if (fullP !== undefined) {
-      const p = String(fullP).trim();
-      if (!p) return sendJson(res, 400, { ok: false, error: 'fullPath vazio.' });
-      let kind;
-      try { kind = inferKindFromKey(p); } catch { return sendJson(res, 400, { ok: false, error: 'fullPath com formato inválido.' }); }
-      if (kind !== 'audio-full') return sendJson(res, 400, { ok: false, error: 'fullPath deve ser audio-full.' });
-      let exists;
-      try { exists = await getObjectMetadata(p); } catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
-      if (!exists) return sendJson(res, 400, { ok: false, error: 'fullPath inválido no Storage.' });
-      patch.fullPath = p; patch.streamKey = p;
+  if (fullP !== undefined) {
+    const p = String(fullP).trim();
+    if (!p) return sendJson(res, 400, { ok: false, error: 'fullPath vazio.' });
+    let kind;
+    try { kind = inferKindFromKey(p); }
+    catch { return sendJson(res, 400, { ok: false, error: 'fullPath com formato inválido.' }); }
+    if (kind !== 'audio-full') return sendJson(res, 400, { ok: false, error: 'fullPath deve ser audio-full.' });
+
+    const allowed = await assertPathFromConsumedIntent(p, session.user);
+    if (!allowed) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'fullPath não corresponde a um upload confirmado. Use upload-confirm.'
+      });
     }
-    if (previewP !== undefined) {
-      const p = String(previewP).trim();
-      if (!p) return sendJson(res, 400, { ok: false, error: 'previewPath vazio.' });
-      let kind;
-      try { kind = inferKindFromKey(p); } catch { return sendJson(res, 400, { ok: false, error: 'previewPath com formato inválido.' }); }
-      if (kind !== 'audio-preview') return sendJson(res, 400, { ok: false, error: 'previewPath deve ser audio-preview.' });
-      let exists;
-      try { exists = await getObjectMetadata(p); } catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
-      if (!exists) return sendJson(res, 400, { ok: false, error: 'previewPath inválido no Storage.' });
-      patch.previewPath = p; patch.previewKey = p;
+    let exists;
+    try { exists = await getObjectMetadata(p); }
+    catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
+    if (!exists) return sendJson(res, 400, { ok: false, error: 'fullPath não existe no Storage.' });
+    patch.fullPath = p; patch.streamKey = p;
+  }
+
+  if (previewP !== undefined) {
+    const p = String(previewP).trim();
+    if (!p) return sendJson(res, 400, { ok: false, error: 'previewPath vazio.' });
+    let kind;
+    try { kind = inferKindFromKey(p); }
+    catch { return sendJson(res, 400, { ok: false, error: 'previewPath com formato inválido.' }); }
+    if (kind !== 'audio-preview') return sendJson(res, 400, { ok: false, error: 'previewPath deve ser audio-preview.' });
+
+    const allowed = await assertPathFromConsumedIntent(p, session.user);
+    if (!allowed) {
+      return sendJson(res, 400, {
+        ok: false,
+        error: 'previewPath não corresponde a um upload confirmado. Use upload-confirm.'
+      });
     }
-  } catch (e) {
-    return sendJson(res, 502, { ok: false, error: 'Erro ao validar Storage.' });
+    let exists;
+    try { exists = await getObjectMetadata(p); }
+    catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
+    if (!exists) return sendJson(res, 400, { ok: false, error: 'previewPath não existe no Storage.' });
+    patch.previewPath = p; patch.previewKey = p;
   }
 
   if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
@@ -1057,22 +1255,19 @@ async function handleDeleteTrack(req, res, session) {
   const trackId = String(req.query.id || '');
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  // P1.3: advisory lock no albumId da faixa para sincronizar com reorder/delete/album
-  let albumId = null;
-  try {
-    const [row] = await db.select({ albumId: tracks.albumId }).from(tracks).where(eq(tracks.id, trackId)).limit(1);
-    albumId = row?.albumId || null;
-  } catch {}
-
   try {
     await db.transaction(async (tx) => {
-      if (albumId) {
-        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
+      // Lock adquirido DENTRO da transação, com SELECT ... FOR UPDATE.
+      const [row] = await tx.select({ albumId: tracks.albumId })
+        .from(tracks).where(eq(tracks.id, trackId)).for('update');
+      if (!row) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
+
+      if (row.albumId) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.albumId}))`);
       }
-      const deleted = await tx.delete(tracks).where(eq(tracks.id, trackId)).returning();
-      if (!deleted.length) {
-        const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
-      }
+
+      const deleted = await tx.delete(tracks).where(eq(tracks.id, trackId)).returning({ id: tracks.id });
+      if (!deleted.length) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
     });
   } catch (err) {
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
@@ -1124,11 +1319,10 @@ async function handleReorderTracks(req, res, session) {
         }
       }
 
-      // Bloqueia linhas antes de mexer
       await tx.select({ id: tracks.id }).from(tracks).where(eq(tracks.albumId, albumId)).for('update');
 
-      // Hack de unique constraint: mover todos para negativos
-      await tx.update(tracks).set({ trackNumber: sql`${tracks.trackNumber} * -1` }).where(eq(tracks.albumId, albumId));
+      // Sem hack de trackNumber negativo: o schema não tem unique em
+      // (album_id, track_number), então UPDATEs diretos são seguros.
       for (const item of order) {
         await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
       }
@@ -1221,7 +1415,6 @@ async function handleDownloadAlbum(req, res, session) {
 
   const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
 
-  // Concorrência limitada: 3 por vez
   const results = [];
   const queue = rows.slice();
   const CONCURRENCY = 3;
@@ -1251,7 +1444,6 @@ async function handleDownloadAlbum(req, res, session) {
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-  // Preserva ordem original
   const byId = new Map(results.map(r => [r.id, r]));
   const ordered = rows.map(r => byId.get(r.id)).filter(Boolean);
 
@@ -1288,12 +1480,25 @@ async function handleGetAudit(req, res) {
 }
 
 async function handleGenHash(req, res, session) {
-  // Orientação compatível com verifyScrypt (não sha256)
-  return sendJson(res, 200, {
-    ok: true,
-    message:
-      'Gere o hash com scrypt no terminal: node -e "const c=require(\'crypto\');const s=c.randomBytes(16).toString(\'hex\');c.scrypt(\'sua_senha\', s, 64, (e,k)=>{if(e)throw e;console.log(s+\':\'+k.toString(\'hex\'))})"'
-  });
+  const body = parseBody(req);
+  const password = body.password !== undefined ? String(body.password) : '';
+  if (!password) {
+    return sendJson(res, 400, {
+      ok: false,
+      error: 'Envie { "password": "..." } no corpo para gerar o hash.'
+    });
+  }
+  if (password.length < 8 || password.length > 200) {
+    return sendJson(res, 400, { ok: false, error: 'Senha deve ter entre 8 e 200 caracteres.' });
+  }
+  try {
+    const hash = await generateScryptHash(password);
+    try { await audit('admin.gen_hash', { actor: session.user }); } catch {}
+    return sendJson(res, 200, { ok: true, hash });
+  } catch (err) {
+    console.error('[admin] gen-hash falhou:', err.message);
+    return sendJson(res, 500, { ok: false, error: 'Falha ao gerar hash.' });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1330,7 +1535,7 @@ function sanitizeFilename(s) {
 }
 
 function isUuid(s) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(s || ''));
 }
 
 function addDaysIso(days) {
