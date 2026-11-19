@@ -1,9 +1,12 @@
 /* ============================================================
-   js/admin/uploads.js — v10.17
+   js/admin/uploads.js — v11.0
    ------------------------------------------------------------
-   Correções da auditoria:
-   1. filterExtraData() agora rejeita null explicitamente com TypeError
-   2. Matriz local mantida como fast-fail de UX, mas backend é a fonte da verdade
+   Compatível com backend v3.5 (quarentena + promoção)
+   Mudanças:
+   - Frontend NÃO exige confirm.path === signRes.path
+     (backend agora promove de _quarantine/ para caminho definitivo)
+   - Frontend valida que confirm.path é um caminho de storage válido
+   - Mantém retry, cancelamento e progresso
    ============================================================ */
 
 import { apiFetch, buildUrl } from './api.js';
@@ -51,7 +54,6 @@ const PROGRESS_THROTTLE_PCT = 10;
 const MAX_IMAGE_PIXELS = 20_000_000;
 const LOAD_IMAGE_TIMEOUT_MS = 10_000;
 
-// Matriz local para fast-fail de UX (Backend é a fonte da verdade via ALLOWED_MEDIA)
 const ALLOWED_MEDIA_LOCAL = {
   'image': { exts: ['jpg','jpeg','png','webp','gif','avif'], mimes: ['image/jpeg','image/png','image/webp','image/gif','image/avif'], maxBytes: 10 * 1024 * 1024 },
   'audio-preview': { exts: ['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff'], mimes: ['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/wav','audio/x-wav','audio/flac','audio/aiff','audio/x-aiff'], maxBytes: 50 * 1024 * 1024 },
@@ -76,7 +78,6 @@ function isPlainObject(value) {
 
 function normalizeId(value, fieldName) {
   if (value === undefined) return undefined;
-  // Correção 2.1: Rejeitar null explicitamente
   if (value === null) throw new TypeError(`${fieldName} não pode ser null.`);
   if (typeof value === 'string') {
     const id = value.trim();
@@ -92,7 +93,6 @@ function normalizeId(value, fieldName) {
 
 function filterExtraData(data) {
   if (data === undefined) return {};
-  // Correção 2.1: Lançar erro se for null ou não for objeto simples
   if (data === null || !isPlainObject(data)) {
     throw new TypeError('extraData deve ser um objeto simples ou undefined.');
   }
@@ -209,12 +209,14 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
   await putFileXHRWithRetry(signRes.uploadUrl, file, contentType, onProgress, signal);
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
 
+  // Correção v11.0: não exige mais confirm.path === signRes.path.
+  // O backend promove de quarentena e retorna um novo caminho definitivo.
   const confirmBody = { ...filterExtraData(extraData), kind, path: signRes.path };
   const confirm = await apiFetch('upload-confirm', { method: 'POST', body: confirmBody, signal });
 
   if (!confirm?.ok) throw new Error(confirm?.error || 'Falha ao confirmar upload.');
   if (typeof confirm.path !== 'string' || !confirm.path) throw new Error('Backend não retornou o caminho confirmado.');
-  if (confirm.path !== signRes.path) throw new Error('O caminho confirmado não corresponde ao enviado.');
+  if (!isValidStoragePath(confirm.path)) throw new Error('Backend retornou caminho inválido.');
 
   if (typeof onProgress === 'function') {
     try { onProgress(100); } catch (err) { console.warn('[upload] callback final error:', err); }
