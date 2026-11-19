@@ -1,7 +1,7 @@
 'use strict';
 
 /* ============================================================
-   api/_storage.js — Cloudflare R2 via S3 API (v4)
+   api/_storage.js — Cloudflare R2 via S3 API (v4 — final)
    ------------------------------------------------------------
    Correções aplicadas (auditoria v3.4 + revisão v4):
    P0
@@ -10,7 +10,9 @@
    3. uploadObject() restrito a DIRECT_UPLOAD_KINDS (image)
    4. promoteFromQuarantine() valida kind de origem, extensão,
       MIME/tamanho esperados, ETag (CopySourceIfMatch) e
-      metadados do destino
+      metadados do destino; aceita opts.definitiveKey para
+      que o chamador (admin.js) grave o mesmo path na faixa
+      dentro da transação ANTES da promoção.
    P1
    5. validatePublicUrl() valida host/porta/path
    6. prefixes normalizados na leitura
@@ -128,7 +130,7 @@ function getStorageConfig() {
     throw new Error('[storage] Buckets público e privado devem ser diferentes.');
   }
 
-  // Prefixos normalizados JÁ na leitura — a validação e o cache usam o mesmo valor.
+  // Prefixos normalizados JÁ na leitura — validação e cache usam o mesmo valor.
   const prefixes = {
     'image': normalizePrefix(process.env.R2_PREFIX_IMAGE, 'images'),
     'audio-preview': normalizePrefix(process.env.R2_PREFIX_PREVIEW, 'preview'),
@@ -509,12 +511,17 @@ async function getPlaybackUrl(key) {
  * Copia objeto de _quarantine/<kind>/<arquivo>.<ext> para caminho
  * definitivo do MESMO kind, validando extensão, MIME e tamanho.
  *
- * expectedSize/expectedMime são opcionais, mas quando fornecidos são
- * comparados com os metadados da origem ANTES da cópia.
+ * opts.definitiveKey (opcional): quando fornecido, usa esse caminho
+ * em vez de gerar um novo. O admin.js gera o caminho DENTRO da
+ * transação e o passa aqui, garantindo que a faixa aponte para o
+ * mesmo path que a promoção vai gravar.
  *
- * Usa CopySourceIfMatch com o ETag lido da origem para reduzir a janela
- * de substituição do objeto de quarentena entre o HeadObject e o CopyObject.
- * Isso NÃO substitui inspeção de conteúdo (FFprobe/reprocessamento).
+ * expectedSize/expectedMime (opcionais): comparados com os metadados
+ * da origem ANTES da cópia.
+ *
+ * Usa CopySourceIfMatch com o ETag lido da origem para reduzir a
+ * janela de substituição entre o HeadObject e o CopyObject. Isso
+ * NÃO substitui inspeção de conteúdo (FFprobe/reprocessamento).
  */
 async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
   if (!isQuarantinePath(quarantineKey)) {
@@ -533,7 +540,27 @@ async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
 
   const ext = validateExtForKind(resolved.kind, quarantineKey);
 
-  const expectedSize = opts.expectedSize !== undefined ? Number(opts.expectedSize) : null;
+  // Caminho definitivo: explícito (vindo do admin.js) ou gerado aqui.
+  let definitiveKey;
+  if (opts.definitiveKey !== undefined && opts.definitiveKey !== null) {
+    const candidate = String(opts.definitiveKey);
+    validateObjectKey(candidate);
+    if (isQuarantinePath(candidate)) {
+      throw new Error('definitiveKey não pode ser caminho de quarentena.');
+    }
+    const k = inferKindFromKey(candidate);
+    if (k !== resolved.kind) {
+      throw new Error('definitiveKey não corresponde ao kind informado.');
+    }
+    validateExtForKind(resolved.kind, candidate);
+    definitiveKey = candidate;
+  } else {
+    definitiveKey = buildDefinitivePath(resolved.kind, ext);
+  }
+
+  const expectedSize = opts.expectedSize !== undefined && opts.expectedSize !== null
+    ? Number(opts.expectedSize)
+    : null;
   const expectedMime = opts.expectedMime
     ? String(opts.expectedMime).split(';')[0].trim().toLowerCase()
     : null;
@@ -583,10 +610,7 @@ async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
     throw err;
   }
 
-  // 2) Caminho definitivo (valida kind/ext novamente dentro da função)
-  const definitiveKey = buildDefinitivePath(resolved.kind, ext);
-
-  // 3) CopyObject condicional
+  // 2) CopyObject condicional
   const copyParams = {
     Bucket: bucket,
     Key: definitiveKey,
@@ -606,7 +630,7 @@ async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
     throw err;
   }
 
-  // 4) HeadObject no destino e conferência
+  // 3) HeadObject no destino e conferência
   const destMeta = await getObjectMetadata(definitiveKey);
   if (!destMeta || destMeta.contentLength <= 0) {
     const err = new Error('Falha ao promover objeto — definitivo vazio.');
@@ -627,7 +651,7 @@ async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
     throw err;
   }
 
-  // 5) Remover temporário
+  // 4) Remover temporário
   try {
     await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: quarantineKey }));
   } catch (err) {
