@@ -1,12 +1,13 @@
 'use strict';
 
 /* ============================================================
-   api/_lib.js — Módulos internos consolidados (v10 — FINAL)
+   api/_lib.js — Módulos internos consolidados (v11)
    ------------------------------------------------------------
    - getAuthUser valida sv (session_version) e sid (sessão ativa)
-   - hashEmail falha em produção sem AUDIT_HASH_SECRET
-   - checkOrigin aceita requests same-origin sem Origin/Referer
-     (proteção CSRF via SameSite=Lax/Strict nos cookies)
+   - hashEmail normaliza trim + lowercase
+   - checkOrigin rejeita métodos mutantes sem Origin/Referer
+     (não confia em SameSite como substituto universal)
+   - ALLOW_INSECURE_COOKIE só tem efeito fora de produção
    ============================================================ */
 
 const crypto = require('crypto');
@@ -27,13 +28,17 @@ const ACCESS_TTL = '15m';
 const CLOCK_TOLERANCE_SEC = 5;
 
 // ─── Cookies ────────────────────────────────────────────────
-const AUTH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true'
-  ? '__Host-jm_auth_access'
-  : 'jm_auth_access';
+// ALLOW_INSECURE_COOKIE só é considerado fora de produção.
+const ALLOW_INSECURE_COOKIE =
+  !IS_PROD && process.env.ALLOW_INSECURE_COOKIE === 'true';
 
-const REFRESH_COOKIE = IS_PROD && process.env.ALLOW_INSECURE_COOKIE !== 'true'
-  ? '__Secure-jm_auth_refresh'
-  : 'jm_auth_refresh';
+const AUTH_COOKIE = ALLOW_INSECURE_COOKIE
+  ? 'jm_auth_access'
+  : '__Host-jm_auth_access';
+
+const REFRESH_COOKIE = ALLOW_INSECURE_COOKIE
+  ? 'jm_auth_refresh'
+  : '__Secure-jm_auth_refresh';
 
 const AUTH_COOKIE_PATH = '/';
 const REFRESH_COOKIE_PATH = '/api/auth';
@@ -177,6 +182,8 @@ function clientIp(req) {
   if (!req || typeof req !== 'object') return '';
   const headers = req.headers || {};
 
+  // Cabeçalhos de proxy só são confiáveis se a infraestrutura os define.
+  // Documentar a topologia; não aceitar tráfego direto que possa forjá-los.
   const trustedProxyHeader = headers['x-real-ip'] || headers['x-vercel-forwarded-for'];
   if (trustedProxyHeader) {
     const candidate = String(trustedProxyHeader).split(',')[0].trim();
@@ -214,7 +221,10 @@ function buildCookie(name, value, maxAge, opts = {}) {
     'SameSite=' + sameSite,
   ];
 
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_INSECURE_COOKIE !== 'true') {
+  // Em produção o Secure é sempre aplicado. A exceção só existe em dev.
+  if (IS_PROD) {
+    parts.push('Secure');
+  } else if (!ALLOW_INSECURE_COOKIE) {
     parts.push('Secure');
   }
 
@@ -314,7 +324,8 @@ async function getAuthUser(req) {
     payload.iat > now + CLOCK_TOLERANCE_SEC ||
     now - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC ||
     payload.exp - payload.iat > ACCESS_TTL_SECONDS + CLOCK_TOLERANCE_SEC ||
-    typeof payload.sv !== 'number' ||
+    !Number.isSafeInteger(payload.sv) ||
+    payload.sv < 0 ||
     typeof payload.sid !== 'string' ||
     !UUID_RE.test(payload.sid)
   ) {
@@ -334,6 +345,7 @@ async function getAuthUser(req) {
     }).from(users).where(eq(users.id, payload.id)).limit(1);
 
     if (!dbUser) return null;
+    if (!Number.isSafeInteger(Number(dbUser.sessionVersion))) return null;
     if (Number(dbUser.sessionVersion) !== payload.sv) return null;
 
     const nowIso = new Date().toISOString();
@@ -405,10 +417,10 @@ async function checkAndIncrement(bucket, max, windowMs = 15 * 60 * 1000, options
   if (typeof bucket !== 'string' || !bucket.trim() || bucket.length > 200) {
     return { limited: true, retryAfterMs: 1000, reason: 'invalid_input' };
   }
-  if (!Number.isInteger(max) || max < 1) {
+  if (!Number.isSafeInteger(max) || max < 1) {
     return { limited: true, retryAfterMs: 1000, reason: 'internal_error' };
   }
-  if (!Number.isFinite(windowMs) || windowMs < 1000) {
+  if (!Number.isFinite(windowMs) || windowMs < 1000 || windowMs > 24 * 3600 * 1000) {
     return { limited: true, retryAfterMs: 1000, reason: 'internal_error' };
   }
 
@@ -514,7 +526,7 @@ function resolveAuditTable(event, override) {
 }
 
 function hashEmail(email) {
-  const value = String(email).toLowerCase();
+  const value = String(email).trim().toLowerCase();
   const secret = AUDIT_HASH_SECRET();
   if (!secret) {
     if (IS_PROD) {
@@ -718,7 +730,10 @@ async function invalidatePlanCache(userId) {
   try { await redis.del(`plan:${userId}`); } catch {}
 }
 
-// ─── CSRF (aceita same-origin sem Origin/Referer) ─────────
+// ─── CSRF ─────────────────────────────────────────────────
+// Métodos mutantes exigem Origin ou Referer válido. A ausência de ambos
+// não é tratada como same-origin. Para clientes não-navegador, use um
+// token CSRF ou Authorization: Bearer validado no handler.
 function checkOrigin(req) {
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
@@ -728,14 +743,12 @@ function checkOrigin(req) {
   const rawOrigin = req.headers?.origin;
   const referer = req.headers?.referer;
 
-  // 1) Origin presente → precisa estar em ALLOWED_ORIGINS
   if (rawOrigin) {
     const origin = normalizeOrigin(rawOrigin);
     if (!origin) return false;
     return ALLOWED_ORIGINS.has(origin);
   }
 
-  // 2) Referer presente → precisa bater com ALLOWED_ORIGINS
   if (referer) {
     try {
       const refOrigin = new URL(String(referer).trim()).origin;
@@ -744,10 +757,7 @@ function checkOrigin(req) {
     return false;
   }
 
-  // 3) Origin e Referer ausentes = request same-origin do navegador
-  // (o navegador só envia Origin em cross-origin).
-  // CSRF permanece protegido por SameSite=Lax/Strict nos cookies.
-  return true;
+  return false;
 }
 
 function validatedOrigin(req) {
@@ -761,6 +771,8 @@ function validatedOrigin(req) {
 
 // ─── HMAC ─────────────────────────────────────────────────
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+const MAX_HMAC_TOKEN_LEN = 4096;
+const MAX_HMAC_AGE_MS = 24 * 3600 * 1000; // teto operacional
 
 function signHmac(payload, secret) {
   if (typeof secret !== 'string' || secret.length < 16) {
@@ -779,9 +791,10 @@ function signHmac(payload, secret) {
 }
 
 function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
-  if (typeof token !== 'string' || token.length > 4096) return null;
+  if (typeof token !== 'string' || token.length > MAX_HMAC_TOKEN_LEN) return null;
   if (typeof secret !== 'string' || secret.length < 16) return null;
   if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) return null;
+  if (maxAgeMs > MAX_HMAC_AGE_MS) return null;
 
   const parts = token.split('.');
   if (parts.length !== 2) return null;
@@ -815,6 +828,24 @@ function verifyHmac(token, secret, maxAgeMs = 4 * 3600 * 1000) {
 
 // ─── Senha ────────────────────────────────────────────────
 const SCRYPT_OPTS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const SCRYPT_KEYLEN = 64;
+
+function generateScryptHash(password) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (typeof password !== 'string' || password.length < 1 || password.length > 200) {
+        return reject(new Error('Senha inválida.'));
+      }
+      const salt = crypto.randomBytes(16);
+      crypto.scrypt(password, salt, SCRYPT_KEYLEN, SCRYPT_OPTS, (err, derived) => {
+        if (err) return reject(err);
+        resolve(`scrypt$${salt.toString('hex')}$${derived.toString('hex')}`);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
 
 function verifyScrypt(password, storedHash) {
   return new Promise((resolve) => {
@@ -858,5 +889,5 @@ module.exports = {
   getPlanForUser, getPlanForUserDetailed, invalidatePlanCache,
   checkOrigin, validatedOrigin,
   signHmac, verifyHmac,
-  verifyScrypt, timingSafeEq,
+  generateScryptHash, verifyScrypt, timingSafeEq,
 };
