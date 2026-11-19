@@ -1,5 +1,18 @@
 /* ============================================================
-   js/admin/editors/albums.js — v8 (Aderente ao Backend & Schema)
+   js/admin/editors/albums.js — v9 (Audited & Corrected)
+   ============================================================
+   Correções da auditoria:
+   1. Miniplayer robusto com URLs públicas do R2 (não depende de download-url)
+   2. Objeto Audio único persistente com controle de concorrência (seq)
+   3. Estados visuais: loading | playing | paused | error | ended
+   4. Restauração de posição após loadedmetadata (não imediatamente)
+   5. Validação de duração mm:ss, limites de preço e tipo de upload
+   6. Preview de áudio dentro do modal de edição
+   7. Confirmação ao substituir áudio já cadastrado
+   8. Tratamento de eventos (waiting, stalled, canplay, abort, error)
+   9. Duração real detectada pelo navegador no modal
+   10. Limpeza de estado ao excluir álbum (expandido + tracks + player)
+   11. Rebind correto após falha de drag-drop
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -7,7 +20,17 @@ import { toast } from '../ui/toast.js';
 import { esc, escAttr } from '../ui/dom.js';
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
-import { safeMediaUrl } from '../../utils.js'; // ← novo (fallback de URL direta);
+
+// ─────────────────────────────────────────────────────────────
+// Configuração (ajuste conforme seu bucket R2)
+// ─────────────────────────────────────────────────────────────
+const R2_PUBLIC_BASE = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+const MAX_TRACK_PRICE_CENTS = 999900; // R$ 9.999,99
+const MAX_AUDIO_FILE_SIZE = 200 * 1024 * 1024; // 200 MB
+const ALLOWED_AUDIO_TYPES = [
+  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
+  'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/flac', 'audio/webm'
+];
 
 const State = {
   albums: [],
@@ -15,201 +38,25 @@ const State = {
   expandedAlbumIds: new Set(),
   loading: false,
   error: null,
-  loadReqId: 0 // Para controle de concorrência (Item 12)
+  loadReqId: 0,
+  tracksReqId: new Map() // Item 2: concorrência por álbum
 };
 
 let _dragState = null;
 
 // ─────────────────────────────────────────────────────────────
-// MINI PLAYER DO ADMIN (v9)
+// MINI PLAYER (singleton) — Item 1 da auditoria
 // ─────────────────────────────────────────────────────────────
 const Player = {
   el: null,
   bar: null,
-  current: null,            // { trackId, albumId, title, version }
+  current: null,         // { trackId, albumId, title, version, duration }
   versions: { preview: false, full: false },
-  reqSeq: 0,
-  seeking: false
+  seq: 0,                // controle de concorrência (Item 2)
+  seeking: false,
+  stallTimer: null,
+  pendingRestore: null   // tempo a restaurar após loadedmetadata (Item 3)
 };
-
-function ensurePlayer() {
-  if (Player.el) return;
-  const a = new Audio();
-  a.preload = 'auto';
-  a.addEventListener('timeupdate', syncProgress);
-  a.addEventListener('loadedmetadata', syncProgress);
-  a.addEventListener('durationchange', syncProgress);
-  a.addEventListener('play',  () => { setPlayIcon(true);  repaint(); });
-  a.addEventListener('pause', () => { setPlayIcon(false); repaint(); });
-  a.addEventListener('ended', () => { setPlayIcon(false); repaint(); });
-  a.addEventListener('error', () => toast('Não foi possível reproduzir este áudio.', '⚠'));
-  Player.el = a;
-  buildPlayerBar();
-}
-
-function buildPlayerBar() {
-  const bar = document.createElement('div');
-  bar.className = 'admin-player';
-  bar.hidden = true;
-  bar.innerHTML = `
-    <div class="admin-player__cover" aria-hidden="true">♪</div>
-    <div class="admin-player__meta">
-      <div class="admin-player__title">—</div>
-      <div class="admin-player__sub">—</div>
-    </div>
-    <button class="admin-player__play btn btn-ghost btn-sm" type="button" title="Play/Pause">▶</button>
-    <div class="admin-player__progress">
-      <span class="admin-player__cur">0:00</span>
-      <input class="admin-player__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição">
-      <span class="admin-player__dur">0:00</span>
-    </div>
-    <div class="admin-player__versions">
-      <button class="btn btn-ghost btn-sm" data-player-version="preview" type="button">Prévia</button>
-      <button class="btn btn-ghost btn-sm" data-player-version="full" type="button">Completa</button>
-    </div>
-    <div class="admin-player__volume">
-      <button class="admin-player__mute btn btn-ghost btn-sm" type="button" title="Mudo">🔊</button>
-      <input class="admin-player__vol" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
-    </div>
-    <button class="admin-player__close btn btn-ghost btn-sm" type="button" title="Fechar">✕</button>
-  `;
-  document.body.appendChild(bar);
-  Player.bar = bar;
-
-  bar.querySelector('.admin-player__play').addEventListener('click', () => {
-    if (Player.el.paused) Player.el.play().catch(() => {});
-    else Player.el.pause();
-  });
-  bar.querySelector('.admin-player__seek').addEventListener('input', (e) => {
-    Player.seeking = true;
-    bar.querySelector('.admin-player__cur').textContent = fmtTime(Number(e.target.value));
-  });
-  bar.querySelector('.admin-player__seek').addEventListener('change', (e) => {
-    if (Number.isFinite(Number(e.target.value))) Player.el.currentTime = Number(e.target.value);
-    Player.seeking = false;
-  });
-  bar.querySelector('.admin-player__vol').addEventListener('input', (e) => {
-    Player.el.volume = Number(e.target.value); Player.el.muted = false;
-  });
-  bar.querySelector('.admin-player__mute').addEventListener('click', () => { Player.el.muted = !Player.el.muted; });
-  bar.querySelectorAll('[data-player-version]').forEach((b) =>
-    b.addEventListener('click', () => switchVersion(b.dataset.playerVersion)));
-  bar.querySelector('.admin-player__close').addEventListener('click', stopPlayback);
-}
-
-async function getTrackAudioUrl(track, version) {
-  const path = version === 'preview'
-    ? (track.previewPath || track.preview_path)
-    : (track.fullPath || track.full_path);
-
-  if (!path) {
-    throw new Error(version === 'preview' ? 'Prévia não cadastrada.' : 'Áudio completo não cadastrado.');
-  }
-
-  // 1) URL completa (https://...) → usa direto
-  if (/^https?:\/\//i.test(path)) {
-    console.info('[player] URL completa detectada:', path);
-    return path;
-  }
-
-  // 2) Path relativo (premium/album/track.mp3) → constrói URL pública do R2
-  if (path.includes('.mp3') || path.includes('.wav') || path.includes('.m4a')) {
-    // Ajuste este domínio base conforme seu bucket
-    const r2Base = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
-    const normalizedPath = path.startsWith('/') ? path.slice(1) : path;
-    const directUrl = `${r2Base}/${normalizedPath}`;
-    console.info('[player] URL construída:', directUrl);
-    return directUrl;
-  }
-
-  // 3) Fallback: tenta o endpoint assinado
-  try {
-    const res = await apiFetch('download-url', { method: 'GET', query: { id: String(track.id), type: version } });
-    if (res?.ok && res.url) {
-      console.info('[player] URL assinada:', res.url);
-      return res.url;
-    }
-  } catch (e) {
-    console.warn('[player] download-url falhou:', e?.message);
-  }
-
-  throw new Error('Não foi possível obter URL de reprodução.');
-}
-
-async function playTrack(albumId, trackId, version) {
-  ensurePlayer();
-  const list = State.tracks.get(albumId);
-  const track = Array.isArray(list) ? list.find((t) => String(t.id) === String(trackId)) : null;
-  if (!track) return toast('Faixa não encontrada.', '⚠');
-
-  const hasPreview = !!(track.previewPath || track.preview_path);
-  const hasFull    = !!(track.fullPath || track.full_path);
-  if (!hasPreview && !hasFull) return toast('Esta faixa não tem áudio cadastrado.', '⚠');
-
-  const seq = ++Player.reqSeq;
-  try {
-    const url = await getTrackAudioUrl(track, version);
-    if (seq !== Player.reqSeq) return;
-
-    Player.current  = { trackId: String(trackId), albumId: String(albumId), title: track.title || 'Faixa', version };
-    Player.versions = { preview: hasPreview, full: hasFull };
-    Player.el.src = url;
-    updateBarMeta();
-    Player.bar.hidden = false;
-    await Player.el.play();
-    repaint();
-  } catch (err) {
-    if (seq === Player.reqSeq) toast(err?.message || 'Falha ao reproduzir.', '⚠');
-  }
-}
-
-async function switchVersion(version) {
-  if (!Player.current || Player.current.version === version) return;
-  if (!Player.versions[version]) return toast('Versão indisponível para esta faixa.', '⚠');
-  const { albumId, trackId } = Player.current;
-  const t = Player.el.currentTime;
-  await playTrack(albumId, trackId, version);
-  if (t > 1) try { Player.el.currentTime = t; } catch {}
-}
-
-function stopPlayback() {
-  Player.reqSeq++;
-  if (Player.el) { Player.el.pause(); Player.el.removeAttribute('src'); Player.el.load(); }
-  Player.current = null;
-  if (Player.bar) Player.bar.hidden = true;
-  repaint();
-}
-
-function updateBarMeta() {
-  if (!Player.bar || !Player.current) return;
-  Player.bar.querySelector('.admin-player__title').textContent = Player.current.title;
-  Player.bar.querySelector('.admin-player__sub').textContent =
-    Player.current.version === 'preview' ? 'Prévia' : 'Áudio completo';
-  Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
-    const v = b.dataset.playerVersion;
-    b.disabled = !Player.versions[v];
-    b.classList.toggle('active', Player.current.version === v);
-  });
-}
-
-function setPlayIcon(playing) {
-  const btn = Player.bar?.querySelector('.admin-player__play');
-  if (btn) btn.textContent = playing ? '⏸' : '▶';
-}
-
-function fmtTime(s) {
-  if (!Number.isFinite(s) || s < 0) return '0:00';
-  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-}
-
-function syncProgress() {
-  if (!Player.el || !Player.bar) return;
-  const seek = Player.bar.querySelector('.admin-player__seek');
-  const dur = Number.isFinite(Player.el.duration) ? Player.el.duration : 0;
-  if (!Player.seeking) { seek.max = dur || 0; seek.value = Player.el.currentTime || 0; }
-  Player.bar.querySelector('.admin-player__cur').textContent = fmtTime(Player.el.currentTime);
-  Player.bar.querySelector('.admin-player__dur').textContent = fmtTime(dur);
-}
 
 // ─────────────────────────────────────────────────────────────
 // parseLyricsInput — Versão Estrita (Item 10)
@@ -224,33 +71,72 @@ function parseLyricsInput(raw) {
     try {
       entries = JSON.parse(trimmed);
     } catch {
-      return null; // JSON inválido
+      return null;
     }
     if (!Array.isArray(entries)) return null;
   } else {
-    // Texto puro: distribui 4s por linha
     entries = trimmed.split('\n').map((text, index) => ({ time: index * 4, text }));
   }
 
   const result = [];
   let previousTime = -1;
-
   for (const item of entries) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    
     const time = Number(item.time);
     const text = String(item.text || '').trim();
-
-    // Validações: número finito, >= 0, texto presente, ordem crescente
-    if (!Number.isFinite(time) || time < 0 || !text || time < previousTime) {
-      return null;
-    }
-
+    if (!Number.isFinite(time) || time < 0 || !text || time < previousTime) return null;
     previousTime = time;
     result.push({ time, text });
   }
-
   return result;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Validações — Item 5 da auditoria
+// ─────────────────────────────────────────────────────────────
+function validateDuration(str) {
+  if (!str || typeof str !== 'string') return true; // vazio é permitido
+  const m = /^(\d{1,3}):([0-5]\d)$/.exec(str.trim());
+  return !!m;
+}
+
+function validateAudioFile(file) {
+  if (!file) return 'Selecione um arquivo.';
+  if (!ALLOWED_AUDIO_TYPES.includes(file.type)) {
+    return 'Formato inválido. Use MP3, WAV, FLAC, AAC, OGG ou M4A.';
+  }
+  if (file.size > MAX_AUDIO_FILE_SIZE) {
+    return `Arquivo muito grande (máx ${Math.round(MAX_AUDIO_FILE_SIZE / 1048576)} MB).`;
+  }
+  if (file.size === 0) return 'Arquivo vazio.';
+  return null;
+}
+
+function normalizePrice(cents) {
+  const n = Number(cents);
+  if (!Number.isInteger(n) || n < 0) return null;
+  if (n > MAX_TRACK_PRICE_CENTS) return null;
+  return n;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Resolver URL de áudio do R2 — Item 1 (não usa download-url para tocar)
+// ─────────────────────────────────────────────────────────────
+function getAdminAudioUrl(track, version) {
+  const path = version === 'preview'
+    ? (track.previewPath || track.preview_path)
+    : (track.fullPath || track.full_path);
+
+  if (!path) {
+    throw new Error(version === 'preview' ? 'Prévia não cadastrada.' : 'Áudio completo não cadastrado.');
+  }
+
+  // URL absoluta (rara, mas possível) — usa direto
+  if (/^https?:\/\//i.test(path)) return path;
+
+  // Path relativo → R2 público
+  const normalized = path.replace(/^\/+/, '');
+  return `${R2_PUBLIC_BASE}/${normalized}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -280,15 +166,10 @@ function paintShell(container) {
         </p>
       </div>
       <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
-        <button class="btn btn-outline btn-sm" data-albums-refresh type="button">
-          ↻ Atualizar
-        </button>
-        <button class="btn btn-primary btn-sm" data-albums-new type="button">
-          + Novo álbum
-        </button>
+        <button class="btn btn-outline btn-sm" data-albums-refresh type="button">↻ Atualizar</button>
+        <button class="btn btn-primary btn-sm" data-albums-new type="button">+ Novo álbum</button>
       </div>
     </div>
-
     <div data-albums-body>
       <div class="admin-loading">Carregando álbuns…</div>
     </div>
@@ -299,13 +180,12 @@ function paintShell(container) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch
+// Fetch — com concorrência por álbum (Item 2)
 // ─────────────────────────────────────────────────────────────
 async function loadAlbums() {
   const body = document.querySelector('[data-albums-body]');
   if (!body) return;
 
-  // Controle de concorrência (Item 12)
   const currentReq = ++State.loadReqId;
   State.loading = true;
   State.error = null;
@@ -313,8 +193,7 @@ async function loadAlbums() {
 
   try {
     const res = await apiFetch('albums', { method: 'GET' });
-    if (currentReq !== State.loadReqId) return; // Requisição obsoleta
-
+    if (currentReq !== State.loadReqId) return;
     State.albums = Array.isArray(res?.albums) ? res.albums : [];
 
     await Promise.all(
@@ -334,12 +213,16 @@ async function loadAlbums() {
 }
 
 async function loadTracksForAlbum(albumId) {
+  const reqId = (State.tracksReqId.get(albumId) || 0) + 1;
+  State.tracksReqId.set(albumId, reqId);
+
   try {
     const res = await apiFetch('tracks', { method: 'GET', query: { albumId } });
+    if ((State.tracksReqId.get(albumId) || 0) !== reqId) return;
     State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
   } catch (err) {
+    if ((State.tracksReqId.get(albumId) || 0) !== reqId) return;
     console.warn(`[albums] falha faixas ${albumId}:`, err);
-    // Preserva o erro em vez de fingir que o álbum está vazio (Item 12)
     State.tracks.set(albumId, { error: err?.message || 'Erro ao carregar' });
   }
 }
@@ -357,7 +240,6 @@ function paintBody(body) {
     body.innerHTML = '<div class="admin-loading">Carregando álbuns…</div>';
     return;
   }
-
   if (State.error) {
     body.innerHTML = `
       <div class="admin-error-box">
@@ -367,7 +249,6 @@ function paintBody(body) {
     body.querySelector('[data-albums-refresh]')?.addEventListener('click', () => loadAlbums());
     return;
   }
-
   if (!State.albums.length) {
     body.innerHTML = `
       <div class="admin-empty">
@@ -386,14 +267,13 @@ function paintBody(body) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind direto dos botões de álbum
+// Bind dos botões de álbum
 // ─────────────────────────────────────────────────────────────
 function bindAlbumButtons(scope) {
   scope.querySelectorAll('[data-album-toggle]').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
       e.preventDefault(); e.stopPropagation();
       const albumId = btn.dataset.albumToggle;
-
       if (State.expandedAlbumIds.has(albumId)) {
         State.expandedAlbumIds.delete(albumId);
       } else {
@@ -419,14 +299,19 @@ function bindAlbumButtons(scope) {
       e.preventDefault(); e.stopPropagation();
       const albumId = btn.dataset.albumDelete;
       const album = State.albums.find((a) => a.id === albumId);
-
-      // Mostra o título real (Item 12)
       if (!confirm(`Excluir o álbum "${album?.title || albumId}"? As faixas também serão removidas.`)) return;
 
       try {
         await apiFetch('album', { method: 'DELETE', query: { id: albumId } });
+
+        // Item 2: limpar todo o estado relacionado (incluindo player se tocar faixa do álbum)
+        if (Player.current && String(Player.current.albumId) === String(albumId)) {
+          stopPlayback();
+        }
         State.expandedAlbumIds.delete(albumId);
         State.tracks.delete(albumId);
+        State.tracksReqId.delete(albumId);
+
         toast('Álbum excluído.', '🗑');
         await loadAlbums();
       } catch (err) {
@@ -451,15 +336,35 @@ function bindAlbumButtons(scope) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bind direto dos botões de faixa (UUIDs como String)
+// Bind dos botões de faixa
 // ─────────────────────────────────────────────────────────────
 function bindTrackButtons(scope) {
+  scope.querySelectorAll('[data-track-play]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const trackId = String(btn.dataset.trackPlay);
+      const albumId = String(btn.dataset.trackAlbum);
+      const version = btn.dataset.playVersion || null;
+
+      const isCurrent = Player.current
+        && String(Player.current.trackId) === trackId
+        && String(Player.current.albumId) === albumId;
+
+      if (isCurrent) {
+        if (!Player.el.paused) { await pausePlayback(); }
+        else { await resumePlayback(); }
+        return;
+      }
+
+      await playTrack(albumId, trackId, version);
+    });
+  });
+
   scope.querySelectorAll('[data-track-edit]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       const trackId = String(btn.dataset.trackEdit);
       const albumId = String(btn.dataset.trackAlbum);
-
       const list = State.tracks.get(albumId);
       const track = Array.isArray(list) ? list.find((t) => String(t.id) === trackId) : null;
       if (track) openTrackModal(albumId, track);
@@ -472,12 +377,12 @@ function bindTrackButtons(scope) {
       e.preventDefault(); e.stopPropagation();
       const trackId = String(btn.dataset.trackDelete);
       const albumId = String(btn.dataset.trackAlbum);
-
       if (!trackId) return toast('Identificador da faixa inválido.', '⚠');
       if (!confirm('Excluir esta faixa?')) return;
 
       try {
         await apiFetch('track', { method: 'DELETE', query: { id: trackId } });
+        if (Player.current && String(Player.current.trackId) === trackId) stopPlayback();
         toast('Faixa excluída.', '🗑');
         await loadTracksForAlbum(albumId);
         repaint();
@@ -494,33 +399,300 @@ function bindTrackButtons(scope) {
     });
   });
 
-  scope.querySelectorAll('[data-track-play]').forEach((btn) => {
-  btn.addEventListener('click', async (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const trackId = String(btn.dataset.trackPlay);
-    const albumId = String(btn.dataset.trackAlbum);
+  bindTrackDragDrop(scope);
+}
 
-    const isCurrent = Player.current
-      && String(Player.current.trackId) === trackId
-      && String(Player.current.albumId) === albumId;
+// ─────────────────────────────────────────────────────────────
+// MINI PLAYER — construção, eventos e controles
+// ─────────────────────────────────────────────────────────────
+function ensurePlayer() {
+  if (Player.el) return;
 
-    if (isCurrent) { // mesmo som → play/pause
-      if (!Player.el.paused) Player.el.pause();
-      else Player.el.play().catch(() => {});
-      return;
+  const a = new Audio();
+  a.preload = 'auto';
+  a.crossOrigin = 'anonymous';
+
+  a.addEventListener('timeupdate',     syncProgress);
+  a.addEventListener('loadedmetadata', onLoadedMetadata);
+  a.addEventListener('durationchange', syncProgress);
+  a.addEventListener('play',           () => { setPlayIcon(true);  setSub('Reproduzindo'); repaint(); });
+  a.addEventListener('pause',          () => { setPlayIcon(false); setSub('Pausado');      repaint(); });
+  a.addEventListener('ended',          onEnded);
+  a.addEventListener('waiting',        () => setSub('Carregando…'));
+  a.addEventListener('stalled',        () => {
+    console.warn('[player] stalled em', a.currentSrc);
+    setSub('Conexão lenta…');
+  });
+  a.addEventListener('canplay',        () => {
+    clearTimeout(Player.stallTimer);
+    setSub(Player.current?.version === 'preview' ? 'Prévia' : 'Áudio completo');
+  });
+  a.addEventListener('abort',          () => console.info('[player] abortado'));
+  a.addEventListener('error',          onAudioError);
+
+  Player.el = a;
+  buildPlayerBar();
+}
+
+function buildPlayerBar() {
+  const bar = document.createElement('div');
+  bar.className = 'admin-player';
+  bar.hidden = true;
+  bar.innerHTML = `
+    <div class="admin-player__cover" aria-hidden="true">♪</div>
+    <div class="admin-player__meta">
+      <div class="admin-player__title">—</div>
+      <div class="admin-player__sub">—</div>
+    </div>
+    <button class="admin-player__play btn btn-ghost btn-sm" type="button" title="Play/Pause">▶</button>
+    <div class="admin-player__progress">
+      <span class="admin-player__cur">0:00</span>
+      <input class="admin-player__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição">
+      <span class="admin-player__dur">0:00</span>
+    </div>
+    <div class="admin-player__versions">
+      <button class="btn btn-ghost btn-sm" data-player-version="preview" type="button">Prévia</button>
+      <button class="btn btn-ghost btn-sm" data-player-version="full"    type="button">Completa</button>
+    </div>
+    <div class="admin-player__volume">
+      <button class="admin-player__mute btn btn-ghost btn-sm" type="button" title="Mudo">🔊</button>
+      <input class="admin-player__vol" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
+    </div>
+    <button class="admin-player__link btn btn-ghost btn-sm" type="button" title="Testar URL">🔗</button>
+    <button class="admin-player__close btn btn-ghost btn-sm" type="button" title="Fechar">✕</button>
+  `;
+  document.body.appendChild(bar);
+  Player.bar = bar;
+
+  bar.querySelector('.admin-player__play').addEventListener('click', async () => {
+    if (!Player.el || !Player.el.src) return;
+    try {
+      if (Player.el.paused) await Player.el.play();
+      else Player.el.pause();
+    } catch (err) {
+      console.error('[player] play()', err);
+      toast('Navegador bloqueou a reprodução. Clique novamente.', '⚠');
+    }
+  });
+
+  bar.querySelector('.admin-player__seek').addEventListener('input', (e) => {
+    Player.seeking = true;
+    bar.querySelector('.admin-player__cur').textContent = fmtTime(Number(e.target.value));
+  });
+  bar.querySelector('.admin-player__seek').addEventListener('change', (e) => {
+    const v = Number(e.target.value);
+    if (Player.el && Number.isFinite(v)) {
+      try { Player.el.currentTime = v; } catch {}
+    }
+    Player.seeking = false;
+  });
+
+  bar.querySelector('.admin-player__vol').addEventListener('input', (e) => {
+    if (Player.el) { Player.el.volume = Number(e.target.value); Player.el.muted = false; }
+  });
+  bar.querySelector('.admin-player__mute').addEventListener('click', () => {
+    if (Player.el) Player.el.muted = !Player.el.muted;
+  });
+
+  bar.querySelectorAll('[data-player-version]').forEach((b) =>
+    b.addEventListener('click', () => switchVersion(b.dataset.playerVersion)));
+
+  bar.querySelector('.admin-player__link').addEventListener('click', () => {
+    if (Player.el?.currentSrc) window.open(Player.el.currentSrc, '_blank');
+    else toast('Nenhuma URL carregada ainda.', '⚠');
+  });
+
+  bar.querySelector('.admin-player__close').addEventListener('click', stopPlayback);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reprodução — fluxo principal
+// ─────────────────────────────────────────────────────────────
+async function playTrack(albumId, trackId, requestedVersion) {
+  ensurePlayer();
+  const list = State.tracks.get(albumId);
+  const track = Array.isArray(list) ? list.find((t) => String(t.id) === String(trackId)) : null;
+  if (!track) return toast('Faixa não encontrada.', '⚠');
+
+  const hasPreview = !!(track.previewPath || track.preview_path);
+  const hasFull    = !!(track.fullPath || track.full_path);
+  if (!hasPreview && !hasFull) return toast('Esta faixa não tem áudio cadastrado.', '⚠');
+
+  const version = requestedVersion
+    || (hasFull ? 'full' : 'preview');
+
+  if (version === 'preview' && !hasPreview) return toast('Prévia indisponível.', '⚠');
+  if (version === 'full' && !hasFull)       return toast('Áudio completo indisponível.', '⚠');
+
+  const seq = ++Player.seq;
+  const previous = Player.current;
+
+  try {
+    const url = getAdminAudioUrl(track, version);
+    console.info('[player] carregando:', url, '(v' + version + ')');
+
+    // Cancelar qualquer carregamento anterior
+    if (Player.el) {
+      try { Player.el.pause(); } catch {}
+      Player.el.removeAttribute('src');
+      Player.el.load();
     }
 
-    const list = State.tracks.get(albumId);
-    const track = Array.isArray(list) ? list.find((t) => String(t.id) === trackId) : null;
-    if (!track) return toast('Faixa não encontrada.', '⚠');
+    if (seq !== Player.seq) return;
 
-    const version = btn.dataset.playVersion
-      || ((track.fullPath || track.full_path) ? 'full' : 'preview');
-    await playTrack(albumId, trackId, version);
+    Player.current = {
+      trackId: String(trackId),
+      albumId: String(albumId),
+      title:   track.title || 'Faixa',
+      version,
+      duration: null
+    };
+    Player.versions = { preview: hasPreview, full: hasFull };
+    Player.el.src = url;
+    updateBarMeta();
+    Player.bar.hidden = false;
+
+    // Restaurar posição da mesma faixa ao trocar de versão (Item 3)
+    if (previous
+      && String(previous.trackId) === String(trackId)
+      && String(previous.albumId) === String(albumId)
+      && previous.version !== version
+      && previous.duration > 0) {
+      Player.pendingRestore = Math.min(previous.duration - 0.5, Player.el.currentTime || 0);
+    }
+
+    // Timeout de carregamento (Item 5)
+    Player.stallTimer = setTimeout(() => {
+      if (seq !== Player.seq) return;
+      if (Player.el && Player.el.readyState < 2 && !Player.el.paused) {
+        console.warn('[player] STALL 6s | readyState:', Player.el.readyState,
+                     '| networkState:', Player.el.networkState, '| src:', Player.el.currentSrc);
+        toast('Áudio não carregou em 6s. Use 🔗 na barra.', '⚠');
+      }
+    }, 6000);
+
+    const playPromise = Player.el.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      await playPromise.catch((err) => {
+        if (seq !== Player.seq) return;
+        console.error('[player] play() rejeitado:', err);
+        throw err;
+      });
+    }
+
+    repaint();
+  } catch (err) {
+    if (seq === Player.seq) {
+      toast(err?.message || 'Falha ao reproduzir.', '⚠');
+      Player.bar.hidden = true;
+      Player.current = null;
+    }
+  }
+}
+
+function onLoadedMetadata() {
+  if (!Player.el || !Player.current) return;
+  Player.current.duration = Player.el.duration || 0;
+
+  // Restaurar posição após loadedmetadata (Item 3)
+  if (Player.pendingRestore !== null) {
+    const t = Player.pendingRestore;
+    Player.pendingRestore = null;
+    try { Player.el.currentTime = t; } catch {}
+  }
+
+  syncProgress();
+  setSub(Player.current.version === 'preview' ? 'Prévia' : 'Áudio completo');
+}
+
+function onEnded() {
+  setPlayIcon(false);
+  setSub('Finalizada');
+  repaint();
+}
+
+function onAudioError() {
+  const code = Player.el?.error ? Player.el.error.code : 0;
+  const msg = {
+    1: 'Abortado',
+    2: 'Erro de rede (404 ou bloqueio)',
+    3: 'Arquivo corrompido',
+    4: 'Formato não suportado ou URL inválida'
+  }[code] || 'Erro desconhecido';
+
+  console.error('[player] ERRO', code, msg, '\nsrc:', Player.el?.currentSrc);
+  toast(`Áudio: ${msg} (código ${code}). Veja 🔗.`, '⚠');
+  setPlayIcon(false);
+  setSub('Erro de reprodução');
+  repaint();
+}
+
+async function switchVersion(version) {
+  if (!Player.current || Player.current.version === version) return;
+  if (!Player.versions[version]) return toast('Versão indisponível.', '⚠');
+  const { albumId, trackId } = Player.current;
+  await playTrack(albumId, trackId, version);
+}
+
+async function pausePlayback() {
+  if (!Player.el) return;
+  try { Player.el.pause(); } catch {}
+}
+
+async function resumePlayback() {
+  if (!Player.el || !Player.el.src) return;
+  try { await Player.el.play(); }
+  catch (err) { console.error('[player] resume falhou:', err); toast('Reprodução bloqueada.', '⚠'); }
+}
+
+function stopPlayback() {
+  Player.seq++;
+  clearTimeout(Player.stallTimer);
+  Player.pendingRestore = null;
+
+  if (Player.el) {
+    try { Player.el.pause(); } catch {}
+    Player.el.removeAttribute('src');
+    try { Player.el.load(); } catch {}
+  }
+  Player.current = null;
+  if (Player.bar) Player.bar.hidden = true;
+  repaint();
+}
+
+function updateBarMeta() {
+  if (!Player.bar || !Player.current) return;
+  Player.bar.querySelector('.admin-player__title').textContent = Player.current.title;
+  Player.bar.querySelector('.admin-player__sub').textContent = 'Carregando…';
+  Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
+    const v = b.dataset.playerVersion;
+    b.disabled = !Player.versions[v];
+    b.classList.toggle('active', Player.current.version === v);
   });
-});
+}
 
-  bindTrackDragDrop(scope);
+function setPlayIcon(playing) {
+  const btn = Player.bar?.querySelector('.admin-player__play');
+  if (btn) btn.textContent = playing ? '⏸' : '▶';
+}
+
+function setSub(text) {
+  const el = Player.bar?.querySelector('.admin-player__sub');
+  if (el) el.textContent = text;
+}
+
+function fmtTime(s) {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+}
+
+function syncProgress() {
+  if (!Player.el || !Player.bar) return;
+  const seek = Player.bar.querySelector('.admin-player__seek');
+  const dur = Number.isFinite(Player.el.duration) ? Player.el.duration : 0;
+  if (!Player.seeking) { seek.max = dur || 0; seek.value = Player.el.currentTime || 0; }
+  Player.bar.querySelector('.admin-player__cur').textContent = fmtTime(Player.el.currentTime);
+  Player.bar.querySelector('.admin-player__dur').textContent = fmtTime(dur);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -534,19 +706,18 @@ async function downloadTrack(trackId, titleHint) {
   try {
     if (btn) { btn.disabled = true; btn.textContent = '⬇ …'; }
     const res = await apiFetch('download-url', { method: 'GET', query: { id: trackId } });
-
     if (!res?.ok || !res.url) throw new Error(res?.error || 'Falha ao gerar URL.');
     triggerDownload(res.url, res.filename || `${titleHint || trackId}.mp3`);
     toast(`Download iniciado: ${titleHint || trackId}`, '⬇');
   } catch (err) {
-    toast(err?.message || `Falha ao baixar.`, '⚠');
+    toast(err?.message || 'Falha ao baixar.', '⚠');
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Download — álbum completo (Honesto)
+// Download — álbum completo
 // ─────────────────────────────────────────────────────────────
 async function downloadAlbum(albumId) {
   if (!albumId) return;
@@ -562,38 +733,35 @@ async function downloadAlbum(albumId) {
   try {
     toast(`Preparando álbum "${albumTitle}"…`, '⏳');
     const res = await apiFetch('download-album', { method: 'GET', query: { id: albumId } });
-
     if (!res?.ok || !Array.isArray(res.tracks)) throw new Error(res?.error || 'Falha ao listar faixas.');
-    
+
     const valid = res.tracks.filter((t) => t.url);
     if (!valid.length) return toast('Este álbum não tem áudios completos.', '⚠');
 
-    // Item 11: Mensagem honesta
     toast(`Disparando ${valid.length} download(s)...`, '⬇');
     let failures = 0;
-
     for (let i = 0; i < valid.length; i++) {
       try { triggerDownload(valid[i].url, valid[i].filename || `${valid[i].title}.mp3`); }
       catch { failures++; }
       await sleep(600);
     }
 
-    if (failures) toast(`Concluído com ${failures} falha(s) de URL.`, '⚠');
-    else toast(`${valid.length} downloads solicitados ao navegador.`, '✓');
-
+    if (failures) toast(`Concluído com ${failures} falha(s).`, '⚠');
+    else toast(`${valid.length} downloads solicitados.`, '✓');
   } catch (err) {
     toast(err?.message || 'Falha ao baixar álbum.', '⚠');
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helpers de download (Validação de Origem)
+// Helpers de download
 // ─────────────────────────────────────────────────────────────
 function triggerDownload(url, filename) {
-  // Item 12: Restringe URLs ao Backblaze (evita redirecionamento malicioso)
   try {
     const u = new URL(url);
-    if (!u.hostname.endsWith('r2.cloudflarestorage.com') && !u.hostname.endsWith('josephmatthos.com.br')) {
+    if (!u.hostname.endsWith('r2.cloudflarestorage.com')
+        && !u.hostname.endsWith('josephmatthos.com.br')
+        && !u.hostname.endsWith('r2.dev')) {
       throw new Error('Domínio de download inválido.');
     }
   } catch {
@@ -622,7 +790,6 @@ function bindTrackDragDrop(scope) {
   bodies.forEach((tbody) => {
     if (tbody.dataset.dragBound === '1') return;
     tbody.dataset.dragBound = '1';
-
     const albumId = tbody.dataset.tracksBody;
 
     tbody.addEventListener('dragstart', (e) => {
@@ -653,7 +820,7 @@ function bindTrackDragDrop(scope) {
       const rect = targetRow.getBoundingClientRect();
       const isAbove = e.clientY < rect.top + rect.height / 2;
       const rows = Array.from(tbody.querySelectorAll('tr[data-track-id]'));
-      
+
       rows.splice(rows.indexOf(_dragState.row), 1);
       let insertAt = rows.indexOf(targetRow);
       if (!isAbove) insertAt += 1;
@@ -679,7 +846,6 @@ function cleanupDrag(scope) {
 async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   try {
     reorderTableRows(tbody, order);
-    // Envia albumId e UUIDs (String)
     const res = await apiFetch('track-order', { method: 'PATCH', body: { albumId, order } });
     if (!res?.ok) throw new Error(res?.error || 'Falha ao reordenar.');
     toast('Ordem atualizada.', '✓');
@@ -688,14 +854,13 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   } catch (err) {
     toast(err?.message || 'Falha ao reordenar.', '⚠');
     tbody.innerHTML = originalHtml;
-    bindTrackDragDrop(scope);
+    bindTrackDragDrop(scope); // Item 3: religar eventos após restaurar
   }
 }
 
 function reorderTableRows(tbody, order) {
   const rowsById = new Map();
   tbody.querySelectorAll('tr[data-track-id]').forEach((row) => rowsById.set(String(row.dataset.trackId), row));
-
   order.forEach((item, newIndex) => {
     const row = rowsById.get(String(item.id));
     if (!row) throw new Error(`Faixa não encontrada: ${item.id}`);
@@ -714,11 +879,14 @@ function renderAlbumBlock(album) {
   const trackCount = Array.isArray(tracks) ? tracks.length : 0;
   const isPublished = !!album.published;
 
+  const coverUrl = album.coverUrl || album.cover_image;
+  const safeCover = coverUrl && /^https?:\/\//i.test(coverUrl) ? coverUrl : '';
+
   return `
     <div class="album-block ${isExpanded ? 'expanded' : ''}" data-album-id="${escAttr(album.id)}">
       <div class="album-header">
-        <div class="album-cover" ${(album.coverUrl || album.cover_image) ? `style="background-image:url('${escAttr(album.coverUrl || album.cover_image)}')"` : ''}>
-          ${(album.coverUrl || album.cover_image) ? '' : esc(album.title?.charAt(0) || '♪')}
+        <div class="album-cover" ${safeCover ? `style="background-image:url('${escAttr(safeCover)}')"` : ''}>
+          ${safeCover ? '' : esc(album.title?.charAt(0) || '♪')}
         </div>
         <div class="album-info">
           <div class="album-title">
@@ -760,7 +928,7 @@ function renderTracksList(albumId, tracks) {
         <tr>
           <th style="width:32px;"></th><th style="width:40px;">#</th><th>Título</th>
           <th style="width:100px;">Duração</th><th style="width:100px;">Preço</th>
-          <th style="width:120px;">Áudio</th><th style="width:100px;">Status</th><th style="width:240px;">Ações</th>
+          <th style="width:120px;">Áudio</th><th style="width:100px;">Status</th><th style="width:280px;">Ações</th>
         </tr>
       </thead>
       <tbody data-tracks-body="${escAttr(albumId)}">
@@ -774,12 +942,12 @@ function renderTracksList(albumId, tracks) {
 function renderTrackRow(albumId, track, idx) {
   const hasPreview = !!(track.previewPath || track.preview_path);
   const hasFull    = !!(track.fullPath || track.full_path);
+  const canPlay    = hasPreview || hasFull;
 
   const isCurrent = Player.current
     && String(Player.current.trackId) === String(track.id)
     && String(Player.current.albumId) === String(albumId);
   const playing = isCurrent && Player.el && !Player.el.paused;
-  const canPlay = hasPreview || hasFull;
 
   const audioChips = `
     <button class="audio-chip ${hasPreview ? '' : 'none'}" type="button"
@@ -814,15 +982,13 @@ function renderTrackRow(albumId, track, idx) {
           <button class="btn btn-ghost btn-sm ${playing ? 'is-playing' : ''}"
                   data-track-play="${escAttr(String(track.id))}"
                   data-track-album="${escAttr(albumId)}"
-                  type="button"
-                  ${canPlay ? '' : 'disabled'}>
+                  type="button" ${canPlay ? '' : 'disabled'}>
             ${playing ? '⏸ Pausar' : '▶ Ouvir'}
           </button>
           <button class="btn btn-ghost btn-sm"
                   data-track-download="${escAttr(String(track.id))}"
                   data-track-download-title="${escAttr(track.title || '')}"
-                  type="button"
-                  ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
+                  type="button" ${hasFull ? '' : 'disabled'}>⬇ Baixar</button>
           <button class="btn btn-ghost btn-sm"
                   data-track-edit="${escAttr(String(track.id))}"
                   data-track-album="${escAttr(albumId)}"
@@ -865,14 +1031,17 @@ function openAlbumModal(album) {
 
   document.getElementById('albumSave')?.addEventListener('click', async () => {
     const errEl = document.getElementById('albumError');
-    const payload = {
-      title: document.getElementById('albumTitle').value.trim(),
-      year: Number(document.getElementById('albumYear').value) || null,
-      coverUrl: document.getElementById('albumCoverUrl').value.trim(),
-      published: document.getElementById('albumPublished').checked
-    };
+    const title = document.getElementById('albumTitle').value.trim();
+    const year  = Number(document.getElementById('albumYear').value) || null;
+    const cover = document.getElementById('albumCoverUrl').value.trim();
+    const pub   = document.getElementById('albumPublished').checked;
 
-    if (!payload.title) { if (errEl) errEl.textContent = 'Título obrigatório.'; return; }
+    if (!title) { if (errEl) errEl.textContent = 'Título obrigatório.'; return; }
+    if (cover && !/^https?:\/\//i.test(cover)) {
+      if (errEl) errEl.textContent = 'URL da capa inválida.'; return;
+    }
+
+    const payload = { title, year, coverUrl: cover, published: pub };
 
     try {
       if (isNew) await apiFetch('albums', { method: 'POST', body: payload });
@@ -887,7 +1056,7 @@ function openAlbumModal(album) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal — Faixa
+// Modal — Faixa (com preview de áudio e detecção de duração real)
 // ─────────────────────────────────────────────────────────────
 function openTrackModal(albumId, track) {
   const isNew = !track;
@@ -898,31 +1067,41 @@ function openTrackModal(albumId, track) {
     <h3>${isNew ? 'Nova faixa' : 'Editar faixa'}</h3>
     <div class="form-group"><label>Título *</label><input type="text" id="trackTitle" value="${escAttr(t.title)}" required></div>
     <div class="form-row">
-      <div class="form-group"><label>Duração (mm:ss)</label><input type="text" id="trackDuration" value="${escAttr(t.duration || '')}"></div>
-      <div class="form-group"><label>Preço (centavos)</label><input type="number" id="trackPrice" value="${escAttr(String(t.priceCents || 0))}"></div>
+      <div class="form-group">
+        <label>Duração (mm:ss)</label>
+        <input type="text" id="trackDuration" value="${escAttr(t.duration || '')}" placeholder="03:45">
+        <span class="hint" data-detected-duration></span>
+      </div>
+      <div class="form-group"><label>Preço (centavos, máx ${MAX_TRACK_PRICE_CENTS})</label><input type="number" id="trackPrice" value="${escAttr(String(t.priceCents || 0))}"></div>
     </div>
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="trackPublished" ${t.status === 'PUBLISHED' ? 'checked' : ''}> Publicar faixa</label>
     </div>
-    
+
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
       <h4 style="margin:0 0 0.5rem;font-size:0.9rem;color:var(--accent);">🎧 Prévia</h4>
       <div data-preview-status style="font-size:0.85rem;margin-bottom:0.5rem;">${t.previewPath ? `<span class="audio-chip">✓ ${esc(t.previewPath)}</span>` : '<span class="audio-chip none">Nenhum</span>'}</div>
-      <button class="btn btn-outline btn-sm" data-upload-preview type="button">⬆ Enviar</button>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" data-upload-preview type="button">⬆ Enviar</button>
+        <button class="btn btn-ghost btn-sm" data-test-preview type="button" ${t.previewPath ? '' : 'disabled'}>▶ Testar</button>
+      </div>
       <input type="file" id="trackPreviewInput" accept="audio/*" hidden>
     </div>
     <div class="admin-card" style="padding:1rem;margin-bottom:1rem;">
       <h4 style="margin:0 0 0.5rem;font-size:0.9rem;color:var(--accent);">🎵 Áudio Completo</h4>
       <div data-full-status style="font-size:0.85rem;margin-bottom:0.5rem;">${t.fullPath ? `<span class="audio-chip">✓ ${esc(t.fullPath)}</span>` : '<span class="audio-chip none">Nenhum</span>'}</div>
-      <button class="btn btn-outline btn-sm" data-upload-full type="button">⬆ Enviar</button>
+      <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+        <button class="btn btn-outline btn-sm" data-upload-full type="button">⬆ Enviar</button>
+        <button class="btn btn-ghost btn-sm" data-test-full type="button" ${t.fullPath ? '' : 'disabled'}>▶ Testar</button>
+      </div>
       <input type="file" id="trackFullInput" accept="audio/*" hidden>
     </div>
-    
+
     <div class="form-group">
       <label>Letra (JSON)</label>
       <textarea id="trackLyrics" rows="8" style="font-family:monospace;">${esc(lyricsText)}</textarea>
     </div>
-    
+
     <div class="form-error" id="trackError"></div>
     <div style="display:flex;gap:0.7rem;justify-content:flex-end;margin-top:1.5rem;">
       <button class="btn btn-outline btn-sm" data-close type="button">Cancelar</button>
@@ -930,37 +1109,37 @@ function openTrackModal(albumId, track) {
     </div>
   `);
 
-  bindTrackUpload({ buttonSel: '[data-upload-preview]', inputId: 'trackPreviewInput', statusSel: '[data-preview-status]', kind: 'audio-preview', uploadFn: uploadAudioPreview, field: 'previewPath', albumId, track: t });
-  bindTrackUpload({ buttonSel: '[data-upload-full]', inputId: 'trackFullInput', statusSel: '[data-full-status]', kind: 'audio-full', uploadFn: uploadAudioFull, field: 'fullPath', albumId, track: t });
+  bindTrackUpload({ buttonSel: '[data-upload-preview]', inputId: 'trackPreviewInput', statusSel: '[data-preview-status]', testSel: '[data-test-preview]', kind: 'audio-preview', uploadFn: uploadAudioPreview, field: 'previewPath', albumId, track: t });
+  bindTrackUpload({ buttonSel: '[data-upload-full]',    inputId: 'trackFullInput',    statusSel: '[data-full-status]',    testSel: '[data-test-full]',    kind: 'audio-full',    uploadFn: uploadAudioFull,    field: 'fullPath',    albumId, track: t });
 
   document.getElementById('trackSave')?.addEventListener('click', async () => {
     const errEl = document.getElementById('trackError');
     const lyrics = parseLyricsInput(document.getElementById('trackLyrics').value);
-
     if (lyrics === null) { if (errEl) errEl.textContent = 'Letra inválida. Verifique o JSON.'; return; }
 
-    const priceCents = Number(document.getElementById('trackPrice').value);
-    if (!Number.isInteger(priceCents) || priceCents < 0) { if (errEl) errEl.textContent = 'Preço inválido.'; return; }
+    const priceCents = normalizePrice(document.getElementById('trackPrice').value);
+    if (priceCents === null) { if (errEl) errEl.textContent = `Preço inválido (0 a ${MAX_TRACK_PRICE_CENTS}).`; return; }
+
+    const duration = document.getElementById('trackDuration').value.trim();
+    if (!validateDuration(duration)) { if (errEl) errEl.textContent = 'Duração no formato mm:ss (ex: 03:45).'; return; }
+
+    const title = document.getElementById('trackTitle').value.trim();
+    if (!title) { if (errEl) errEl.textContent = 'Título obrigatório.'; return; }
 
     const payload = {
-      title: document.getElementById('trackTitle').value.trim(),
-      duration: document.getElementById('trackDuration').value.trim(),
-      priceCents: priceCents,
+      title, duration, priceCents,
       status: document.getElementById('trackPublished').checked ? 'PUBLISHED' : 'DRAFT'
     };
-
-    if (!payload.title) { if (errEl) errEl.textContent = 'Título obrigatório.'; return; }
 
     try {
       let savedTrackId = t.id;
       if (isNew) {
-        const res = await apiFetch('tracks', { method: 'POST', body: { ...payload, albumId: albumId } });
-        savedTrackId = res.track.id; // Pega o UUID gerado
+        const res = await apiFetch('tracks', { method: 'POST', body: { ...payload, albumId } });
+        savedTrackId = res.track.id;
       } else {
         await apiFetch('track', { method: 'PATCH', query: { id: t.id }, body: payload });
       }
 
-      // Integração com o endpoint de letras (Item 3)
       await apiFetch('update-lyrics', { method: 'PATCH', query: { id: savedTrackId }, body: { lyrics } });
 
       toast('Faixa salva.', '🎵');
@@ -974,20 +1153,46 @@ function openTrackModal(albumId, track) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload de Faixa
+// Upload de Faixa (com validação local, preview e confirmação de substituição)
 // ─────────────────────────────────────────────────────────────
-function bindTrackUpload({ buttonSel, inputId, statusSel, kind, uploadFn, field, albumId, track }) {
-  const button = document.querySelector(buttonSel);
-  const input = document.getElementById(inputId);
+function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadFn, field, albumId, track }) {
+  const button   = document.querySelector(buttonSel);
+  const input    = document.getElementById(inputId);
   const statusEl = document.querySelector(statusSel);
+  const testBtn  = document.querySelector(testSel);
 
   if (!button || !input) return;
   button.addEventListener('click', () => input.click());
 
+  // Botão de teste no modal
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      if (!track[field]) return toast('Nenhum arquivo associado.', '⚠');
+      try {
+        const url = getAdminAudioUrl(track, field === 'previewPath' ? 'preview' : 'full');
+        await playExternal(url);
+      } catch (err) {
+        toast(err?.message || 'Falha ao reproduzir.', '⚠');
+      }
+    });
+  }
+
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
     if (!file) return;
+
+    // Validação local (Item 5)
+    const fileErr = validateAudioFile(file);
+    if (fileErr) { toast(fileErr, '⚠'); input.value = ''; return; }
+
     if (!track.id) { toast('Salve a faixa antes de enviar o áudio.', '⚠'); input.value = ''; return; }
+
+    // Confirmação ao substituir (Item 4)
+    if (track[field]) {
+      if (!confirm('Já existe um áudio associado. Substituir?')) {
+        input.value = ''; return;
+      }
+    }
 
     const original = button.textContent;
     try {
@@ -1001,14 +1206,35 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, kind, uploadFn, field,
 
       if (!result?.path) throw new Error('Upload não retornou path.');
 
-      // O campo agora usa camelCase ('previewPath' ou 'fullPath')
       await apiFetch('track', { method: 'PATCH', query: { id: track.id }, body: { [field]: result.path } });
       track[field] = result.path;
 
       if (statusEl) statusEl.innerHTML = `<span class="audio-chip">✓ ${esc(result.path)}</span>`;
+      if (testBtn) testBtn.disabled = false;
       toast('Áudio associado.', '✓');
 
-      // Item 5: Aguardar o load antes de repintar
+      // Detectar duração real
+      try {
+        const url = getAdminAudioUrl(track, field === 'previewPath' ? 'preview' : 'full');
+        const probe = new Audio();
+        probe.preload = 'metadata';
+        probe.src = url;
+        probe.addEventListener('loadedmetadata', () => {
+          const dur = probe.duration;
+          if (Number.isFinite(dur) && dur > 0) {
+            const mm = Math.floor(dur / 60);
+            const ss = String(Math.floor(dur % 60)).padStart(2, '0');
+            const el = document.querySelector('[data-detected-duration]');
+            if (el) el.textContent = `Duração detectada: ${mm}:${ss}`;
+            // Preencher campo só se estiver vazio
+            const durInput = document.getElementById('trackDuration');
+            if (durInput && !durInput.value.trim()) durInput.value = `${mm}:${ss}`;
+          }
+          probe.remove();
+        });
+        probe.addEventListener('error', () => probe.remove());
+      } catch {}
+
       await loadTracksForAlbum(albumId);
       repaint();
 
@@ -1022,3 +1248,30 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, kind, uploadFn, field,
     }
   });
 }
+
+// ─────────────────────────────────────────────────────────────
+// Reproduzir URL externa (preview dentro do modal)
+// ─────────────────────────────────────────────────────────────
+async function playExternal(url) {
+  ensurePlayer();
+  const seq = ++Player.seq;
+  try {
+    if (Player.el) { try { Player.el.pause(); } catch {} Player.el.removeAttribute('src'); Player.el.load(); }
+    if (seq !== Player.seq) return;
+    Player.current = { trackId: 'preview', albumId: 'preview', title: 'Prévia do modal', version: 'full', duration: null };
+    Player.versions = { preview: false, full: true };
+    Player.el.src = url;
+    updateBarMeta();
+    Player.bar.hidden = false;
+    await Player.el.play();
+    repaint();
+  } catch (err) {
+    if (seq === Player.seq) toast('Falha ao reproduzir.', '⚠');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Expor para debug no console
+// ─────────────────────────────────────────────────────────────
+window.__player = Player;
+window.__albums  = { State, playTrack, stopPlayback, getAdminAudioUrl };
