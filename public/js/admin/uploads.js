@@ -1,86 +1,102 @@
 /* ============================================================
-   js/admin/uploads.js — v10.15 (Production Approved)
-   ============================================================
+   js/admin/uploads.js — v10.17
+   ------------------------------------------------------------
    Correções da auditoria:
-   1. Importação correta de `isPlainObject` do `api.js`
-   2. Uso de `Object.hasOwn` em `filterExtraData` (propriedades próprias)
-   3. Lógica de MIME prioriza o mapa de extensões para evitar metadados incorretos
-   4. Removido `status === 0` da lista de retry (evita loops em falhas de CORS/DNS)
-   5. Validação de configuração R2 mantida em runtime (evita quebra de importação)
+   1. filterExtraData() agora rejeita null explicitamente com TypeError
+   2. Matriz local mantida como fast-fail de UX, mas backend é a fonte da verdade
    ============================================================ */
 
-import { apiFetch, buildUrl, isPlainObject } from './api.js';
+import { apiFetch, buildUrl } from './api.js';
 import { toast } from './ui/toast.js';
 
-// ─────────────────────────────────────────────────────────────
-// ⚠ CONFIGURAÇÃO (Substitua pelos valores reais do ambiente)
-// ─────────────────────────────────────────────────────────────
-const R2_ACCOUNT_ID = 'f44bf615f12d9cb5159bd73d89c652cb'; // 32 hex chars
-const R2_BUCKET     = 'josephmatthos'; // lowercase + dígitos + hífen
+let _storageConfig = null;
+let _storageConfigPromise = null;
 
-function validateR2Config() {
-  if (!/^[a-f0-9]{32}$/.test(R2_ACCOUNT_ID)) {
-    throw new Error('[uploads] ERRO: Configure R2_ACCOUNT_ID no topo do arquivo.');
-  }
-  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(R2_BUCKET)) {
-    throw new Error('[uploads] ERRO: Configure R2_BUCKET no topo do arquivo.');
-  }
+function ensureStorageConfig() {
+  if (_storageConfig) return Promise.resolve(_storageConfig);
+  if (_storageConfigPromise) return _storageConfigPromise;
+
+  _storageConfigPromise = apiFetch('storage-config', { method: 'GET' })
+    .then(res => {
+      if (!res?.ok || !res.s3Host || !res.publicBucket || !res.privateBucket) {
+        throw new Error('Configuração R2 indisponível no backend.');
+      }
+      _storageConfig = res;
+      return res;
+    })
+    .catch(err => {
+      _storageConfigPromise = null;
+      throw err;
+    });
+
+  return _storageConfigPromise;
 }
 
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const MAX_AUDIO_SIZE = 200 * 1024 * 1024;
+export async function refreshStorageConfig() {
+  _storageConfig = null;
+  _storageConfigPromise = null;
+  return ensureStorageConfig();
+}
+
+const MAX_ID_LENGTH = 64;
+const MAX_TRACK_INDEX = 999;
+const MAX_TRACK_NUMBER = 999;
 const MAX_UPLOAD_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 15_000;
 const UPLOAD_SPEED_BPS = 300 * 1024;
 const MIN_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 1_200_000;
-const MAX_ID_LENGTH = 64;
-const MAX_TRACK_INDEX = 999;   // Ajuste conforme contrato do banco
-const MAX_TRACK_NUMBER = 999;  // Ajuste conforme contrato do banco
-const MAX_IMAGE_PIXELS = 20_000_000; // 20MP
+const PROGRESS_THROTTLE_PCT = 10;
+const MAX_IMAGE_PIXELS = 20_000_000;
+const LOAD_IMAGE_TIMEOUT_MS = 10_000;
 
-const ALLOWED_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
-const ALLOWED_AUDIO_EXTS = new Set(['mp3', 'm4a', 'mp4', 'wav', 'ogg', 'oga', 'opus', 'flac', 'aac', 'webm', 'aif', 'aiff']);
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const ALLOWED_AUDIO_TYPES = new Set([
-  'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/x-m4a',
-  'audio/aac', 'audio/opus', 'audio/webm', 'audio/flac', 'audio/x-wav', 'audio/aiff'
-]);
-
-// Correção: Mapa para garantir metadados corretos no R2
-const AUDIO_MIME_BY_EXT = {
-  mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav',
-  ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/opus', flac: 'audio/flac',
-  aac: 'audio/aac', webm: 'audio/webm', aif: 'audio/aiff', aiff: 'audio/aiff'
+// Matriz local para fast-fail de UX (Backend é a fonte da verdade via ALLOWED_MEDIA)
+const ALLOWED_MEDIA_LOCAL = {
+  'image': { exts: ['jpg','jpeg','png','webp','gif','avif'], mimes: ['image/jpeg','image/png','image/webp','image/gif','image/avif'], maxBytes: 10 * 1024 * 1024 },
+  'audio-preview': { exts: ['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff'], mimes: ['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/wav','audio/x-wav','audio/flac','audio/aiff','audio/x-aiff'], maxBytes: 50 * 1024 * 1024 },
+  'audio-full': { exts: ['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff'], mimes: ['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/wav','audio/x-wav','audio/flac','audio/aiff','audio/x-aiff'], maxBytes: 200 * 1024 * 1024 }
 };
 
-// ─────────────────────────────────────────────────────────────
-// Helpers de Validação Rigorosa
-// ─────────────────────────────────────────────────────────────
+const EXT_TO_MIMES = {
+  mp3: ['audio/mpeg'], m4a: ['audio/mp4'], mp4: ['audio/mp4'], aac: ['audio/aac'],
+  ogg: ['audio/ogg'], oga: ['audio/ogg'], opus: ['audio/opus'], webm: ['audio/webm'],
+  wav: ['audio/wav','audio/x-wav'], flac: ['audio/flac'],
+  aif: ['audio/aiff','audio/x-aiff'], aiff: ['audio/aiff','audio/x-aiff'],
+  jpg: ['image/jpeg'], jpeg: ['image/jpeg'], png: ['image/png'], webp: ['image/webp'], gif: ['image/gif'], avif: ['image/avif']
+};
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  } catch { return false; }
+}
+
 function normalizeId(value, fieldName) {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined) return undefined;
+  // Correção 2.1: Rejeitar null explicitamente
+  if (value === null) throw new TypeError(`${fieldName} não pode ser null.`);
   if (typeof value === 'string') {
     const id = value.trim();
-    if (!id || id.length > MAX_ID_LENGTH) {
-      throw new TypeError(`${fieldName} inválido (vazio ou excede ${MAX_ID_LENGTH} caracteres).`);
-    }
+    if (!id) throw new TypeError(`${fieldName} não pode ser vazio.`);
+    if (id.length > MAX_ID_LENGTH) throw new TypeError(`${fieldName} excede ${MAX_ID_LENGTH} caracteres.`);
     return id;
   }
   if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) {
     return String(value);
   }
-  throw new TypeError(`${fieldName} deve ser string ou número inteiro seguro.`);
+  throw new TypeError(`${fieldName} deve ser string não vazia ou número inteiro >= 0.`);
 }
 
 function filterExtraData(data) {
-  if (data === undefined || data === null) return {};
-  if (!isPlainObject(data)) {
-    throw new TypeError('extraData deve ser um objeto simples ou null/undefined.');
+  if (data === undefined) return {};
+  // Correção 2.1: Lançar erro se for null ou não for objeto simples
+  if (data === null || !isPlainObject(data)) {
+    throw new TypeError('extraData deve ser um objeto simples ou undefined.');
   }
-  
   const result = {};
-  // Correção: Uso de Object.hasOwn para verificar propriedades próprias
   if (Object.hasOwn(data, 'albumId')) {
     const id = normalizeId(data.albumId, 'albumId');
     if (id !== undefined) result.albumId = id;
@@ -112,96 +128,85 @@ function getExtension(filename) {
 
 function sanitizeFilename(name, allowedExts, forceExt = null) {
   if (!name || typeof name !== 'string') return forceExt ? `arquivo.${forceExt}` : 'arquivo';
-  
   const dot = name.lastIndexOf('.');
   const baseName = dot > 0 ? name.slice(0, dot) : name;
-  
-  let safeBase = baseName
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
-    .replace(/[^\x20-\x7E]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 100);
-  
+  let safeBase = baseName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 100);
   safeBase = safeBase || 'arquivo';
   if (forceExt) return `${safeBase}.${forceExt}`;
-
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-  if (allowedExts.has(ext) && ext.length <= 10) {
-    return `${safeBase}.${ext}`;
-  }
+  if (allowedExts.includes(ext) && ext.length <= 10) return `${safeBase}.${ext}`;
   return safeBase;
 }
 
-// ─────────────────────────────────────────────────────────────
-// API pública
-// ─────────────────────────────────────────────────────────────
+function validateMimeExtConsistency(kind, mime, filename) {
+  const entry = ALLOWED_MEDIA_LOCAL[kind];
+  if (!entry) throw new Error(`Tipo desconhecido: ${kind}`);
+  const ext = getExtension(filename);
+  if (!entry.exts.includes(ext)) throw new Error(`Extensão ".${ext}" não permitida para ${kind}.`);
+  const allowedMimes = EXT_TO_MIMES[ext] || [];
+  const normalized = String(mime || '').toLowerCase();
+  if (!normalized || normalized === 'application/octet-stream') {
+    return entry.mimes.includes(allowedMimes[0]) ? allowedMimes[0] : entry.mimes[0];
+  }
+  if (!allowedMimes.includes(normalized)) {
+    throw new Error(`Extensão ".${ext}" incompatível com MIME "${normalized}".`);
+  }
+  return normalized;
+}
+
 export async function uploadImage(file, onProgress = null, signal = null) {
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   if (!file || file.size === 0) throw new Error('Arquivo ausente ou vazio.');
-  
-  const mime = String(file.type || '').toLowerCase();
+  if (file.size > ALLOWED_MEDIA_LOCAL.image.maxBytes) throw new Error('Imagem muito grande (máx 10 MB).');
   const ext = getExtension(file.name);
-  if (!ALLOWED_IMAGE_TYPES.has(mime) && !ALLOWED_IMAGE_EXTS.has(ext)) {
-    throw new Error('Formato de imagem não suportado.');
-  }
-  if (file.size > MAX_IMAGE_SIZE) throw new Error('Imagem muito grande (máx 5 MB).');
+  if (!ALLOWED_MEDIA_LOCAL.image.exts.includes(ext)) throw new Error('Formato de imagem não suportado.');
 
   const base64 = await compressImage(file, 1920, 0.82, signal);
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
 
-  const safeName = sanitizeFilename(file.name || 'image.jpg', ALLOWED_IMAGE_EXTS, 'jpg');
+  const safeName = sanitizeFilename(file.name || 'image.jpg', ALLOWED_MEDIA_LOCAL.image.exts, 'jpg');
   return uploadBase64WithProgress(base64, safeName, 'image/jpeg', 'image', onProgress, signal);
 }
 
 export async function uploadAudioPreview(file, onProgress, extraData = {}, signal = null) {
   return uploadAudioPresigned(file, 'audio-preview', onProgress, extraData, signal);
 }
-
 export async function uploadAudioFull(file, onProgress, extraData = {}, signal = null) {
   return uploadAudioPresigned(file, 'audio-full', onProgress, extraData, signal);
 }
-
 export async function uploadAudio(file, onProgress, extraData = {}, signal = null) {
   return uploadAudioFull(file, onProgress, extraData, signal);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Presigned upload — áudio
-// ─────────────────────────────────────────────────────────────
 async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, signal = null) {
-  validateR2Config();
+  await ensureStorageConfig();
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   if (!file || file.size === 0) throw new Error('Arquivo ausente ou vazio.');
-  
+
+  const entry = ALLOWED_MEDIA_LOCAL[kind];
+  if (!entry) throw new Error(`Tipo de mídia inválido: ${kind}`);
+  if (file.size > entry.maxBytes) throw new Error(`Arquivo excede o limite para ${kind}.`);
+
   const browserMime = String(file.type || '').toLowerCase();
   const ext = getExtension(file.name);
-  
-  if (!ALLOWED_AUDIO_TYPES.has(browserMime) && !ALLOWED_AUDIO_EXTS.has(ext)) {
-    throw new Error('Formato de áudio não suportado.');
-  }
-  if (file.size > MAX_AUDIO_SIZE) throw new Error(`Áudio muito grande (máx ${MAX_AUDIO_SIZE / 1048576} MB).`);
+  if (!entry.exts.includes(ext) && !entry.mimes.includes(browserMime)) throw new Error('Formato de áudio não suportado.');
 
-  // Correção: Prioriza o MIME mapeado pela extensão para garantir metadados corretos no R2
-  const mappedMime = AUDIO_MIME_BY_EXT[ext];
-  const contentType = mappedMime || (ALLOWED_AUDIO_TYPES.has(browserMime) ? browserMime : 'audio/mpeg');
+  const contentType = validateMimeExtConsistency(kind, browserMime, file.name || `audio.${ext}`);
 
   const signRes = await apiFetch('upload-sign', {
     method: 'POST',
-    body: { kind, filename: sanitizeFilename(file.name || 'audio.mp3', ALLOWED_AUDIO_EXTS), contentType, size: file.size },
+    body: { kind, filename: sanitizeFilename(file.name || `audio.${ext}`, entry.exts), contentType, size: file.size },
     signal
   });
 
-  if (!signRes?.ok || !signRes.uploadUrl || !signRes.path) {
-    throw new Error(signRes?.error || 'Falha ao preparar upload.');
-  }
-  if (!isAllowedUploadUrl(signRes.uploadUrl, signRes.path)) throw new Error('URL de upload não autorizada ou path inconsistente.');
+  if (!signRes?.ok || !signRes.uploadUrl || !signRes.path) throw new Error(signRes?.error || 'Falha ao preparar upload.');
+
+  const expectedBucket = kind === 'audio-full' ? _storageConfig.privateBucket : _storageConfig.publicBucket;
+  if (!isAllowedUploadUrl(signRes.uploadUrl, signRes.path, expectedBucket)) throw new Error('URL assinada de domínio/bucket não autorizado.');
   if (!isValidStoragePath(signRes.path)) throw new Error('Caminho de armazenamento inválido.');
 
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   await putFileXHRWithRetry(signRes.uploadUrl, file, contentType, onProgress, signal);
-
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
 
   const confirmBody = { ...filterExtraData(extraData), kind, path: signRes.path };
@@ -214,13 +219,34 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
   if (typeof onProgress === 'function') {
     try { onProgress(100); } catch (err) { console.warn('[upload] callback final error:', err); }
   }
-
   return { url: confirm.url || null, path: confirm.path, track: confirm.track || null };
 }
 
-// ─────────────────────────────────────────────────────────────
-// PUT com retry
-// ─────────────────────────────────────────────────────────────
+function isAllowedUploadUrl(url, expectedPath, expectedBucket) {
+  try {
+    const cfg = _storageConfig;
+    if (!cfg) return false;
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
+    if (u.hostname !== cfg.s3Host) return false;
+    const expectedPrefix = `/${expectedBucket}/`;
+    if (!u.pathname.startsWith(expectedPrefix)) return false;
+    if (expectedPath) {
+      const urlPath = decodeURIComponent(u.pathname.slice(expectedPrefix.length));
+      if (urlPath !== expectedPath) return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
+function isValidStoragePath(path) {
+  if (!path || typeof path !== 'string') return false;
+  if (path.includes('..') || path.includes('//') || path.includes('\\')) return false;
+  if (/[<>"|?*\x00-\x1F]/.test(path) || /%2e%2e|%252e%252e/i.test(path)) return false;
+  if (path.startsWith('/') || path.endsWith('/') || path.trim() === '') return false;
+  return true;
+}
+
 async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
   let lastError;
   for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
@@ -231,29 +257,19 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
     } catch (err) {
       lastError = err;
       if (err.name === 'AbortError' || signal?.aborted) throw new DOMException('Cancelado pelo usuário.', 'AbortError');
-
       const status = err.status || err.httpStatus || 0;
-      
-      // Correção: Removido status === 0 da lista de retry para evitar loops em falhas de CORS/DNS
       const isRetryable = status === 408 || status === 429 || (status >= 500 && status <= 599);
-      
       if (!isRetryable || attempt >= MAX_UPLOAD_RETRIES) throw err;
-
       let delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
       if (err.retryAfterMs !== null && err.retryAfterMs !== undefined) {
         if (err.retryAfterMs > RETRY_MAX_DELAY_MS) {
-          const error = new Error(`Servidor pediu espera de ${Math.round(err.retryAfterMs/1000)}s.`);
-          error.status = status;
-          throw error;
+          const e = new Error(`Servidor pediu espera de ${Math.round(err.retryAfterMs/1000)}s.`);
+          e.status = status; throw e;
         }
         delay = Math.max(0, err.retryAfterMs);
       }
-      
-      if (status === 0) {
-        console.warn(`[upload] Falha de rede/CORS (status 0). Verifique a configuração do bucket R2.`);
-      } else {
-        console.warn(`[upload] tentativa ${attempt + 1} falhou (HTTP ${status}), retry em ${delay}ms`);
-      }
+      if (status === 0) console.warn('[upload] Falha de rede/CORS (status 0).');
+      else console.warn(`[upload] tentativa ${attempt + 1} falhou (HTTP ${status}), retry em ${delay}ms`);
       await sleep(delay, signal);
     }
   }
@@ -262,22 +278,15 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
 
 function parseXhrError(xhr, defaultMsg) {
   const err = new Error(defaultMsg || `Falha HTTP ${xhr.status}`);
-  err.status = xhr.status;
-  err.code = null;
-  err.data = null;
-  
+  err.status = xhr.status; err.code = null; err.data = null;
   const contentType = xhr.getResponseHeader('content-type') || '';
-  const isJson = /(?:application\/json|application\/[^;]+\+json)/i.test(contentType);
-
+  const isJson = /^(?:application\/json|application\/[^;]+?\+json)(?:;|$)/i.test(contentType);
   if (isJson && xhr.responseText) {
     try {
       const data = JSON.parse(xhr.responseText);
       err.message = data.error || data.message || err.message;
-      err.code = data.code || null;
-      err.data = data;
-    } catch {
-      err.message += `: ${(xhr.responseText || '').slice(0, 300)}`;
-    }
+      err.code = data.code || null; err.data = data;
+    } catch { err.message += `: ${(xhr.responseText || '').slice(0, 300)}`; }
   } else if (xhr.responseText) {
     err.message += `: ${(xhr.responseText || '').slice(0, 300)}`;
   }
@@ -288,20 +297,15 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.timeout = Math.max(MIN_TIMEOUT_MS, Math.min(MAX_TIMEOUT_MS, (file.size / UPLOAD_SPEED_BPS) * 1000 * 1.5));
-
-    try {
-      xhr.open('PUT', url, true);
-      xhr.setRequestHeader('Content-Type', contentType);
-    } catch (err) {
-      return reject(new Error(`Não foi possível iniciar upload: ${err.message}`));
-    }
+    try { xhr.open('PUT', url, true); xhr.setRequestHeader('Content-Type', contentType); }
+    catch (err) { return reject(new Error(`Não foi possível iniciar upload: ${err.message}`)); }
 
     let lastReportedPct = -1;
     if (typeof onProgress === 'function') {
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
         const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
-        if (pct > lastReportedPct && (pct >= lastReportedPct + 10 || pct === 99)) {
+        if (pct > lastReportedPct && (pct >= lastReportedPct + PROGRESS_THROTTLE_PCT || pct === 99)) {
           try { onProgress(pct); } catch (cbErr) { console.warn('[upload] callback error:', cbErr); }
           lastReportedPct = pct;
         }
@@ -313,10 +317,7 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
       abortHandler = () => { try { xhr.abort(); } catch {} };
       signal.addEventListener('abort', abortHandler, { once: true });
     }
-
-    const cleanup = () => {
-      if (abortHandler && signal) { try { signal.removeEventListener('abort', abortHandler); } catch {} }
-    };
+    const cleanup = () => { if (abortHandler && signal) { try { signal.removeEventListener('abort', abortHandler); } catch {} } };
 
     xhr.onload = () => {
       cleanup();
@@ -327,7 +328,7 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
         reject(err);
       }
     };
-    xhr.onerror = () => { cleanup(); const e = new Error('Erro de rede.'); e.status = 0; reject(e); };
+    xhr.onerror = () => { cleanup(); const e = new Error('Erro de rede ou CORS.'); e.status = 0; reject(e); };
     xhr.ontimeout = () => { cleanup(); const e = new Error('Timeout.'); e.status = 408; reject(e); };
     xhr.onabort = () => { cleanup(); const e = new Error('Cancelado.'); e.name = 'AbortError'; e.status = 0; reject(e); };
 
@@ -336,16 +337,11 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Upload de imagem com progresso (Padronizado)
-// ─────────────────────────────────────────────────────────────
 function uploadBase64WithProgress(base64, filename, contentType, kind, onProgress, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new DOMException('Cancelado', 'AbortError'));
-
     const url = buildUrl('upload', null);
     const payload = JSON.stringify({ kind, filename, contentType, base64 });
-
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
     xhr.setRequestHeader('Content-Type', 'application/json');
@@ -357,7 +353,7 @@ function uploadBase64WithProgress(base64, filename, contentType, kind, onProgres
       xhr.upload.onprogress = (e) => {
         if (!e.lengthComputable) return;
         const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
-        if (pct > lastReportedPct && (pct >= lastReportedPct + 10 || pct === 99)) {
+        if (pct > lastReportedPct && (pct >= lastReportedPct + PROGRESS_THROTTLE_PCT || pct === 99)) {
           try { onProgress(pct); } catch (cbErr) { console.warn('[upload-img] callback error:', cbErr); }
           lastReportedPct = pct;
         }
@@ -369,28 +365,24 @@ function uploadBase64WithProgress(base64, filename, contentType, kind, onProgres
       abortHandler = () => { try { xhr.abort(); } catch {} };
       signal.addEventListener('abort', abortHandler, { once: true });
     }
-
-    const cleanup = () => {
-      if (abortHandler && signal) { try { signal.removeEventListener('abort', abortHandler); } catch {} }
-    };
+    const cleanup = () => { if (abortHandler && signal) { try { signal.removeEventListener('abort', abortHandler); } catch {} } };
 
     xhr.onload = () => {
       cleanup();
       if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const result = JSON.parse(xhr.responseText);
-          if (!result || !result.ok) return reject(parseXhrError(xhr, 'Falha no upload.'));
-          if (!result.url && !result.path) return reject(new Error('Servidor não retornou URL nem path.'));
-          
-          if (typeof onProgress === 'function') {
-            try { onProgress(100); } catch (err) { console.warn('[upload-img] callback final error:', err); }
-          }
-          resolve({ url: result.url || null, path: result.path || null });
-        } catch (e) { 
-          const err = new Error('Resposta inválida do servidor.');
-          err.status = xhr.status;
-          reject(err);
+        let result;
+        try { result = JSON.parse(xhr.responseText); }
+        catch (e) { const err = new Error('Resposta inválida do servidor.'); err.status = xhr.status; return reject(err); }
+        if (!result || !result.ok) {
+          const err = new Error(result?.error || 'Falha no upload.');
+          err.status = xhr.status; err.code = result?.code || null; err.data = result;
+          return reject(err);
         }
+        if (!result.url && !result.path) return reject(new Error('Servidor não retornou URL nem path.'));
+        if (typeof onProgress === 'function') {
+          try { onProgress(100); } catch (err) { console.warn('[upload-img] callback final error:', err); }
+        }
+        resolve({ url: result.url || null, path: result.path || null });
       } else {
         reject(parseXhrError(xhr, `Upload falhou (HTTP ${xhr.status})`));
       }
@@ -404,9 +396,6 @@ function uploadBase64WithProgress(base64, filename, contentType, kind, onProgres
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Bind e UI
-// ─────────────────────────────────────────────────────────────
 export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = null) {
   const input = document.getElementById(inputId);
   if (!input) return;
@@ -421,7 +410,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
     const labels = { 'image': 'imagem', 'audio-preview': 'prévia', 'audio-full': 'áudio' };
     const label = labels[kind] || 'arquivo';
     const abortController = new AbortController();
-
     const progressElement = createProgressUI(label, () => abortController.abort());
     document.body.appendChild(progressElement);
 
@@ -435,7 +423,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
     try {
       const extraData = typeof getExtraData === 'function' ? getExtraData() : {};
       let result;
-
       if (kind === 'image') result = await uploadImage(file, updateProgress, abortController.signal);
       else if (kind === 'audio-preview') result = await uploadAudioPreview(file, updateProgress, extraData, abortController.signal);
       else if (kind === 'audio-full') result = await uploadAudioFull(file, updateProgress, extraData, abortController.signal);
@@ -461,7 +448,6 @@ export function bindUpload(inputId, onUploaded, kind = 'image', getExtraData = n
       input._uploadInProgress = false;
     }
   };
-
   input._uploadHandler = handler;
   input.addEventListener('change', handler);
 }
@@ -482,52 +468,12 @@ function setCancelEnabled(el, enabled) {
   btn.style.pointerEvents = enabled ? 'auto' : 'none';
 }
 
-// ─────────────────────────────────────────────────────────────
-// Validações de Segurança
-// ─────────────────────────────────────────────────────────────
-function isAllowedUploadUrl(url, expectedPath) {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== 'https:' || u.username || u.password || u.port) return false;
-
-    const accountHost = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
-    const isPathStyle = u.hostname === accountHost;
-    const isVirtualHost = u.hostname === `${R2_BUCKET}.${accountHost}`;
-
-    if (!isPathStyle && !isVirtualHost) return false;
-
-    if (expectedPath) {
-      let urlPath;
-      if (isPathStyle) {
-        urlPath = decodeURIComponent(u.pathname.slice(`/${R2_BUCKET}/`.length));
-      } else {
-        urlPath = decodeURIComponent(u.pathname.replace(/^\/+/, ''));
-      }
-      if (urlPath !== expectedPath) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isValidStoragePath(path) {
-  if (!path || typeof path !== 'string') return false;
-  if (path.includes('..') || path.includes('//') || path.includes('\\')) return false;
-  if (/[<>"|?*\x00-\x1F]/.test(path) || /%2e%2e|%252e%252e/i.test(path)) return false;
-  if (path.startsWith('/') || path.endsWith('/') || path.trim() === '') return false;
-  return true;
-}
-
 function parseRetryAfter(header) {
   if (header === null || header === undefined || header === '') return null;
   const seconds = Number(header);
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
   const date = Date.parse(header);
-  if (!Number.isNaN(date)) {
-    const ms = date - Date.now();
-    return ms > 0 ? ms : 0;
-  }
+  if (!Number.isNaN(date)) { const ms = date - Date.now(); return ms > 0 ? ms : 0; }
   return null;
 }
 
@@ -547,20 +493,13 @@ function sleep(ms, signal = null) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Processamento de Imagem
-// ─────────────────────────────────────────────────────────────
 async function compressImage(file, maxWidth, quality, signal = null) {
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   const url = URL.createObjectURL(file);
   try {
     const img = await loadImage(url, signal);
     if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
-    
-    if (img.width * img.height > MAX_IMAGE_PIXELS) {
-      throw new Error(`Imagem muito grande (${Math.round((img.width * img.height) / 1_000_000)}MP).`);
-    }
-    
+    if (img.width * img.height > MAX_IMAGE_PIXELS) throw new Error(`Imagem muito grande (${Math.round((img.width*img.height)/1_000_000)}MP).`);
     const scale = Math.min(1, maxWidth / img.width);
     const w = Math.max(1, Math.round(img.width * scale));
     const h = Math.max(1, Math.round(img.height * scale));
@@ -569,15 +508,10 @@ async function compressImage(file, maxWidth, quality, signal = null) {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Não foi possível processar a imagem.');
     if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
-    
     ctx.drawImage(img, 0, 0, w, h);
-    
     let dataUrl;
-    try {
-      dataUrl = canvas.toDataURL('image/jpeg', quality);
-    } catch (err) {
-      throw new Error('Falha ao comprimir imagem (memória insuficiente ou formato inválido).');
-    }
+    try { dataUrl = canvas.toDataURL('image/jpeg', quality); }
+    catch { throw new Error('Falha ao comprimir imagem.'); }
     return dataUrl.slice(dataUrl.indexOf(',') + 1);
   } finally { URL.revokeObjectURL(url); }
 }
@@ -586,17 +520,18 @@ function loadImage(src, signal = null) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     let settled = false;
-    const finish = (fn, arg) => { if (settled) return; settled = true; cleanup(); fn(arg); };
+    const timer = setTimeout(() => finish(reject, new Error('Timeout ao carregar imagem.')), LOAD_IMAGE_TIMEOUT_MS);
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearTimeout(timer); cleanup(); fn(arg); };
     const cleanup = () => {
       try { img.removeEventListener('load', onLoad); } catch {}
       try { img.removeEventListener('error', onError); } catch {}
       if (signal && abortHandler) { try { signal.removeEventListener('abort', abortHandler); } catch {} }
     };
     const onLoad = () => finish(resolve, img);
-    const onError = () => finish(reject, new Error('Imagem inválida.'));
+    const onError = () => finish(reject, new Error('Imagem inválida ou corrompida.'));
     let abortHandler = null;
     if (signal) {
-      if (signal.aborted) { img.src = ''; return reject(new DOMException('Cancelado', 'AbortError')); }
+      if (signal.aborted) { img.src = ''; return finish(reject, new DOMException('Cancelado', 'AbortError')); }
       abortHandler = () => { try { img.src = ''; } catch {} finish(reject, new DOMException('Cancelado', 'AbortError')); };
       signal.addEventListener('abort', abortHandler, { once: true });
     }
