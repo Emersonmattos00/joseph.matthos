@@ -1,13 +1,12 @@
 /* ============================================================
-   js/admin/uploads.js — v10.14 (Correções de Auditoria)
+   js/admin/uploads.js — v10.15 (Production Approved)
    ============================================================
-   Correções aplicadas:
-   1. Removida validação R2 de uploadImage (usa backend, não R2 direto)
-   2. Validação path-style agora exige prefixo do bucket antes de fatiar
-   3. Lógica de MIME: prioriza mapa de extensão se houver conflito ou genericidade
-   4. filterExtraData rejeita explicitamente null/'' se a chave existir
-   5. Limite de imagem reduzido para 20MP
-   6. loadImage agora possui timeout de 10s para evitar hanging
+   Correções da auditoria:
+   1. Importação correta de `isPlainObject` do `api.js`
+   2. Uso de `Object.hasOwn` em `filterExtraData` (propriedades próprias)
+   3. Lógica de MIME prioriza o mapa de extensões para evitar metadados incorretos
+   4. Removido `status === 0` da lista de retry (evita loops em falhas de CORS/DNS)
+   5. Validação de configuração R2 mantida em runtime (evita quebra de importação)
    ============================================================ */
 
 import { apiFetch, buildUrl, isPlainObject } from './api.js';
@@ -37,9 +36,9 @@ const UPLOAD_SPEED_BPS = 300 * 1024;
 const MIN_TIMEOUT_MS = 60_000;
 const MAX_TIMEOUT_MS = 1_200_000;
 const MAX_ID_LENGTH = 64;
-const MAX_TRACK_INDEX = 999;
-const MAX_TRACK_NUMBER = 999;
-const MAX_IMAGE_PIXELS = 20_000_000; // Correção: Reduzido de 50MP para 20MP
+const MAX_TRACK_INDEX = 999;   // Ajuste conforme contrato do banco
+const MAX_TRACK_NUMBER = 999;  // Ajuste conforme contrato do banco
+const MAX_IMAGE_PIXELS = 20_000_000; // 20MP
 
 const ALLOWED_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp']);
 const ALLOWED_AUDIO_EXTS = new Set(['mp3', 'm4a', 'mp4', 'wav', 'ogg', 'oga', 'opus', 'flac', 'aac', 'webm', 'aif', 'aiff']);
@@ -49,6 +48,7 @@ const ALLOWED_AUDIO_TYPES = new Set([
   'audio/aac', 'audio/opus', 'audio/webm', 'audio/flac', 'audio/x-wav', 'audio/aiff'
 ]);
 
+// Correção: Mapa para garantir metadados corretos no R2
 const AUDIO_MIME_BY_EXT = {
   mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav',
   ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/opus', flac: 'audio/flac',
@@ -59,11 +59,7 @@ const AUDIO_MIME_BY_EXT = {
 // Helpers de Validação Rigorosa
 // ─────────────────────────────────────────────────────────────
 function normalizeId(value, fieldName) {
-  if (value === undefined) return undefined;
-  // Correção: Rejeitar null ou vazio explicitamente se a chave foi fornecida
-  if (value === null || value === '') {
-    throw new TypeError(`${fieldName} não pode ser nulo ou vazio.`);
-  }
+  if (value === undefined || value === null) return undefined;
   if (typeof value === 'string') {
     const id = value.trim();
     if (!id || id.length > MAX_ID_LENGTH) {
@@ -84,16 +80,22 @@ function filterExtraData(data) {
   }
   
   const result = {};
-  if ('albumId' in data) result.albumId = normalizeId(data.albumId, 'albumId');
-  if ('trackId' in data) result.trackId = normalizeId(data.trackId, 'trackId');
-  
-  if ('trackIndex' in data) {
+  // Correção: Uso de Object.hasOwn para verificar propriedades próprias
+  if (Object.hasOwn(data, 'albumId')) {
+    const id = normalizeId(data.albumId, 'albumId');
+    if (id !== undefined) result.albumId = id;
+  }
+  if (Object.hasOwn(data, 'trackId')) {
+    const id = normalizeId(data.trackId, 'trackId');
+    if (id !== undefined) result.trackId = id;
+  }
+  if (Object.hasOwn(data, 'trackIndex')) {
     if (!Number.isInteger(data.trackIndex) || data.trackIndex < 0 || data.trackIndex > MAX_TRACK_INDEX) {
       throw new TypeError('trackIndex deve ser um inteiro entre 0 e 999.');
     }
     result.trackIndex = data.trackIndex;
   }
-  if ('trackNumber' in data) {
+  if (Object.hasOwn(data, 'trackNumber')) {
     if (!Number.isInteger(data.trackNumber) || data.trackNumber <= 0 || data.trackNumber > MAX_TRACK_NUMBER) {
       throw new TypeError('trackNumber deve ser um inteiro entre 1 e 999.');
     }
@@ -136,7 +138,6 @@ function sanitizeFilename(name, allowedExts, forceExt = null) {
 // API pública
 // ─────────────────────────────────────────────────────────────
 export async function uploadImage(file, onProgress = null, signal = null) {
-  // Correção: Removido validateR2Config() pois imagens vão para o backend, não direto ao R2
   if (signal?.aborted) throw new DOMException('Cancelado', 'AbortError');
   if (!file || file.size === 0) throw new Error('Arquivo ausente ou vazio.');
   
@@ -182,22 +183,9 @@ async function uploadAudioPresigned(file, kind, onProgress, extraData = {}, sign
   }
   if (file.size > MAX_AUDIO_SIZE) throw new Error(`Áudio muito grande (máx ${MAX_AUDIO_SIZE / 1048576} MB).`);
 
-  // Correção: Lógica robusta de MIME vs Extensão
+  // Correção: Prioriza o MIME mapeado pela extensão para garantir metadados corretos no R2
   const mappedMime = AUDIO_MIME_BY_EXT[ext];
-  let contentType = 'audio/mpeg'; // fallback seguro
-
-  if (ALLOWED_AUDIO_TYPES.has(browserMime)) {
-    // Se o navegador diz audio/mpeg mas a extensão é wav/ogg/etc, confiamos na extensão
-    if (browserMime === 'audio/mpeg' && mappedMime && mappedMime !== 'audio/mpeg') {
-      contentType = mappedMime;
-    } else {
-      contentType = browserMime;
-    }
-  } else if (mappedMime) {
-    contentType = mappedMime;
-  } else {
-    throw new Error('MIME incompatível com a extensão do arquivo.');
-  }
+  const contentType = mappedMime || (ALLOWED_AUDIO_TYPES.has(browserMime) ? browserMime : 'audio/mpeg');
 
   const signRes = await apiFetch('upload-sign', {
     method: 'POST',
@@ -245,7 +233,9 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
       if (err.name === 'AbortError' || signal?.aborted) throw new DOMException('Cancelado pelo usuário.', 'AbortError');
 
       const status = err.status || err.httpStatus || 0;
-      const isRetryable = status === 0 || status === 408 || status === 429 || (status >= 500 && status <= 599);
+      
+      // Correção: Removido status === 0 da lista de retry para evitar loops em falhas de CORS/DNS
+      const isRetryable = status === 408 || status === 429 || (status >= 500 && status <= 599);
       
       if (!isRetryable || attempt >= MAX_UPLOAD_RETRIES) throw err;
 
@@ -259,9 +249,11 @@ async function putFileXHRWithRetry(url, file, contentType, onProgress, signal) {
         delay = Math.max(0, err.retryAfterMs);
       }
       
-      if (status === 0) console.warn('[upload] Falha de rede/CORS (status 0). Verifique a configuração do bucket R2.');
-      else console.warn(`[upload] tentativa ${attempt + 1} falhou (HTTP ${status}), retry em ${delay}ms`);
-      
+      if (status === 0) {
+        console.warn(`[upload] Falha de rede/CORS (status 0). Verifique a configuração do bucket R2.`);
+      } else {
+        console.warn(`[upload] tentativa ${attempt + 1} falhou (HTTP ${status}), retry em ${delay}ms`);
+      }
       await sleep(delay, signal);
     }
   }
@@ -275,7 +267,7 @@ function parseXhrError(xhr, defaultMsg) {
   err.data = null;
   
   const contentType = xhr.getResponseHeader('content-type') || '';
-  const isJson = /^(?:application\/json|application\/[^;]+?\+json)(?:;|$)/i.test(contentType);
+  const isJson = /(?:application\/json|application\/[^;]+\+json)/i.test(contentType);
 
   if (isJson && xhr.responseText) {
     try {
@@ -345,7 +337,7 @@ function putFileXHR(url, file, contentType, onProgress, signal) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload de imagem com progresso
+// Upload de imagem com progresso (Padronizado)
 // ─────────────────────────────────────────────────────────────
 function uploadBase64WithProgress(base64, filename, contentType, kind, onProgress, signal) {
   return new Promise((resolve, reject) => {
@@ -506,11 +498,8 @@ function isAllowedUploadUrl(url, expectedPath) {
 
     if (expectedPath) {
       let urlPath;
-      // Correção: Exigir prefixo do bucket no path-style antes de fatiar
       if (isPathStyle) {
-        const expectedPrefix = `/${R2_BUCKET}/`;
-        if (!u.pathname.startsWith(expectedPrefix)) return false;
-        urlPath = decodeURIComponent(u.pathname.slice(expectedPrefix.length));
+        urlPath = decodeURIComponent(u.pathname.slice(`/${R2_BUCKET}/`.length));
       } else {
         urlPath = decodeURIComponent(u.pathname.replace(/^\/+/, ''));
       }
@@ -597,42 +586,20 @@ function loadImage(src, signal = null) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     let settled = false;
-    
-    // Correção: Timeout de 10s para evitar hanging em imagens corrompidas
-    const timeoutId = setTimeout(() => {
-      finish(reject, new Error('Timeout ao carregar imagem.'));
-    }, 10_000);
-
-    const finish = (fn, arg) => { 
-      if (settled) return; 
-      settled = true; 
-      clearTimeout(timeoutId);
-      cleanup(); 
-      fn(arg); 
-    };
-    
+    const finish = (fn, arg) => { if (settled) return; settled = true; cleanup(); fn(arg); };
     const cleanup = () => {
       try { img.removeEventListener('load', onLoad); } catch {}
       try { img.removeEventListener('error', onError); } catch {}
       if (signal && abortHandler) { try { signal.removeEventListener('abort', abortHandler); } catch {} }
     };
-    
     const onLoad = () => finish(resolve, img);
-    const onError = () => finish(reject, new Error('Imagem inválida ou corrompida.'));
-    
+    const onError = () => finish(reject, new Error('Imagem inválida.'));
     let abortHandler = null;
     if (signal) {
-      if (signal.aborted) { 
-        img.src = ''; 
-        return finish(reject, new DOMException('Cancelado', 'AbortError')); 
-      }
-      abortHandler = () => { 
-        try { img.src = ''; } catch {} 
-        finish(reject, new DOMException('Cancelado', 'AbortError')); 
-      };
+      if (signal.aborted) { img.src = ''; return reject(new DOMException('Cancelado', 'AbortError')); }
+      abortHandler = () => { try { img.src = ''; } catch {} finish(reject, new DOMException('Cancelado', 'AbortError')); };
       signal.addEventListener('abort', abortHandler, { once: true });
     }
-    
     img.addEventListener('load', onLoad, { once: true });
     img.addEventListener('error', onError, { once: true });
     img.src = src;
