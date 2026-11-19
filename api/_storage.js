@@ -1,16 +1,25 @@
 'use strict';
 
 /* ============================================================
-   api/_storage.js — Cloudflare R2 via S3 API (v3.0)
+   api/_storage.js — Cloudflare R2 via S3 API (v4)
    ------------------------------------------------------------
-   Correções da auditoria v3.4 (admin.js v3.5):
-   1. Quarentena: uploads assinados vão para _quarantine/
-   2. promoteFromQuarantine(): copia para caminho definitivo
-   3. deleteObject(): remove objeto (quarentena ou definitivo)
-   4. purgeOldQuarantine(): limpa temporários antigos
-   5. inferKindFromKey() agora reconhece _quarantine/ e prefixos
+   Correções aplicadas (auditoria v3.4 + revisão v4):
+   P0
+   1. getPlaybackUrl() exige audio-full definitivo
+   2. createSignedDownloadUrl() rejeita quarentena
+   3. uploadObject() restrito a DIRECT_UPLOAD_KINDS (image)
+   4. promoteFromQuarantine() valida kind de origem, extensão,
+      MIME/tamanho esperados, ETag (CopySourceIfMatch) e
+      metadados do destino
+   P1
+   5. validatePublicUrl() valida host/porta/path
+   6. prefixes normalizados na leitura
+   7. purgeOldQuarantine() valida olderThanHours
+   8. buildDefinitivePath() valida kind/ext internamente
+   9. inferKindFromKey() exige formato exato de quarentena
    ============================================================ */
 
+const crypto = require('crypto');
 const {
   GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client,
   CopyObjectCommand, DeleteObjectCommand, ListObjectsV2Command
@@ -28,19 +37,19 @@ const ALLOWED_MEDIA = {
     exts: new Set(['jpg','jpeg','png','webp','gif','avif']),
     mimes: new Set(['image/jpeg','image/png','image/webp','image/gif','image/avif']),
     bucket: 'public',
-    maxBytes: 10 * 1024 * 1024 // 10 MB
+    maxBytes: 10 * 1024 * 1024
   },
   'audio-preview': {
     exts: new Set(['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff']),
     mimes: new Set(['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/wav','audio/x-wav','audio/flac','audio/aiff','audio/x-aiff']),
     bucket: 'public',
-    maxBytes: 50 * 1024 * 1024 // 50 MB
+    maxBytes: 50 * 1024 * 1024
   },
   'audio-full': {
     exts: new Set(['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff']),
     mimes: new Set(['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/flac','audio/wav','audio/x-wav','audio/aiff','audio/x-aiff']),
     bucket: 'private',
-    maxBytes: 200 * 1024 * 1024 // 200 MB
+    maxBytes: 200 * 1024 * 1024
   }
 };
 
@@ -55,6 +64,10 @@ const EXT_TO_MIMES = {
 
 const QUARANTINE_PREFIX = '_quarantine';
 const QUARANTINE_TTL_HOURS_DEFAULT = 24;
+const QUARANTINE_TTL_HOURS_MAX = 24 * 30;
+
+// Apenas estes tipos podem ser gravados por uploadObject() diretamente.
+const DIRECT_UPLOAD_KINDS = new Set(['image']);
 
 // ─────────────────────────────────────────────────────────────
 // Configuração
@@ -62,14 +75,27 @@ const QUARANTINE_TTL_HOURS_DEFAULT = 24;
 function validatePublicUrl(urlStr) {
   if (!urlStr) return null;
   try {
-    const u = new URL(urlStr);
+    const u = new URL(String(urlStr).trim());
     if (u.protocol !== 'https:') throw new Error('Deve ser HTTPS');
-    if (u.username || u.password) throw new Error('Credenciais não permitidas na URL');
+    if (u.username || u.password) throw new Error('Credenciais não permitidas');
     if (u.search || u.hash) throw new Error('Query string ou hash não permitidos');
+    if (u.pathname !== '/' && u.pathname !== '') {
+      throw new Error('Path não permitido no domínio base');
+    }
+    if (u.port && u.port !== '443') throw new Error('Porta não permitida');
+    const host = u.hostname.toLowerCase();
+    if (!host || host === 'localhost') throw new Error('Host inválido');
     return u.origin;
   } catch {
     return null;
   }
+}
+
+function normalizePrefix(raw, fallback) {
+  return String(raw || fallback)
+    .trim()
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, '');
 }
 
 function getStorageConfig() {
@@ -86,7 +112,7 @@ function getStorageConfig() {
 
   const publicBaseUrl = validatePublicUrl(process.env.R2_PUBLIC_BASE_URL);
   if (!publicBaseUrl) {
-    throw new Error('[storage] R2_PUBLIC_BASE_URL é obrigatório e deve ser uma URL HTTPS válida.');
+    throw new Error('[storage] R2_PUBLIC_BASE_URL é obrigatório e deve ser uma URL HTTPS válida (sem path/porta/query).');
   }
 
   const customImageDomain = validatePublicUrl(process.env.R2_CUSTOM_IMAGE_DOMAIN) || null;
@@ -102,14 +128,15 @@ function getStorageConfig() {
     throw new Error('[storage] Buckets público e privado devem ser diferentes.');
   }
 
+  // Prefixos normalizados JÁ na leitura — a validação e o cache usam o mesmo valor.
   const prefixes = {
-    'image': String(process.env.R2_PREFIX_IMAGE || 'images').replace(/^\/+|\/+$/g, ''),
-    'audio-preview': String(process.env.R2_PREFIX_PREVIEW || 'preview').replace(/^\/+|\/+$/g, ''),
-    'audio-full': String(process.env.R2_PREFIX_AUDIO || 'audio').replace(/^\/+|\/+$/g, '')
+    'image': normalizePrefix(process.env.R2_PREFIX_IMAGE, 'images'),
+    'audio-preview': normalizePrefix(process.env.R2_PREFIX_PREVIEW, 'preview'),
+    'audio-full': normalizePrefix(process.env.R2_PREFIX_AUDIO, 'audio')
   };
 
   const prefixRe = /^[a-z][a-z0-9_-]{0,62}$/;
-  const prefixVals = Object.values(prefixes).map(p => p.toLowerCase());
+  const prefixVals = Object.values(prefixes);
   for (const p of prefixVals) {
     if (!prefixRe.test(p)) throw new Error(`[storage] Prefixo "${p}" inválido.`);
   }
@@ -175,7 +202,7 @@ function validateFilename(filename) {
 function validateMimeForKind(kind, mime) {
   const resolved = resolveKindEntry(kind);
   if (!resolved) throw new Error('Tipo de mídia inválido.');
-  const m = String(mime || '').toLowerCase();
+  const m = String(mime || '').toLowerCase().trim();
   if (!resolved.entry.mimes.has(m)) throw new Error(`Content-Type não permitido para ${resolved.kind}.`);
   return m;
 }
@@ -195,7 +222,7 @@ function validateExtForKind(kind, filenameOrKey) {
 
 function validateMimeExtConsistency(kind, mime, filenameOrKey) {
   const ext = validateExtForKind(kind, filenameOrKey);
-  const normalizedMime = String(mime || '').toLowerCase();
+  const normalizedMime = String(mime || '').toLowerCase().trim();
   const allowed = EXT_TO_MIMES[ext];
   if (!allowed) return;
   if (!allowed.includes(normalizedMime)) {
@@ -213,16 +240,22 @@ function isQuarantinePath(key) {
 function buildQuarantinePath(kind, ext) {
   const safeKind = String(kind).replace(/[^a-z0-9-]/gi, '');
   const ts = Date.now();
-  const hex = require('crypto').randomBytes(8).toString('hex');
+  const hex = crypto.randomBytes(8).toString('hex');
   return `${QUARANTINE_PREFIX}/${safeKind}/${ts}_${hex}.${ext}`;
 }
 
 function buildDefinitivePath(kind, ext) {
+  const resolved = resolveKindEntry(kind);
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
+  const safeExt = String(ext || '').toLowerCase();
+  if (!/^[a-z0-9]{1,8}$/.test(safeExt) || !resolved.entry.exts.has(safeExt)) {
+    throw new Error(`Extensão "${safeExt}" inválida para ${resolved.kind}.`);
+  }
   const config = getStorageConfig();
-  const prefix = config.prefixes[kind] || 'audio';
+  const prefix = config.prefixes[resolved.kind];
   const ts = Date.now();
-  const hex = require('crypto').randomBytes(8).toString('hex');
-  return `${prefix}/${ts}_${hex}.${ext}`;
+  const hex = crypto.randomBytes(8).toString('hex');
+  return `${prefix}/${ts}_${hex}.${safeExt}`;
 }
 
 /**
@@ -237,14 +270,23 @@ function buildPathForKind(kind, filename) {
 // ─────────────────────────────────────────────────────────────
 // Kind a partir de chave (quarentena ou definitivo)
 // ─────────────────────────────────────────────────────────────
+// Formato exato de quarentena: _quarantine/<kind>/<arquivo>.<ext>
+// Sem subpastas, sem segmentos extras.
+const QUARANTINE_SEGMENTS = 3;
+
 function inferKindFromKey(key) {
   validateObjectKey(key);
   const k = String(key);
 
   if (k.startsWith(QUARANTINE_PREFIX + '/')) {
-    const after = k.slice(QUARANTINE_PREFIX.length + 1);
-    const first = after.split('/')[0];
-    if (first === 'audio-full' || first === 'audio-preview' || first === 'image') return first;
+    const segments = k.split('/');
+    if (segments.length !== QUARANTINE_SEGMENTS) {
+      const err = new Error('Caminho de quarentena com estrutura inválida.');
+      err.code = 'INVALID_KEY_PREFIX';
+      throw err;
+    }
+    const kind = segments[1];
+    if (kind === 'audio-full' || kind === 'audio-preview' || kind === 'image') return kind;
     const err = new Error('Caminho de quarentena com kind inválido.');
     err.code = 'INVALID_KEY_PREFIX';
     throw err;
@@ -312,11 +354,16 @@ function getPublicUrl(key) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload direto (imagens pequenas)
+// Upload direto (apenas DIRECT_UPLOAD_KINDS)
 // ─────────────────────────────────────────────────────────────
 async function uploadObject(key, body, contentType) {
   validateObjectKey(key);
   const kind = inferKindFromKey(key);
+  if (!DIRECT_UPLOAD_KINDS.has(kind)) {
+    const err = new Error(`Upload direto não permitido para "${kind}". Use quarentena + promote.`);
+    err.code = 'DIRECT_UPLOAD_FORBIDDEN';
+    throw err;
+  }
   const entry = ALLOWED_MEDIA[kind];
 
   validateMimeForKind(kind, contentType);
@@ -355,7 +402,7 @@ async function createSignedUploadUrl(key, contentType, sizeBytes, expiresInSec =
   validateMimeForKind(kind, contentType);
   validateMimeExtConsistency(kind, contentType, key);
 
-  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0) throw new Error('Tamanho do arquivo inválido.');
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) throw new Error('Tamanho do arquivo inválido.');
   if (sizeBytes > entry.maxBytes) throw new Error(`Arquivo excede o limite para ${kind}.`);
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido (1–3600s).');
@@ -405,6 +452,13 @@ async function objectExists(key) {
 // ─────────────────────────────────────────────────────────────
 async function createSignedDownloadUrl(key, expiresInSec = 300, downloadFilename = null) {
   validateObjectKey(key);
+
+  if (isQuarantinePath(key)) {
+    const err = new Error('Download de objeto em quarentena não é permitido.');
+    err.code = 'QUARANTINE_FORBIDDEN';
+    throw err;
+  }
+
   const kind = inferKindFromKey(key);
   const bucket = resolveBucket(kind);
 
@@ -427,13 +481,23 @@ async function createSignedDownloadUrl(key, expiresInSec = 300, downloadFilename
 }
 
 /**
- * ⚠️ ATENÇÃO: Esta função APENAS gera a URL assinada.
- * O chamador DEVE verificar a autorização (assinatura, licença)
- * ANTES de chamar esta função.
+ * Gera URL de reprodução. Só aceita audio-full definitivo.
+ * O chamador DEVE verificar autorização (assinatura, licença) antes.
  */
 async function getPlaybackUrl(key) {
   if (!key) throw new Error('Chave obrigatória.');
   validateObjectKey(key);
+  if (isQuarantinePath(key)) {
+    const err = new Error('Reprodução de objeto em quarentena não é permitida.');
+    err.code = 'QUARANTINE_FORBIDDEN';
+    throw err;
+  }
+  const kind = inferKindFromKey(key);
+  if (kind !== 'audio-full') {
+    const err = new Error('getPlaybackUrl aceita apenas audio-full.');
+    err.code = 'INVALID_KIND';
+    throw err;
+  }
   const { url } = await createSignedDownloadUrl(key, 300, null);
   return url;
 }
@@ -441,40 +505,142 @@ async function getPlaybackUrl(key) {
 // ─────────────────────────────────────────────────────────────
 // PROMOÇÃO DE QUARENTENA
 // ─────────────────────────────────────────────────────────────
-async function promoteFromQuarantine(quarantineKey, kind) {
+/**
+ * Copia objeto de _quarantine/<kind>/<arquivo>.<ext> para caminho
+ * definitivo do MESMO kind, validando extensão, MIME e tamanho.
+ *
+ * expectedSize/expectedMime são opcionais, mas quando fornecidos são
+ * comparados com os metadados da origem ANTES da cópia.
+ *
+ * Usa CopySourceIfMatch com o ETag lido da origem para reduzir a janela
+ * de substituição do objeto de quarentena entre o HeadObject e o CopyObject.
+ * Isso NÃO substitui inspeção de conteúdo (FFprobe/reprocessamento).
+ */
+async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
   if (!isQuarantinePath(quarantineKey)) {
     const err = new Error('promoteFromQuarantine exige caminho de quarentena.');
     err.code = 'INVALID_PATH';
     throw err;
   }
 
-  const ext = String(quarantineKey).split('.').pop() || 'bin';
-  const definitiveKey = buildDefinitivePath(kind, ext);
+  const originKind = inferKindFromKey(quarantineKey);
+  const resolved = resolveKindEntry(kind);
+  if (!resolved || resolved.kind !== originKind) {
+    const err = new Error('kind informado não corresponde ao kind da quarentena.');
+    err.code = 'KIND_MISMATCH';
+    throw err;
+  }
 
+  const ext = validateExtForKind(resolved.kind, quarantineKey);
+
+  const expectedSize = opts.expectedSize !== undefined ? Number(opts.expectedSize) : null;
+  const expectedMime = opts.expectedMime
+    ? String(opts.expectedMime).split(';')[0].trim().toLowerCase()
+    : null;
+
+  if (expectedSize !== null && (!Number.isSafeInteger(expectedSize) || expectedSize <= 0)) {
+    throw new Error('expectedSize inválido.');
+  }
+  if (expectedMime !== null) {
+    validateMimeForKind(resolved.kind, expectedMime);
+    validateMimeExtConsistency(resolved.kind, expectedMime, quarantineKey);
+  }
+
+  const bucket = resolveBucket(resolved.kind);
   const c = getS3Client();
-  const bucket = resolveBucket(kind);
 
-  await c.send(new CopyObjectCommand({
+  // 1) HeadObject na origem
+  const originMeta = await getObjectMetadata(quarantineKey);
+  if (!originMeta || originMeta.contentLength <= 0) {
+    const err = new Error('Objeto de quarentena inexistente ou vazio.');
+    err.code = 'QUARANTINE_MISSING';
+    throw err;
+  }
+
+  const originMime = (originMeta.contentType || '').split(';')[0].trim().toLowerCase();
+  if (!originMime || !ALLOWED_MEDIA[resolved.kind].mimes.has(originMime)) {
+    const err = new Error(`Content-Type do objeto (${originMime || 'vazio'}) não é permitido para ${resolved.kind}.`);
+    err.code = 'MIME_MISMATCH';
+    throw err;
+  }
+  validateMimeExtConsistency(resolved.kind, originMime, quarantineKey);
+
+  if (expectedSize !== null && originMeta.contentLength !== expectedSize) {
+    const err = new Error(`Tamanho do objeto (${originMeta.contentLength}) difere do esperado (${expectedSize}).`);
+    err.code = 'SIZE_MISMATCH';
+    throw err;
+  }
+  if (expectedMime !== null && originMime !== expectedMime) {
+    const err = new Error(`MIME do objeto (${originMime}) difere do esperado (${expectedMime}).`);
+    err.code = 'MIME_MISMATCH';
+    throw err;
+  }
+
+  const etag = originMeta.etag;
+  if (!etag) {
+    const err = new Error('ETag da origem ausente — impossível proteger a cópia.');
+    err.code = 'ETAG_MISSING';
+    throw err;
+  }
+
+  // 2) Caminho definitivo (valida kind/ext novamente dentro da função)
+  const definitiveKey = buildDefinitivePath(resolved.kind, ext);
+
+  // 3) CopyObject condicional
+  const copyParams = {
     Bucket: bucket,
     Key: definitiveKey,
-    CopySource: `/${bucket}/${encodeURIComponent(quarantineKey).replace(/%2F/g, '/')}`,
-    MetadataDirective: 'COPY'
-  }));
+    CopySource: `/${bucket}/${encodeKey(quarantineKey)}`,
+    MetadataDirective: 'COPY',
+    CopySourceIfMatch: etag
+  };
 
-  const meta = await getObjectMetadata(definitiveKey);
-  if (!meta || meta.contentLength <= 0) {
+  try {
+    await c.send(new CopyObjectCommand(copyParams));
+  } catch (err) {
+    if (err?.name === 'PreconditionFailed' || err?.$metadata?.httpStatusCode === 412) {
+      const e = new Error('Objeto de quarentena foi modificado entre a leitura e a cópia.');
+      e.code = 'SOURCE_CHANGED';
+      throw e;
+    }
+    throw err;
+  }
+
+  // 4) HeadObject no destino e conferência
+  const destMeta = await getObjectMetadata(definitiveKey);
+  if (!destMeta || destMeta.contentLength <= 0) {
     const err = new Error('Falha ao promover objeto — definitivo vazio.');
     err.code = 'PROMOTE_FAILED';
     throw err;
   }
+  if (destMeta.contentLength !== originMeta.contentLength) {
+    try { await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: definitiveKey })); } catch {}
+    const err = new Error('Tamanho do definitivo difere da origem.');
+    err.code = 'PROMOTE_SIZE_MISMATCH';
+    throw err;
+  }
+  const destMime = (destMeta.contentType || '').split(';')[0].trim().toLowerCase();
+  if (destMime !== originMime) {
+    try { await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: definitiveKey })); } catch {}
+    const err = new Error('MIME do definitivo difere da origem.');
+    err.code = 'PROMOTE_MIME_MISMATCH';
+    throw err;
+  }
 
+  // 5) Remover temporário
   try {
     await c.send(new DeleteObjectCommand({ Bucket: bucket, Key: quarantineKey }));
   } catch (err) {
     console.warn('[storage] falha ao apagar quarentena:', quarantineKey, err.message);
   }
 
-  return { definitiveKey, meta };
+  return {
+    definitiveKey,
+    meta: destMeta,
+    originMeta,
+    etag,
+    kind: resolved.kind
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -482,6 +648,7 @@ async function promoteFromQuarantine(quarantineKey, kind) {
 // ─────────────────────────────────────────────────────────────
 async function deleteObject(key) {
   try {
+    validateObjectKey(key);
     const kind = inferKindFromKey(key);
     const bucket = resolveBucket(kind);
     await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
@@ -493,8 +660,13 @@ async function deleteObject(key) {
 }
 
 async function purgeOldQuarantine(olderThanHours = QUARANTINE_TTL_HOURS_DEFAULT) {
+  const hours = Number(olderThanHours);
+  if (!Number.isFinite(hours) || hours <= 0 || hours > QUARANTINE_TTL_HOURS_MAX) {
+    throw new Error(`olderThanHours deve estar entre 1 e ${QUARANTINE_TTL_HOURS_MAX}.`);
+  }
+
   const c = getS3Client();
-  const cutoff = Date.now() - olderThanHours * 3600 * 1000;
+  const cutoff = Date.now() - hours * 3600 * 1000;
   let deleted = 0;
 
   for (const kind of Object.keys(ALLOWED_MEDIA)) {
@@ -547,7 +719,8 @@ function getPublicR2Config() {
     quarantine: {
       prefix: QUARANTINE_PREFIX,
       ttlHours: QUARANTINE_TTL_HOURS_DEFAULT
-    }
+    },
+    directUploadKinds: [...DIRECT_UPLOAD_KINDS]
   };
 }
 
@@ -561,10 +734,10 @@ module.exports = {
   getPrefixForKind, inferKindFromKey, resolveBucket,
   validateObjectKey, validateFilename, validateExtForKind,
   validateMimeForKind, validateMimeExtConsistency, getPublicR2Config,
-  ALLOWED_MEDIA, EXT_TO_MIMES,
+  ALLOWED_MEDIA, EXT_TO_MIMES, DIRECT_UPLOAD_KINDS,
 
   // Quarentena
   promoteFromQuarantine, buildQuarantinePath, buildDefinitivePath,
   isQuarantinePath, deleteObject, purgeOldQuarantine,
-  QUARANTINE_PREFIX, QUARANTINE_TTL_HOURS_DEFAULT
+  QUARANTINE_PREFIX, QUARANTINE_TTL_HOURS_DEFAULT, QUARANTINE_TTL_HOURS_MAX
 };
