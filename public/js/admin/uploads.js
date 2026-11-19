@@ -14,8 +14,8 @@ import { toast } from './ui/toast.js';
 // ─────────────────────────────────────────────────────────────
 // Configuração
 // ─────────────────────────────────────────────────────────────
-const R2_ACCOUNT_ID = 'SEU_ACCOUNT_ID_AQUI'; // 32 hex chars
-const R2_BUCKET     = 'NOME_DO_BUCKET_AQUI'; // lowercase + dígitos + hífen
+const R2_ACCOUNT_ID = 'f44bf615f12d9cb5159bd73d89c652cb'; // 32 hex chars
+const R2_BUCKET     = 'josephmatthos'; // lowercase + dígitos + hífen
 
 if (!/^[a-f0-9]{32}$/.test(R2_ACCOUNT_ID)) {
   throw new Error('[uploads] Configure um Account ID válido do Cloudflare R2 (32 hex chars).');
