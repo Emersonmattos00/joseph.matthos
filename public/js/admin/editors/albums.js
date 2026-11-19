@@ -1,18 +1,18 @@
 /* ============================================================
-   js/admin/editors/albums.js — v9 (Audited & Corrected)
+   js/admin/editors/albums.js — v10 (Spotify UI + Audited)
    ============================================================
-   Correções da auditoria:
-   1. Miniplayer robusto com URLs públicas do R2 (não depende de download-url)
-   2. Objeto Audio único persistente com controle de concorrência (seq)
-   3. Estados visuais: loading | playing | paused | error | ended
-   4. Restauração de posição após loadedmetadata (não imediatamente)
-   5. Validação de duração mm:ss, limites de preço e tipo de upload
-   6. Preview de áudio dentro do modal de edição
-   7. Confirmação ao substituir áudio já cadastrado
-   8. Tratamento de eventos (waiting, stalled, canplay, abort, error)
-   9. Duração real detectada pelo navegador no modal
-   10. Limpeza de estado ao excluir álbum (expandido + tracks + player)
-   11. Rebind correto após falha de drag-drop
+   - Miniplayer estilo Spotify (ícones SVG, 3 colunas, dourado)
+   - URLs públicas do R2 (não depende de download-url para tocar)
+   - Objeto Audio singleton com controle de concorrência (seq)
+   - Estados visuais: loading | playing | paused | error | ended
+   - Restauração de posição após loadedmetadata
+   - Validação de duração mm:ss, limites de preço e tipo de upload
+   - Preview de áudio dentro do modal de edição (▶ Testar)
+   - Confirmação ao substituir áudio já cadastrado
+   - Tratamento completo de eventos (waiting, stalled, canplay, abort, error)
+   - Detecção de duração real após upload
+   - Limpeza de estado ao excluir álbum/faixa (incluindo player)
+   - Rebind correto após falha de drag-drop
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -22,7 +22,7 @@ import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
 
 // ─────────────────────────────────────────────────────────────
-// Configuração (ajuste conforme seu bucket R2)
+// Configuração
 // ─────────────────────────────────────────────────────────────
 const R2_PUBLIC_BASE = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
 const MAX_TRACK_PRICE_CENTS = 999900; // R$ 9.999,99
@@ -39,27 +39,41 @@ const State = {
   loading: false,
   error: null,
   loadReqId: 0,
-  tracksReqId: new Map() // Item 2: concorrência por álbum
+  tracksReqId: new Map()
 };
 
 let _dragState = null;
 
 // ─────────────────────────────────────────────────────────────
-// MINI PLAYER (singleton) — Item 1 da auditoria
+// MINI PLAYER (singleton)
 // ─────────────────────────────────────────────────────────────
 const Player = {
   el: null,
   bar: null,
-  current: null,         // { trackId, albumId, title, version, duration }
+  current: null,
   versions: { preview: false, full: false },
-  seq: 0,                // controle de concorrência (Item 2)
+  seq: 0,
   seeking: false,
   stallTimer: null,
-  pendingRestore: null   // tempo a restaurar após loadedmetadata (Item 3)
+  pendingRestore: null
 };
 
 // ─────────────────────────────────────────────────────────────
-// parseLyricsInput — Versão Estrita (Item 10)
+// Ícones SVG inline (estilo Spotify)
+// ─────────────────────────────────────────────────────────────
+const ICON = {
+  play:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/></svg>',
+  pause: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2.7 1a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7H2.7zm8 0a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7h-2.6z"/></svg>',
+  prev:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M13.151.922a.75.75 0 0 1 .112.948l-.112.13-3.872 3.872 3.872 3.871a.75.75 0 0 1-.948 1.168l-.132-.109L8.063 6.93a.75.75 0 0 1-.12-.94l.12-.13 3.87-3.87A.75.75 0 0 1 13.15.922zM3.75 1a.75.75 0 0 1 .14.013l.11.041A.75.75 0 0 1 4.5 1.75v12.5a.75.75 0 0 1-1.5 0V1.75a.75.75 0 0 1 .75-.75z"/></svg>',
+  next:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2.838.922a.75.75 0 0 0-.111.948l.111.13 3.872 3.872-3.872 3.871a.75.75 0 0 0 .949 1.168l.132-.109 3.871-3.87a.75.75 0 0 0 .12-.94l-.12-.13-3.87-3.87a.75.75 0 0 0-1.082-.07zM12.25 1a.75.75 0 0 0-.14.013l-.11.041A.75.75 0 0 0 11.5 1.75v12.5a.75.75 0 0 0 1.5 0V1.75a.75.75 0 0 0-.75-.75z"/></svg>',
+  vol:   '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.925 4.072a2.142 2.142 0 0 0-.783 2.929 2.142 2.142 0 0 0 .783.783L8.393 11.5v-7L2.816 4.922zM12.32 3.12a.75.75 0 0 1 1.06 0 6.726 6.726 0 0 1 1.973 4.773 6.726 6.726 0 0 1-1.973 4.773.75.75 0 1 1-1.061-1.06 5.226 5.226 0 0 0 1.534-3.712 5.226 5.226 0 0 0-1.534-3.713.75.75 0 0 1 0-1.061z"/></svg>',
+  mute:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M13.86 5.47a.75.75 0 0 0-1.061 0l-1.47 1.47-1.47-1.47A.75.75 0 0 0 8.8 6.53L10.269 8l-1.47 1.47a.75.75 0 1 0 1.06 1.06l1.47-1.47 1.47 1.47a.75.75 0 0 0 1.06-1.06L12.39 8l1.47-1.47a.75.75 0 0 0 0-1.06z"/><path d="M10.116 1.527a.75.75 0 0 0-.375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 1.125.65.75.75 0 0 0 .375-.65zM7.616 6.5v7l-4.575-2.62a2.142 2.142 0 0 1-.783-2.929 2.142 2.142 0 0 1 .783-.783L7.616 6.5z"/></svg>',
+  close: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M2.47 2.47a.75.75 0 0 1 1.06 0L8 6.94l4.47-4.47a.75.75 0 1 1 1.06 1.06L9.06 8l4.47 4.47a.75.75 0 1 1-1.06 1.06L8 9.06l-4.47 4.47a.75.75 0 0 1-1.06-1.06L6.94 8 2.47 3.53a.75.75 0 0 1 0-1.06z"/></svg>',
+  link:  '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M7.05 3.584a5.2 5.2 0 0 1 7.34 0 5.22 5.22 0 0 1 0 7.371l-2.378 2.378a5.21 5.21 0 0 1-7.371 0 .75.75 0 1 1 1.06-1.06 3.71 3.71 0 0 0 5.25 0l2.38-2.38a3.72 3.72 0 0 0 0-5.25 3.7 3.7 0 0 0-5.23 0L6.94 5.794a.75.75 0 0 1-1.06-1.06l1.17-1.15zm-4.259 1.434a5.213 5.213 0 0 1 7.37 0 .75.75 0 1 1-1.06 1.06 3.71 3.71 0 0 0-5.25 0L1.47 8.456a3.72 3.72 0 0 0 0 5.25 3.7 3.7 0 0 0 5.23 0L8.86 11.55a.75.75 0 1 1 1.06 1.06l-2.17 2.17a5.2 5.2 0 0 1-7.34 0 5.22 5.22 0 0 1 0-7.371L2.79 5.02z"/></svg>'
+};
+
+// ─────────────────────────────────────────────────────────────
+// parseLyricsInput
 // ─────────────────────────────────────────────────────────────
 function parseLyricsInput(raw) {
   if (!raw || typeof raw !== 'string') return [];
@@ -68,11 +82,7 @@ function parseLyricsInput(raw) {
 
   let entries;
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-    try {
-      entries = JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
+    try { entries = JSON.parse(trimmed); } catch { return null; }
     if (!Array.isArray(entries)) return null;
   } else {
     entries = trimmed.split('\n').map((text, index) => ({ time: index * 4, text }));
@@ -92,10 +102,10 @@ function parseLyricsInput(raw) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Validações — Item 5 da auditoria
+// Validações
 // ─────────────────────────────────────────────────────────────
 function validateDuration(str) {
-  if (!str || typeof str !== 'string') return true; // vazio é permitido
+  if (!str || typeof str !== 'string') return true;
   const m = /^(\d{1,3}):([0-5]\d)$/.exec(str.trim());
   return !!m;
 }
@@ -120,7 +130,7 @@ function normalizePrice(cents) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Resolver URL de áudio do R2 — Item 1 (não usa download-url para tocar)
+// Resolver URL de áudio do R2
 // ─────────────────────────────────────────────────────────────
 function getAdminAudioUrl(track, version) {
   const path = version === 'preview'
@@ -131,10 +141,8 @@ function getAdminAudioUrl(track, version) {
     throw new Error(version === 'preview' ? 'Prévia não cadastrada.' : 'Áudio completo não cadastrado.');
   }
 
-  // URL absoluta (rara, mas possível) — usa direto
   if (/^https?:\/\//i.test(path)) return path;
 
-  // Path relativo → R2 público
   const normalized = path.replace(/^\/+/, '');
   return `${R2_PUBLIC_BASE}/${normalized}`;
 }
@@ -180,7 +188,7 @@ function paintShell(container) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fetch — com concorrência por álbum (Item 2)
+// Fetch — com concorrência por álbum
 // ─────────────────────────────────────────────────────────────
 async function loadAlbums() {
   const body = document.querySelector('[data-albums-body]');
@@ -304,7 +312,6 @@ function bindAlbumButtons(scope) {
       try {
         await apiFetch('album', { method: 'DELETE', query: { id: albumId } });
 
-        // Item 2: limpar todo o estado relacionado (incluindo player se tocar faixa do álbum)
         if (Player.current && String(Player.current.albumId) === String(albumId)) {
           stopPlayback();
         }
@@ -403,7 +410,7 @@ function bindTrackButtons(scope) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// MINI PLAYER — construção, eventos e controles
+// MINI PLAYER — construção, eventos e controles (Spotify UI)
 // ─────────────────────────────────────────────────────────────
 function ensurePlayer() {
   if (Player.el) return;
@@ -436,50 +443,90 @@ function ensurePlayer() {
 
 function buildPlayerBar() {
   const bar = document.createElement('div');
-  bar.className = 'admin-player';
+  bar.className = 'sp-player';
   bar.hidden = true;
   bar.innerHTML = `
-    <div class="admin-player__cover" aria-hidden="true">♪</div>
-    <div class="admin-player__meta">
-      <div class="admin-player__title">—</div>
-      <div class="admin-player__sub">—</div>
+    <div class="sp-player__inner">
+
+      <div class="sp-left">
+        <div class="sp-cover" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/>
+          </svg>
+        </div>
+        <div class="sp-meta">
+          <div class="sp-title" title="—">—</div>
+          <div class="sp-sub">—</div>
+        </div>
+      </div>
+
+      <div class="sp-center">
+        <div class="sp-controls">
+          <button class="sp-btn sp-btn--ghost" data-player-version="preview" type="button" title="Prévia 30s">P</button>
+          <button class="sp-btn sp-btn--ctrl" type="button" data-action="stop" title="Parar">${ICON.prev}</button>
+          <button class="sp-btn sp-btn--play" type="button" data-action="toggle" title="Play/Pause">${ICON.play}</button>
+          <button class="sp-btn sp-btn--ctrl" type="button" data-action="stop" title="Parar">${ICON.next}</button>
+          <button class="sp-btn sp-btn--ghost" data-player-version="full" type="button" title="Áudio completo">F</button>
+        </div>
+        <div class="sp-progress-wrap">
+          <span class="sp-time sp-time--cur">0:00</span>
+          <div class="sp-progress">
+            <div class="sp-progress__track"><div class="sp-progress__fill"></div></div>
+            <input class="sp-progress__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição">
+            <div class="sp-progress__thumb"></div>
+          </div>
+          <span class="sp-time sp-time--dur">0:00</span>
+        </div>
+      </div>
+
+      <div class="sp-right">
+        <button class="sp-btn sp-btn--icon" type="button" data-action="mute" title="Mudo">${ICON.vol}</button>
+        <div class="sp-volume">
+          <div class="sp-volume__track"><div class="sp-volume__fill"></div></div>
+          <input class="sp-volume__seek" type="range" min="0" max="1" step="0.01" value="0.8" aria-label="Volume">
+        </div>
+        <button class="sp-btn sp-btn--icon" type="button" data-action="link" title="Abrir URL">${ICON.link}</button>
+        <button class="sp-btn sp-btn--icon" type="button" data-action="close" title="Fechar player">${ICON.close}</button>
+      </div>
+
     </div>
-    <button class="admin-player__play btn btn-ghost btn-sm" type="button" title="Play/Pause">▶</button>
-    <div class="admin-player__progress">
-      <span class="admin-player__cur">0:00</span>
-      <input class="admin-player__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição">
-      <span class="admin-player__dur">0:00</span>
-    </div>
-    <div class="admin-player__versions">
-      <button class="btn btn-ghost btn-sm" data-player-version="preview" type="button">Prévia</button>
-      <button class="btn btn-ghost btn-sm" data-player-version="full"    type="button">Completa</button>
-    </div>
-    <div class="admin-player__volume">
-      <button class="admin-player__mute btn btn-ghost btn-sm" type="button" title="Mudo">🔊</button>
-      <input class="admin-player__vol" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="Volume">
-    </div>
-    <button class="admin-player__link btn btn-ghost btn-sm" type="button" title="Testar URL">🔗</button>
-    <button class="admin-player__close btn btn-ghost btn-sm" type="button" title="Fechar">✕</button>
   `;
   document.body.appendChild(bar);
   Player.bar = bar;
 
-  bar.querySelector('.admin-player__play').addEventListener('click', async () => {
+  const toggleBtn = bar.querySelector('[data-action="toggle"]');
+  toggleBtn.addEventListener('click', async () => {
     if (!Player.el || !Player.el.src) return;
     try {
       if (Player.el.paused) await Player.el.play();
       else Player.el.pause();
     } catch (err) {
-      console.error('[player] play()', err);
       toast('Navegador bloqueou a reprodução. Clique novamente.', '⚠');
     }
   });
 
-  bar.querySelector('.admin-player__seek').addEventListener('input', (e) => {
-    Player.seeking = true;
-    bar.querySelector('.admin-player__cur').textContent = fmtTime(Number(e.target.value));
+  bar.querySelectorAll('[data-action="stop"]').forEach(b =>
+    b.addEventListener('click', stopPlayback));
+
+  bar.querySelector('[data-action="link"]')?.addEventListener('click', () => {
+    if (Player.el?.currentSrc) window.open(Player.el.currentSrc, '_blank');
+    else toast('Nenhuma URL carregada.', '⚠');
   });
-  bar.querySelector('.admin-player__seek').addEventListener('change', (e) => {
+  bar.querySelector('[data-action="close"]')?.addEventListener('click', stopPlayback);
+
+  const muteBtn = bar.querySelector('[data-action="mute"]');
+  muteBtn.addEventListener('click', () => {
+    if (Player.el) Player.el.muted = !Player.el.muted;
+    muteBtn.innerHTML = Player.el?.muted ? ICON.mute : ICON.vol;
+  });
+
+  const seek = bar.querySelector('.sp-progress__seek');
+  seek.addEventListener('input', (e) => {
+    Player.seeking = true;
+    bar.querySelector('.sp-time--cur').textContent = fmtTime(Number(e.target.value));
+    updateProgressFill(Number(e.target.value), Number(seek.max || 0));
+  });
+  seek.addEventListener('change', (e) => {
     const v = Number(e.target.value);
     if (Player.el && Number.isFinite(v)) {
       try { Player.el.currentTime = v; } catch {}
@@ -487,22 +534,35 @@ function buildPlayerBar() {
     Player.seeking = false;
   });
 
-  bar.querySelector('.admin-player__vol').addEventListener('input', (e) => {
-    if (Player.el) { Player.el.volume = Number(e.target.value); Player.el.muted = false; }
-  });
-  bar.querySelector('.admin-player__mute').addEventListener('click', () => {
-    if (Player.el) Player.el.muted = !Player.el.muted;
+  const vol = bar.querySelector('.sp-volume__seek');
+  vol.addEventListener('input', (e) => {
+    if (Player.el) {
+      Player.el.volume = Number(e.target.value);
+      Player.el.muted = false;
+      muteBtn.innerHTML = ICON.vol;
+    }
+    updateVolumeFill(Number(e.target.value));
   });
 
   bar.querySelectorAll('[data-player-version]').forEach((b) =>
     b.addEventListener('click', () => switchVersion(b.dataset.playerVersion)));
 
-  bar.querySelector('.admin-player__link').addEventListener('click', () => {
-    if (Player.el?.currentSrc) window.open(Player.el.currentSrc, '_blank');
-    else toast('Nenhuma URL carregada ainda.', '⚠');
-  });
+  updateVolumeFill(0.8);
+}
 
-  bar.querySelector('.admin-player__close').addEventListener('click', stopPlayback);
+function updateProgressFill(cur, dur) {
+  if (!Player.bar) return;
+  const fill = Player.bar.querySelector('.sp-progress__fill');
+  const thumb = Player.bar.querySelector('.sp-progress__thumb');
+  const pct = dur > 0 ? (cur / dur) * 100 : 0;
+  if (fill) fill.style.width = pct + '%';
+  if (thumb) thumb.style.left = pct + '%';
+}
+
+function updateVolumeFill(v) {
+  if (!Player.bar) return;
+  const fill = Player.bar.querySelector('.sp-volume__fill');
+  if (fill) fill.style.width = (v * 100) + '%';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -518,8 +578,7 @@ async function playTrack(albumId, trackId, requestedVersion) {
   const hasFull    = !!(track.fullPath || track.full_path);
   if (!hasPreview && !hasFull) return toast('Esta faixa não tem áudio cadastrado.', '⚠');
 
-  const version = requestedVersion
-    || (hasFull ? 'full' : 'preview');
+  const version = requestedVersion || (hasFull ? 'full' : 'preview');
 
   if (version === 'preview' && !hasPreview) return toast('Prévia indisponível.', '⚠');
   if (version === 'full' && !hasFull)       return toast('Áudio completo indisponível.', '⚠');
@@ -531,7 +590,6 @@ async function playTrack(albumId, trackId, requestedVersion) {
     const url = getAdminAudioUrl(track, version);
     console.info('[player] carregando:', url, '(v' + version + ')');
 
-    // Cancelar qualquer carregamento anterior
     if (Player.el) {
       try { Player.el.pause(); } catch {}
       Player.el.removeAttribute('src');
@@ -549,10 +607,20 @@ async function playTrack(albumId, trackId, requestedVersion) {
     };
     Player.versions = { preview: hasPreview, full: hasFull };
     Player.el.src = url;
+
+    // Capa do álbum no player
+    const album = State.albums.find((a) => String(a.id) === String(albumId));
+    const coverUrl = album?.coverUrl || album?.cover_image;
+    const coverEl = Player.bar.querySelector('.sp-cover');
+    if (coverUrl && /^https?:\/\//i.test(coverUrl)) {
+      coverEl.innerHTML = `<img src="${escAttr(coverUrl)}" alt="">`;
+    } else {
+      coverEl.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>';
+    }
+
     updateBarMeta();
     Player.bar.hidden = false;
 
-    // Restaurar posição da mesma faixa ao trocar de versão (Item 3)
     if (previous
       && String(previous.trackId) === String(trackId)
       && String(previous.albumId) === String(albumId)
@@ -561,7 +629,6 @@ async function playTrack(albumId, trackId, requestedVersion) {
       Player.pendingRestore = Math.min(previous.duration - 0.5, Player.el.currentTime || 0);
     }
 
-    // Timeout de carregamento (Item 5)
     Player.stallTimer = setTimeout(() => {
       if (seq !== Player.seq) return;
       if (Player.el && Player.el.readyState < 2 && !Player.el.paused) {
@@ -594,7 +661,6 @@ function onLoadedMetadata() {
   if (!Player.el || !Player.current) return;
   Player.current.duration = Player.el.duration || 0;
 
-  // Restaurar posição após loadedmetadata (Item 3)
   if (Player.pendingRestore !== null) {
     const t = Player.pendingRestore;
     Player.pendingRestore = null;
@@ -662,22 +728,24 @@ function stopPlayback() {
 
 function updateBarMeta() {
   if (!Player.bar || !Player.current) return;
-  Player.bar.querySelector('.admin-player__title').textContent = Player.current.title;
-  Player.bar.querySelector('.admin-player__sub').textContent = 'Carregando…';
+  const title = Player.current.title;
+  Player.bar.querySelector('.sp-title').textContent = title;
+  Player.bar.querySelector('.sp-title').title      = title;
+  Player.bar.querySelector('.sp-sub').textContent  = 'Carregando…';
   Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
     const v = b.dataset.playerVersion;
     b.disabled = !Player.versions[v];
-    b.classList.toggle('active', Player.current.version === v);
+    b.classList.toggle('is-active', Player.current.version === v);
   });
 }
 
 function setPlayIcon(playing) {
-  const btn = Player.bar?.querySelector('.admin-player__play');
-  if (btn) btn.textContent = playing ? '⏸' : '▶';
+  const btn = Player.bar?.querySelector('[data-action="toggle"]');
+  if (btn) btn.innerHTML = playing ? ICON.pause : ICON.play;
 }
 
 function setSub(text) {
-  const el = Player.bar?.querySelector('.admin-player__sub');
+  const el = Player.bar?.querySelector('.sp-sub');
   if (el) el.textContent = text;
 }
 
@@ -688,11 +756,15 @@ function fmtTime(s) {
 
 function syncProgress() {
   if (!Player.el || !Player.bar) return;
-  const seek = Player.bar.querySelector('.admin-player__seek');
+  const seek = Player.bar.querySelector('.sp-progress__seek');
   const dur = Number.isFinite(Player.el.duration) ? Player.el.duration : 0;
-  if (!Player.seeking) { seek.max = dur || 0; seek.value = Player.el.currentTime || 0; }
-  Player.bar.querySelector('.admin-player__cur').textContent = fmtTime(Player.el.currentTime);
-  Player.bar.querySelector('.admin-player__dur').textContent = fmtTime(dur);
+  if (!Player.seeking) {
+    seek.max = dur || 0;
+    seek.value = Player.el.currentTime || 0;
+  }
+  Player.bar.querySelector('.sp-time--cur').textContent = fmtTime(Player.el.currentTime);
+  Player.bar.querySelector('.sp-time--dur').textContent = fmtTime(dur);
+  updateProgressFill(Player.el.currentTime || 0, dur);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -854,7 +926,7 @@ async function persistTrackOrder(albumId, order, tbody, originalHtml, scope) {
   } catch (err) {
     toast(err?.message || 'Falha ao reordenar.', '⚠');
     tbody.innerHTML = originalHtml;
-    bindTrackDragDrop(scope); // Item 3: religar eventos após restaurar
+    bindTrackDragDrop(scope);
   }
 }
 
@@ -1056,7 +1128,7 @@ function openAlbumModal(album) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal — Faixa (com preview de áudio e detecção de duração real)
+// Modal — Faixa
 // ─────────────────────────────────────────────────────────────
 function openTrackModal(albumId, track) {
   const isNew = !track;
@@ -1153,7 +1225,7 @@ function openTrackModal(albumId, track) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Upload de Faixa (com validação local, preview e confirmação de substituição)
+// Upload de Faixa
 // ─────────────────────────────────────────────────────────────
 function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadFn, field, albumId, track }) {
   const button   = document.querySelector(buttonSel);
@@ -1164,7 +1236,6 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
   if (!button || !input) return;
   button.addEventListener('click', () => input.click());
 
-  // Botão de teste no modal
   if (testBtn) {
     testBtn.addEventListener('click', async () => {
       if (!track[field]) return toast('Nenhum arquivo associado.', '⚠');
@@ -1181,13 +1252,11 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
     const file = input.files && input.files[0];
     if (!file) return;
 
-    // Validação local (Item 5)
     const fileErr = validateAudioFile(file);
     if (fileErr) { toast(fileErr, '⚠'); input.value = ''; return; }
 
     if (!track.id) { toast('Salve a faixa antes de enviar o áudio.', '⚠'); input.value = ''; return; }
 
-    // Confirmação ao substituir (Item 4)
     if (track[field]) {
       if (!confirm('Já existe um áudio associado. Substituir?')) {
         input.value = ''; return;
@@ -1213,7 +1282,6 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
       if (testBtn) testBtn.disabled = false;
       toast('Áudio associado.', '✓');
 
-      // Detectar duração real
       try {
         const url = getAdminAudioUrl(track, field === 'previewPath' ? 'preview' : 'full');
         const probe = new Audio();
@@ -1226,7 +1294,6 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
             const ss = String(Math.floor(dur % 60)).padStart(2, '0');
             const el = document.querySelector('[data-detected-duration]');
             if (el) el.textContent = `Duração detectada: ${mm}:${ss}`;
-            // Preencher campo só se estiver vazio
             const durInput = document.getElementById('trackDuration');
             if (durInput && !durInput.value.trim()) durInput.value = `${mm}:${ss}`;
           }
