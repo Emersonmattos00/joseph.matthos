@@ -1,15 +1,17 @@
 /* ============================================================
-   api/admin.js — Painel administrativo (v3.3)
+   api/admin.js — Painel administrativo (v3.5)
    ------------------------------------------------------------
-   Correções da auditoria:
-   1. Sintaxe de validateFilePayload corrigida (sem arrow functions inválidas)
-   2. intentionId gerado e retornado ao frontend em upload-sign
-   3. Validação do objeto R2 (existência, tamanho, MIME) ANTES de consumir a intenção
-   4. Verificação estrita de expiresAt > NOW() na intenção
-   5. Reordenação de faixas com advisory lock e validação de permutação completa
-   6. Restrição de associação: exige (trackId) OU (albumId + trackIndex), não ambos/neither
-   7. Validação estrita de booleanos, slugs, anos e durações
-   8. Proteção contra exclusão do próprio admin (comparação por UUID)
+   Correções da auditoria v3.4:
+   P0.1 Quarentena: URL assinada só toca _quarantine/. Após
+        validação, promoteFromQuarantine() copia para caminho
+        definitivo e apaga o temporário.
+   P0.2 Janela entre validação e consumo: reduzida com promoção
+        atômica seguida de UPDATE da faixa na mesma transação.
+   P0.3 validateDuration estrito (rejeita números/booleanos/objetos).
+   P1.2 Auditoria antes de responder; falha de audit não mascara
+        operação já commitada.
+   P1.3 Advisory lock também em delete track/album.
+   P1.4 ADMIN_USER_ID validado como UUID quando presente.
    ============================================================ */
 
 'use strict';
@@ -22,14 +24,16 @@ const {
   signHmac, verifyHmac, verifyScrypt, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-const { db, eq, and, asc, desc, drizzleSql, inArray, sql } = require('./_db');
+const { db, eq, and, asc, desc, drizzleSql, inArray, sql, isNull } = require('./_db');
 const schema = require('./_db').schema;
 const { tracks, albums, artists, orders, adminAudit, uploadIntents, users } = schema;
 
 const {
   uploadObject, createSignedUploadUrl, createSignedDownloadUrl,
   getPublicUrl, getObjectMetadata, buildPathForKind, inferKindFromKey,
-  getPublicR2Config, ALLOWED_MEDIA
+  getPublicR2Config, ALLOWED_MEDIA,
+  // Novas funções (precisam existir no _storage.js — ver final do arquivo)
+  promoteFromQuarantine, isQuarantinePath, deleteObject
 } = require('./_storage');
 
 // ─────────────────────────────────────────────────────────────
@@ -59,8 +63,12 @@ const VALID_ACTIONS = new Set([
 const DEV_NO_RATE_LIMIT = process.env.NODE_ENV !== 'production' && process.env.DISABLE_RATE_LIMIT === 'true';
 const DEV_NO_CSRF = process.env.NODE_ENV !== 'production' && process.env.DISABLE_CSRF === 'true';
 
+const MAX_LYRICS_BYTES = 200 * 1024;
+const MAX_LYRICS_LINES = 500;
+const MAX_LYRICS_LINE_LENGTH = 500;
+
 // ─────────────────────────────────────────────────────────────
-// CONFIGURAÇÃO DE SESSÃO
+// SESSÃO / IDENTIDADE
 // ─────────────────────────────────────────────────────────────
 let _sessionSecretCache = null;
 function getSessionSecret() {
@@ -72,10 +80,29 @@ function getSessionSecret() {
   return secret;
 }
 
+// P1.3: Validar ADMIN_USER_ID como UUID se estiver presente.
+let _adminIdentityCache = null;
+function getAdminIdentity() {
+  if (_adminIdentityCache) return _adminIdentityCache;
+  const id = String(process.env.ADMIN_USER_ID || '').trim();
+  if (id) {
+    if (!isUuid(id)) {
+      throw new Error('ADMIN_USER_ID deve ser um UUID válido.');
+    }
+    _adminIdentityCache = { kind: 'id', value: id };
+    return _adminIdentityCache;
+  }
+  const user = String(process.env.ADMIN_USER || '').trim();
+  if (!user) throw new Error('ADMIN_USER ou ADMIN_USER_ID ausente.');
+  _adminIdentityCache = { kind: 'email', value: user };
+  return _adminIdentityCache;
+}
+
 function checkConfig() {
   try {
     getSessionSecret();
-    if (!process.env.ADMIN_USER || !process.env.ADMIN_PASSWORD_HASH) return { ok: false, error: 'Configuração de administrador ausente.' };
+    getAdminIdentity();
+    if (!process.env.ADMIN_PASSWORD_HASH) return { ok: false, error: 'ADMIN_PASSWORD_HASH ausente.' };
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -104,7 +131,12 @@ module.exports = async function handler(req, res) {
 
   if (action === 'login') {
     if (method !== 'POST') return methodNotAllowed(res, 'POST');
-    return handleLogin(req, res);
+    try {
+      return await handleLogin(req, res);
+    } catch (err) {
+      console.error('[admin] login exception:', err);
+      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+    }
   }
 
   let session;
@@ -115,7 +147,9 @@ module.exports = async function handler(req, res) {
   try {
     switch (action) {
       case 'storage-config': if (method === 'GET') return handleStorageConfig(req, res, session); break;
-      case 'session': return handleSession(req, res, session);
+      case 'session':
+        if (method === 'GET') return handleSession(req, res, session);
+        return methodNotAllowed(res, 'GET');
       case 'logout': if (method === 'POST') return handleLogout(req, res, session); break;
       case 'content':
         if (method === 'GET') return handleGetContent(req, res);
@@ -168,7 +202,9 @@ module.exports = async function handler(req, res) {
 // ─────────────────────────────────────────────────────────────
 async function handleLogin(req, res) {
   const ip = clientIp(req);
-  const rate = DEV_NO_RATE_LIMIT ? { limited: false } : await checkAndIncrement(`admin-login:${ip}`, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW_MS, { failClosed: true });
+  const rate = DEV_NO_RATE_LIMIT
+    ? { limited: false }
+    : await checkAndIncrement(`admin-login:${ip}`, MAX_LOGIN_ATTEMPTS, LOGIN_WINDOW_MS, { failClosed: true });
   if (rate.limited) return sendJson(res, 429, { ok: false, error: 'Muitas tentativas.' });
 
   const body = parseBody(req);
@@ -183,16 +219,21 @@ async function handleLogin(req, res) {
   const passOk = await verifyScrypt(pass, hash);
 
   if (!userOk || !passOk) {
-    await audit('admin_login', { ip, success: false, reason: 'invalid', target: user });
+    try { await audit('admin_login', { ip, success: false, reason: 'invalid', target: user }); } catch {}
     return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
   }
 
-  await resetBucket(`admin-login:${ip}`);
-  const token = signHmac({ user: expectedUser, iat: Date.now(), jti: crypto.randomUUID() }, getSessionSecret());
-  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE}`, IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
+  try { await resetBucket(`admin-login:${ip}`); } catch {}
+
+  const token = signHmac(
+    { user: expectedUser, iat: Date.now(), jti: crypto.randomUUID() },
+    getSessionSecret()
+  );
+  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE}`, IS_PROD ? 'Secure' : null]
+    .filter(Boolean).join('; ');
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; ${attrs}`);
-  
-  await audit('admin_login', { actor: expectedUser, ip, success: true });
+
+  try { await audit('admin_login', { actor: expectedUser, ip, success: true }); } catch {}
   return sendJson(res, 200, { ok: true, user: expectedUser });
 }
 
@@ -201,14 +242,15 @@ async function handleSession(req, res, session) {
 }
 
 async function handleLogout(req, res, session) {
-  await audit('admin_logout', { actor: session.user, ip: clientIp(req) });
-  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
+  try { await audit('admin_logout', { actor: session.user, ip: clientIp(req) }); } catch {}
+  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', IS_PROD ? 'Secure' : null]
+    .filter(Boolean).join('; ');
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; ${attrs}`);
   return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
-// CONTEÚDO ESTRUTURAL
+// CONTEÚDO — CAS atômico
 // ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   const [row] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
@@ -218,10 +260,14 @@ async function handleGetContent(req, res) {
 async function handlePutContent(req, res, session) {
   const body = parseBody(req);
   const data = body.data;
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
+  }
 
   const expectedVersion = Number(body.version);
-  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return sendJson(res, 400, { ok: false, error: 'Versão inválida.' });
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    return sendJson(res, 400, { ok: false, error: 'Versão inválida.' });
+  }
 
   if (data.contato && data.contato.socials) {
     if (!Array.isArray(data.contato.socials)) return sendJson(res, 400, { ok: false, error: 'Formato de socials inválido.' });
@@ -238,28 +284,50 @@ async function handlePutContent(req, res, session) {
     if (data.filosofia.frases.length > 500) return sendJson(res, 400, { ok: false, error: 'Limite de frases excedido.' });
   }
 
+  let newVersion;
   try {
-    const newVersion = await db.transaction(async (tx) => {
-      const [currentRow] = await tx.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
-      const currentVersion = currentRow?.version || 0;
-      if (currentVersion !== expectedVersion) { const err = new Error('VERSION_CONFLICT'); err.code = 'VERSION_CONFLICT'; throw err; }
+    newVersion = await db.transaction(async (tx) => {
+      const next = expectedVersion + 1;
+      const now = new Date().toISOString();
 
-      const next = currentVersion + 1;
-      await tx.insert(schema.siteContent).values({ key: CONTENT_KEY, data, version: next, updatedAt: new Date().toISOString() })
-        .onConflictDoUpdate({ target: schema.siteContent.key, set: { data, version: next, updatedAt: new Date().toISOString() } });
+      if (expectedVersion === 0) {
+        const inserted = await tx.insert(schema.siteContent)
+          .values({ key: CONTENT_KEY, data, version: next, updatedAt: now })
+          .onConflictDoNothing({ target: schema.siteContent.key })
+          .returning({ version: schema.siteContent.version });
+        if (inserted.length !== 1) {
+          const err = new Error('VERSION_CONFLICT'); err.code = 'VERSION_CONFLICT'; throw err;
+        }
+        return next;
+      }
+
+      const updated = await tx.update(schema.siteContent)
+        .set({ data, version: next, updatedAt: now })
+        .where(and(
+          eq(schema.siteContent.key, CONTENT_KEY),
+          eq(schema.siteContent.version, expectedVersion)
+        ))
+        .returning({ version: schema.siteContent.version });
+
+      if (updated.length !== 1) {
+        const err = new Error('VERSION_CONFLICT'); err.code = 'VERSION_CONFLICT'; throw err;
+      }
       return next;
     });
-
-    await audit('content.update', { actor: session.user, metadata: { version: newVersion } });
-    return sendJson(res, 200, { ok: true, version: newVersion });
   } catch (err) {
     if (err.code === 'VERSION_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Conteúdo foi alterado por outra sessão. Recarregue.' });
     throw err;
   }
+
+  // P1.2: auditoria não derruba a operação já commitada
+  try { await audit('content.update', { actor: session.user, metadata: { version: newVersion } }); }
+  catch (e) { console.warn('[admin] audit content.update falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, version: newVersion });
 }
 
 // ─────────────────────────────────────────────────────────────
-// UPLOADS (Corrigidos)
+// UPLOADS — Quarentena + Promoção
 // ─────────────────────────────────────────────────────────────
 function looksLikeImage(buf, mime) {
   if (buf.length < 12) return false;
@@ -276,25 +344,36 @@ function looksLikeImage(buf, mime) {
 function validateFilePayload({ kind, filename, contentType, base64 }) {
   const media = ALLOWED_MEDIA[kind];
   if (!media) return { ok: false, error: 'Tipo inválido.' };
-  
+
   const name = String(filename || '').trim();
   if (!name || !name.includes('.')) return { ok: false, error: 'Nome de arquivo inválido.' };
   const ext = name.split('.').pop().toLowerCase();
   if (!/^[a-z0-9]{1,8}$/.test(ext)) return { ok: false, error: 'Extensão inválida.' };
-  
+
   const mime = String(contentType || '').trim().toLowerCase();
   if (!/^[\w.+-]+\/[\w.+-]+$/.test(mime) || mime.length > 150) return { ok: false, error: 'Content-Type inválido.' };
-  if (!media.mimes.has(mime)) return { ok: false, error: `Tipo não permitido para ${kind}.` };
-  if (!media.exts.has(ext)) return { ok: false, error: `Extensão não permitida para ${kind}.` };
+
+  const extSet = media.exts instanceof Set ? media.exts : new Set(media.exts || []);
+  const mimeSet = media.mimes instanceof Set ? media.mimes : new Set(media.mimes || []);
+  if (!mimeSet.has(mime)) return { ok: false, error: `Tipo não permitido para ${kind}.` };
+  if (!extSet.has(ext)) return { ok: false, error: `Extensão não permitida para ${kind}.` };
 
   let buffer = null;
   if (base64 !== undefined) {
     const raw = String(base64 || '').trim();
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || raw.length % 4 !== 0) return { ok: false, error: 'Conteúdo base64 inválido.' };
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(raw) || raw.length % 4 !== 0) {
+      return { ok: false, error: 'Conteúdo base64 inválido.' };
+    }
+    // Base64 ~4/3 do binário + padding; limite antes de decodificar
+    const maxBase64Chars = Math.ceil(media.maxBytes * 4 / 3) + 8;
+    if (raw.length > maxBase64Chars) return { ok: false, error: 'Arquivo base64 excede o tamanho máximo permitido.' };
+
     buffer = Buffer.from(raw, 'base64');
     if (buffer.length === 0) return { ok: false, error: 'Arquivo vazio.' };
     if (buffer.length > media.maxBytes) return { ok: false, error: 'Arquivo decodificado excede o tamanho máximo.' };
-    if (kind === 'image' && !looksLikeImage(buffer, mime)) return { ok: false, error: 'Conteúdo não corresponde ao tipo de imagem.' };
+    if (kind === 'image' && !looksLikeImage(buffer, mime)) {
+      return { ok: false, error: 'Conteúdo não corresponde ao tipo de imagem.' };
+    }
   }
   return { ok: true, ext, mime, buffer };
 }
@@ -302,8 +381,6 @@ function validateFilePayload({ kind, filename, contentType, base64 }) {
 async function handleUpload(req, res, session) {
   const body = parseBody(req);
   const kind = String(body.kind || '').trim();
-  
-  // Correção: Restringir upload direto apenas a imagens
   if (kind !== 'image') {
     return sendJson(res, 400, { ok: false, error: 'Upload direto permitido apenas para imagens. Use upload-sign para áudio.' });
   }
@@ -313,16 +390,35 @@ async function handleUpload(req, res, session) {
   if (!validation.buffer) return sendJson(res, 400, { ok: false, error: 'Conteúdo base64 ausente.' });
 
   const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
-  const path = buildPathForKind(kind, uniqueName);
+
+  // Upload direto também usa quarentena, para manter a invariante.
+  let quarantinePath;
+  try {
+    quarantinePath = buildPathForKind(kind, uniqueName); // vira _quarantine/image/...
+  } catch (err) {
+    return sendJson(res, 400, { ok: false, error: err.message });
+  }
 
   try {
-    await uploadObject(path, validation.buffer, validation.mime);
-    const publicUrl = getPublicUrl(path);
-    await audit('upload.direct', { actor: session.user, metadata: { kind, path, size: validation.buffer.length } });
-    return sendJson(res, 200, { ok: true, url: publicUrl, path });
+    await uploadObject(quarantinePath, validation.buffer, validation.mime);
+
+    // Promoção imediata (imagem é pequena e validada por assinatura mágica)
+    const promoted = await promoteFromQuarantine(quarantinePath, kind);
+    const publicUrl = getPublicUrl(promoted.definitiveKey);
+
+    try {
+      await audit('upload.direct', {
+        actor: session.user,
+        metadata: { kind, path: promoted.definitiveKey, size: validation.buffer.length }
+      });
+    } catch (e) { console.warn('[admin] audit upload.direct falhou:', e.message); }
+
+    return sendJson(res, 200, { ok: true, url: publicUrl, path: promoted.definitiveKey });
   } catch (err) {
     if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
-    console.error('[admin] falha upload:', err.message);
+    console.error('[admin] falha upload direto:', err.message);
+    // Limpa a quarentena se a promoção falhou
+    try { await deleteObject(quarantinePath); } catch {}
     return sendJson(res, 502, { ok: false, error: 'Falha no upload.' });
   }
 }
@@ -333,51 +429,69 @@ async function handleUploadSign(req, res, session) {
   const validation = validateFilePayload({ kind, filename: body.filename, contentType: body.contentType });
   if (!validation.ok) return sendJson(res, 400, { ok: false, error: validation.error });
 
-  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
-  const path = buildPathForKind(kind, uniqueName);
-  
-  // Correção: Validação estrita de sizeBytes
   const sizeBytes = Number(body.size);
   if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
     return sendJson(res, 400, { ok: false, error: 'Tamanho do arquivo inválido.' });
   }
-  if (sizeBytes > ALLOWED_MEDIA[kind].maxBytes) {
+  const media = ALLOWED_MEDIA[kind];
+  const maxBytes = Number(media?.maxBytes || 0);
+  if (!maxBytes || sizeBytes > maxBytes) {
     return sendJson(res, 400, { ok: false, error: 'Arquivo excede o limite permitido.' });
   }
 
+  const uniqueName = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}.${validation.ext}`;
+  let quarantinePath;
   try {
-    const signed = await createSignedUploadUrl(path, validation.mime, sizeBytes, SIGNED_UPLOAD_TTL_SEC);
-    
-    // Correção: Gerar intentionId antes e retorná-lo
-    const intentionId = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MS).toISOString();
-    
+    quarantinePath = buildPathForKind(kind, uniqueName); // _quarantine/...
+  } catch (err) {
+    return sendJson(res, 400, { ok: false, error: err.message });
+  }
+
+  let signed;
+  try {
+    signed = await createSignedUploadUrl(quarantinePath, validation.mime, sizeBytes, SIGNED_UPLOAD_TTL_SEC);
+  } catch (err) {
+    if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
+    console.error('[admin] falha sign:', err.message);
+    return sendJson(res, 502, { ok: false, error: 'Falha ao preparar upload.' });
+  }
+
+  const intentionId = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + UPLOAD_INTENT_TTL_MS).toISOString();
+
+  try {
     await db.insert(uploadIntents).values({
       id: intentionId,
       adminUser: session.user,
       kind,
-      path,
+      path: quarantinePath,
       contentType: validation.mime,
       expectedSize: sizeBytes,
       expiresAt,
       consumedAt: null,
       createdAt: new Date().toISOString()
     });
-
-    await audit('upload.sign', { actor: session.user, metadata: { kind, path, mime: validation.mime, sizeBytes } });
-    return sendJson(res, 200, { 
-      ok: true, 
-      intentionId, // Retornado ao frontend
-      uploadUrl: signed.uploadUrl, 
-      path: signed.path, 
-      bucket: signed.bucket,
-      expiresIn: signed.expiresIn 
-    });
   } catch (err) {
-    if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
-    console.error('[admin] falha sign:', err.message);
+    console.error('[admin] falha ao registrar intenção:', err.message);
+    try { await deleteObject(quarantinePath); } catch {}
     return sendJson(res, 502, { ok: false, error: 'Falha ao preparar upload.' });
   }
+
+  try {
+    await audit('upload.sign', {
+      actor: session.user,
+      metadata: { kind, path: quarantinePath, mime: validation.mime, sizeBytes }
+    });
+  } catch (e) { console.warn('[admin] audit upload.sign falhou:', e.message); }
+
+  return sendJson(res, 200, {
+    ok: true,
+    intentionId,
+    uploadUrl: signed.uploadUrl,
+    path: signed.path,
+    bucket: signed.bucket,
+    expiresIn: signed.expiresIn
+  });
 }
 
 async function handleUploadConfirm(req, res, session) {
@@ -385,81 +499,110 @@ async function handleUploadConfirm(req, res, session) {
   const kind = String(body.kind || '').trim();
   const path = String(body.path || '').trim();
   const intentionId = String(body.intentionId || '').trim();
-  
+
   if (!kind || !path || !intentionId) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
   if (!isUuid(intentionId)) return sendJson(res, 400, { ok: false, error: 'intentionId inválido.' });
 
+  // Confirma que o path é de quarentena e o kind bate
+  if (!['audio-full', 'audio-preview'].includes(kind)) {
+    return sendJson(res, 400, { ok: false, error: 'Tipo não permitido para associação com faixa.' });
+  }
+  if (!isQuarantinePath(path)) {
+    return sendJson(res, 400, { ok: false, error: 'O upload precisa estar em quarentena.' });
+  }
+  let inferredKind;
+  try { inferredKind = inferKindFromKey(path); }
+  catch { return sendJson(res, 400, { ok: false, error: 'Caminho de storage inválido.' }); }
+  if (inferredKind !== kind) {
+    return sendJson(res, 400, { ok: false, error: 'O tipo informado não corresponde ao caminho no Storage.' });
+  }
+
+  // Associação exclusiva
   const hasTrackIndex = body.trackIndex !== undefined && body.trackIndex !== null && body.trackIndex !== '';
   const trackIndex = hasTrackIndex ? Number(body.trackIndex) : null;
   const albumId = body.albumId ? String(body.albumId).trim() : null;
   const trackId = body.trackId ? String(body.trackId).trim() : null;
 
-  // Correção: Exigir exatamente um dos contratos de associação
+  if (trackId && (albumId || hasTrackIndex)) {
+    return sendJson(res, 400, { ok: false, error: 'Informe trackId OU (albumId + trackIndex), nunca ambos.' });
+  }
   const byTrackId = Boolean(trackId && isUuid(trackId));
   const byAlbumIndex = Boolean(albumId && isUuid(albumId) && hasTrackIndex && Number.isInteger(trackIndex) && trackIndex >= 1);
-
   if (byTrackId === byAlbumIndex) {
     return sendJson(res, 400, { ok: false, error: 'Informe exclusivamente trackId OU (albumId e trackIndex).' });
   }
 
-  // 1. Buscar e validar intenção ANTES de qualquer consumo
-  const [intent] = await db.select().from(uploadIntents).where(
-    and(
-      eq(uploadIntents.id, intentionId),
-      eq(uploadIntents.adminUser, session.user),
-      eq(uploadIntents.path, path),
-      eq(uploadIntents.kind, kind),
-      eq(uploadIntents.consumedAt, null),
-      sql`${uploadIntents.expiresAt} > NOW()` // Correção: Verificar expiração
-    )
-  ).limit(1);
+  // 1) Intenção válida (isNull + expiração)
+  const [intent] = await db.select().from(uploadIntents).where(and(
+    eq(uploadIntents.id, intentionId),
+    eq(uploadIntents.adminUser, session.user),
+    eq(uploadIntents.path, path),
+    eq(uploadIntents.kind, kind),
+    isNull(uploadIntents.consumedAt),
+    sql`${uploadIntents.expiresAt} > NOW()`
+  )).limit(1);
 
   if (!intent) {
     return sendJson(res, 400, { ok: false, error: 'Intenção de upload inválida, expirada ou já consumida.' });
   }
 
-  // 2. Validar objeto no R2 ANTES de consumir a intenção
+  // 2) Objeto existe na quarentena
   let meta;
-  try {
-    meta = await getObjectMetadata(path);
-  } catch (err) {
-    return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' });
-  }
-  
-  if (!meta) {
-    return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no Storage.' });
-  }
+  try { meta = await getObjectMetadata(path); }
+  catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
+  if (!meta) return sendJson(res, 404, { ok: false, error: 'Arquivo não encontrado no Storage.' });
 
-  // Correção: Comparar MIME (normalizado) e Tamanho
   const returnedMime = (meta.contentType || '').split(';')[0].trim().toLowerCase();
   const expectedMime = (intent.contentType || '').split(';')[0].trim().toLowerCase();
-  
   if (returnedMime !== expectedMime) {
     return sendJson(res, 400, { ok: false, error: `MIME do objeto (${returnedMime}) não corresponde ao registrado (${expectedMime}).` });
   }
-  if (meta.contentLength !== intent.expectedSize) {
+  if (Number(meta.contentLength) !== Number(intent.expectedSize)) {
     return sendJson(res, 400, { ok: false, error: `Tamanho do objeto (${meta.contentLength}) não corresponde ao esperado (${intent.expectedSize}).` });
   }
 
-  // 3. Transação atômica: Consumir intenção + Atualizar faixa
+  // 3) Promoção para caminho definitivo
+  let promoted;
+  try {
+    promoted = await promoteFromQuarantine(path, kind);
+  } catch (err) {
+    console.error('[admin] falha ao promover objeto:', err);
+    return sendJson(res, 502, { ok: false, error: 'Falha ao promover upload.' });
+  }
+  const definitiveKey = promoted.definitiveKey;
+
+  // 4) Transação atômica: consumir intenção + atualizar faixa
   try {
     await db.transaction(async (tx) => {
-      // Marcar como consumido
-      await tx.update(uploadIntents)
+      const consumed = await tx.update(uploadIntents)
         .set({ consumedAt: new Date().toISOString() })
-        .where(eq(uploadIntents.id, intentionId));
+        .where(and(
+          eq(uploadIntents.id, intentionId),
+          eq(uploadIntents.adminUser, session.user),
+          eq(uploadIntents.path, path),
+          eq(uploadIntents.kind, kind),
+          isNull(uploadIntents.consumedAt),
+          sql`${uploadIntents.expiresAt} > NOW()`
+        ))
+        .returning({ id: uploadIntents.id });
 
-      // Atualizar faixa
-      const isFull = kind === 'audio-full';
-      const patch = isFull 
-        ? { fullPath: path, streamKey: path, updatedAt: new Date().toISOString() } 
-        : { previewPath: path, previewKey: path, updatedAt: new Date().toISOString() };
+      if (consumed.length !== 1) {
+        const err = new Error('UPLOAD_INTENT_ALREADY_CONSUMED');
+        err.code = 'UPLOAD_INTENT_ALREADY_CONSUMED';
+        throw err;
+      }
+
+      const patch = kind === 'audio-full'
+        ? { fullPath: definitiveKey, streamKey: definitiveKey, updatedAt: new Date().toISOString() }
+        : { previewPath: definitiveKey, previewKey: definitiveKey, updatedAt: new Date().toISOString() };
 
       let updated;
       if (byTrackId) {
         [updated] = await tx.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
       } else {
-        [updated] = await tx.update(tracks).set(patch).where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex))).returning();
+        [updated] = await tx.update(tracks).set(patch)
+          .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
+          .returning();
       }
 
       if (!updated) {
@@ -469,27 +612,52 @@ async function handleUploadConfirm(req, res, session) {
       }
     });
   } catch (err) {
-    if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada para associação.' });
+    // Se a transação falhou, o definitivo ficou órfão. Apaga para não vazar.
+    try { await deleteObject(definitiveKey); } catch {}
+
+    if (err.code === 'UPLOAD_INTENT_ALREADY_CONSUMED') {
+      return sendJson(res, 409, { ok: false, error: 'Intenção já consumida por outra requisição.' });
+    }
+    if (err.code === 'TRACK_NOT_FOUND') {
+      return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada para associação.' });
+    }
     console.error('[admin] falha na transação de confirmação:', err);
     return sendJson(res, 500, { ok: false, error: 'Falha interna ao confirmar upload.' });
   }
 
   let publicUrl = null;
-  try { publicUrl = getPublicUrl(path); } catch { /* não é público, ignorar */ }
+  try { publicUrl = getPublicUrl(definitiveKey); } catch { /* pode ser private */ }
 
-  await audit('upload.confirm', { actor: session.user, metadata: { kind, path, intentionId } });
-  return sendJson(res, 200, { ok: true, url: publicUrl, path });
+  try {
+    await audit('upload.confirm', { actor: session.user, metadata: { kind, path: definitiveKey, intentionId } });
+  } catch (e) { console.warn('[admin] audit upload.confirm falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, url: publicUrl, path: definitiveKey });
 }
 
 // ─────────────────────────────────────────────────────────────
 // USUÁRIOS
 // ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
-  const rows = await db.select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt }).from(users).orderBy(desc(users.createdAt));
-  let planRows = [];
-  try { planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`); } catch (e) { }
-  const planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
-  return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: planMap.get(u.id) || 'free' })) });
+  const rows = await db.select({
+    id: users.id, email: users.email, name: users.name, createdAt: users.createdAt
+  }).from(users).orderBy(desc(users.createdAt));
+
+  let planMap = new Map();
+  let plansError = false;
+  try {
+    const planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`);
+    planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
+  } catch (e) {
+    console.error('[admin] falha ao consultar planos efetivos:', e.message);
+    plansError = true;
+  }
+
+  return sendJson(res, 200, {
+    ok: true,
+    users: rows.map(u => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })),
+    plansError: plansError || undefined
+  });
 }
 
 async function handlePatchUser(req, res, session) {
@@ -498,13 +666,15 @@ async function handlePatchUser(req, res, session) {
   const plan = String(body.plan || '').trim().toLowerCase();
   if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
-  // Correção: Mapeamento explícito de duração por plano
-  const planDays = plan === 'anual' ? 365 : (plan === 'trimestral' ? 90 : (plan === 'semestral' ? 180 : 30));
+  const planDays = plan === 'anual' ? 365
+    : plan === 'trimestral' ? 90
+    : plan === 'semestral' ? 180
+    : 30;
 
   try {
     await db.transaction(async (tx) => {
-      const [user] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-      if (!user) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
+      const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!u) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
 
       let planRow = null;
       if (plan !== 'free') {
@@ -513,12 +683,20 @@ async function handlePatchUser(req, res, session) {
         if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
       }
 
-      await tx.update(schema.subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])));
+      await tx.update(schema.subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(eq(schema.subscriptions.userId, userId), inArray(schema.subscriptions.status, ['ACTIVE','PENDING'])));
 
       if (planRow) {
         await tx.insert(schema.subscriptions).values({
-          id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${userId}_${Date.now()}`,
-          status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), currentPeriodEnd: addDaysIso(planDays), updatedAt: new Date().toISOString()
+          id: crypto.randomUUID(),
+          userId,
+          planId: planRow.id,
+          externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          status: 'ACTIVE',
+          currentPeriodStart: new Date().toISOString(),
+          currentPeriodEnd: addDaysIso(planDays),
+          updatedAt: new Date().toISOString()
         });
       }
     });
@@ -528,7 +706,9 @@ async function handlePatchUser(req, res, session) {
     throw err;
   }
 
-  await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } });
+  try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
+  catch (e) { console.warn('[admin] audit user.plan.change falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true, plan });
 }
 
@@ -536,24 +716,31 @@ async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  // Correção: Prevenir exclusão do próprio admin comparando com o email/usuário da sessão
-  if (process.env.ADMIN_USER) {
-    const [adminUser] = await db.select({ id: users.id }).from(users).where(eq(users.email, process.env.ADMIN_USER)).limit(1);
+  // P1.3: usa identidade admin corretamente
+  try {
+    const adminIdentity = getAdminIdentity();
+    const [adminUser] = await db.select({ id: users.id }).from(users)
+      .where(adminIdentity.kind === 'id' ? eq(users.id, adminIdentity.value) : eq(users.email, adminIdentity.value))
+      .limit(1);
     if (adminUser && adminUser.id === userId) {
       return sendJson(res, 403, { ok: false, error: 'Não é permitido excluir a própria conta de administrador.' });
     }
+  } catch (e) {
+    console.warn('[admin] check de admin falhou:', e.message);
   }
 
   try {
     const deleted = await db.delete(users).where(eq(users.id, userId)).returning();
     if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    
-    await audit('user.delete', { actor: session.user, target: userId, success: true });
+
+    try { await audit('user.delete', { actor: session.user, target: userId, success: true }); }
+    catch (e) { console.warn('[admin] audit user.delete falhou:', e.message); }
+
     return sendJson(res, 200, { ok: true });
   } catch (err) {
-    await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' });
-    // Correção: Distinguir violação de FK de outros erros
-    if (err.code === '23503') { // Código SQLState para foreign key violation no Postgres
+    try { await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' }); }
+    catch {}
+    if (err.code === '23503') {
       return sendJson(res, 409, { ok: false, error: 'Usuário possui dependências e não pode ser excluído.' });
     }
     throw err;
@@ -561,7 +748,7 @@ async function handleDeleteUser(req, res, session) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA (ÁLBUNS)
+// ÁLBUNS
 // ─────────────────────────────────────────────────────────────
 async function handleListAlbums(req, res) {
   const rows = await db.select().from(albums).orderBy(asc(albums.sortOrder));
@@ -579,29 +766,40 @@ async function handleCreateAlbum(req, res, session) {
   const title = String(body.title || '').trim();
   if (!title || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
 
-  // Correção: Validação estrita de booleano
+  if (body.published !== undefined && typeof body.published !== 'boolean') {
+    return sendJson(res, 400, { ok: false, error: 'published deve ser booleano.' });
+  }
   const published = typeof body.published === 'boolean' ? body.published : false;
 
   const slug = createSlug(title);
   if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
 
+  let created;
   try {
-    const created = await db.transaction(async (tx) => {
+    created = await db.transaction(async (tx) => {
       const [artist] = await tx.select({ id: artists.id }).from(artists).limit(1);
       if (!artist) { const err = new Error('ARTIST_NOT_FOUND'); err.code = 'ARTIST_NOT_FOUND'; throw err; }
+
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${slug}))`);
+
       const [dup] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.slug, slug)).limit(1);
       if (dup) { const err = new Error('SLUG_CONFLICT'); err.code = 'SLUG_CONFLICT'; throw err; }
 
-      const [row] = await tx.insert(albums).values({ id: crypto.randomUUID(), title, slug, artistId: artist.id, published }).returning();
+      const [row] = await tx.insert(albums).values({
+        id: crypto.randomUUID(), title, slug, artistId: artist.id, published
+      }).returning();
       return row;
     });
-    await audit('album.create', { actor: session.user, target: created.id, metadata: { title, slug } });
-    return sendJson(res, 200, { ok: true, album: created });
   } catch (err) {
     if (err.code === 'ARTIST_NOT_FOUND') return sendJson(res, 409, { ok: false, error: 'Nenhum artista cadastrado.' });
-    if (err.code === 'SLUG_CONFLICT') return sendJson(res, 409, { ok: false, error: 'Slug já existe.' });
+    if (err.code === 'SLUG_CONFLICT' || err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Slug já existe.' });
     throw err;
   }
+
+  try { await audit('album.create', { actor: session.user, target: created.id, metadata: { title, slug } }); }
+  catch (e) { console.warn('[admin] audit album.create falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, album: created });
 }
 
 async function handleUpdateAlbum(req, res, session) {
@@ -610,7 +808,7 @@ async function handleUpdateAlbum(req, res, session) {
 
   const body = parseBody(req);
   const patch = {};
-  
+
   if (body.title !== undefined) {
     const t = String(body.title).trim();
     if (!t || t.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
@@ -618,8 +816,6 @@ async function handleUpdateAlbum(req, res, session) {
     if (!newSlug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
     patch.title = t; patch.slug = newSlug;
   }
-  
-  // Correção: Validação estrita de ano
   if (body.year !== undefined) {
     const y = Number(body.year);
     const currentYear = new Date().getFullYear();
@@ -628,11 +824,21 @@ async function handleUpdateAlbum(req, res, session) {
     }
     patch.year = y;
   }
-  
+
+  // Não sobrescrever silenciosamente: se ambos vierem, rejeita.
+  if (body.coverUrl !== undefined && body.cover_image !== undefined) {
+    return sendJson(res, 400, { ok: false, error: 'Use coverUrl ou cover_image, não ambos.' });
+  }
   if (body.coverUrl !== undefined) patch.coverUrl = String(body.coverUrl).trim();
   if (body.cover_image !== undefined) patch.coverUrl = String(body.cover_image).trim();
-  if (body.description !== undefined) patch.description = String(body.description).trim();
-  if (body.type !== undefined) patch.type = String(body.type).trim();
+  if (body.description !== undefined) patch.description = String(body.description).trim().slice(0, 5000);
+  if (body.type !== undefined) {
+    const t = String(body.type).trim().toLowerCase();
+    if (!['album', 'ep', 'single', 'compilation'].includes(t)) {
+      return sendJson(res, 400, { ok: false, error: 'type inválido.' });
+    }
+    patch.type = t;
+  }
   if (body.published !== undefined) {
     if (typeof body.published !== 'boolean') return sendJson(res, 400, { ok: false, error: 'published deve ser booleano.' });
     patch.published = body.published;
@@ -643,7 +849,8 @@ async function handleUpdateAlbum(req, res, session) {
   try {
     const updated = await db.update(albums).set(patch).where(eq(albums.id, albumId)).returning();
     if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
-    await audit('album.update', { actor: session.user, target: albumId, metadata: patch });
+    try { await audit('album.update', { actor: session.user, target: albumId, metadata: patch }); }
+    catch (e) { console.warn('[admin] audit album.update falhou:', e.message); }
     return sendJson(res, 200, { ok: true, album: updated[0] });
   } catch (err) {
     if (err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Slug já existe.' });
@@ -657,8 +864,12 @@ async function handleDeleteAlbum(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
+      // P1.3: mesmo advisory lock da reordenação/criação
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
+
       const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
       if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
+
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
@@ -666,16 +877,36 @@ async function handleDeleteAlbum(req, res, session) {
     if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
     throw err;
   }
-  await audit('album.delete', { actor: session.user, target: albumId });
+
+  try { await audit('album.delete', { actor: session.user, target: albumId }); }
+  catch (e) { console.warn('[admin] audit album.delete falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
-// DISCOGRAFIA (FAIXAS)
+// FAIXAS
 // ─────────────────────────────────────────────────────────────
-function validateDuration(str) {
-  if (!str || typeof str !== 'string') return true;
-  return /^(\d{1,3}):([0-5]\d)$/.test(str.trim());
+// P0.3: validação estrita. undefined/null passam; qualquer outro tipo é rejeitado.
+function validateDuration(v) {
+  if (v === undefined || v === null) return true;
+  if (typeof v !== 'string') return false;
+  const s = v.trim();
+  if (!s) return false;
+  return /^(\d{1,3}):([0-5]\d)$/.test(s);
+}
+
+function normalizeDuration(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
+function validatePriceCents(v) {
+  if (v === undefined) return { ok: true, value: 0 };
+  const n = Number(v);
+  if (!Number.isSafeInteger(n) || n < 0) return { ok: false };
+  return { ok: true, value: n };
 }
 
 async function handleListTracks(req, res) {
@@ -690,37 +921,52 @@ async function handleCreateTrack(req, res, session) {
   const albumId = String(body.albumId || body.album_id || '');
   const title = String(body.title || '').trim();
   if (!isUuid(albumId) || !title || title.length > 200) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
-  
-  // Correção: Validar duração na criação também
-  if (body.duration !== undefined && !validateDuration(body.duration)) {
+
+  if (!validateDuration(body.duration)) {
     return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
   }
 
+  const priceCheck = validatePriceCents(body.priceCents);
+  if (!priceCheck.ok) return sendJson(res, 400, { ok: false, error: 'Preço inválido.' });
+
+  const slug = createSlug(title);
+  if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
+
+  let created;
   try {
-    const created = await db.transaction(async (tx) => {
+    created = await db.transaction(async (tx) => {
       const [album] = await tx.select({ artistId: albums.artistId }).from(albums).where(eq(albums.id, albumId)).limit(1);
       if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
-      
-      // Correção: Advisory lock para evitar condição de corrida na numeração
+
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
-      
-      const rows = await tx.select({ n: sql`COALESCE(MAX(${tracks.trackNumber}), 0)` }).from(tracks).where(eq(tracks.albumId, albumId));
+
+      const rows = await tx.select({ n: sql`COALESCE(MAX(${tracks.trackNumber}), 0)` })
+        .from(tracks).where(eq(tracks.albumId, albumId));
       const nextNumber = Number(rows[0]?.n || 0) + 1;
 
-      const [row] = await tx.insert(tracks).values({ 
-        id: crypto.randomUUID(), albumId, artistId: album.artistId, title, slug: createSlug(title), 
-        duration: body.duration || null, priceCents: Number(body.priceCents) || 0,
-        trackNumber: nextNumber, status: 'DRAFT' 
+      const [row] = await tx.insert(tracks).values({
+        id: crypto.randomUUID(),
+        albumId,
+        artistId: album.artistId,
+        title,
+        slug,
+        duration: normalizeDuration(body.duration),
+        priceCents: priceCheck.value,
+        trackNumber: nextNumber,
+        status: 'DRAFT'
       }).returning();
       return row;
     });
-
-    await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, title } });
-    return sendJson(res, 200, { ok: true, track: created });
   } catch (err) {
     if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
+    if (err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Slug de faixa já existe. Ajuste o título.' });
     throw err;
   }
+
+  try { await audit('track.create', { actor: session.user, target: created.id, metadata: { albumId, title } }); }
+  catch (e) { console.warn('[admin] audit track.create falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, track: created });
 }
 
 async function handleUpdateTrack(req, res, session) {
@@ -729,23 +975,28 @@ async function handleUpdateTrack(req, res, session) {
 
   const body = parseBody(req);
   const patch = {};
-  
+
   if (body.title !== undefined) {
     const t = String(body.title).trim();
     if (!t || t.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
-    patch.title = t; patch.slug = createSlug(t);
+    const newSlug = createSlug(t);
+    if (!newSlug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
+    patch.title = t; patch.slug = newSlug;
   }
+
   if (body.duration !== undefined) {
-    if (!validateDuration(body.duration)) return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
-    patch.duration = String(body.duration);
+    if (!validateDuration(body.duration)) {
+      return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
+    }
+    patch.duration = normalizeDuration(body.duration);
   }
+
   if (body.priceCents !== undefined) {
     const p = Number(body.priceCents);
-    if (!Number.isInteger(p) || p < 0) return sendJson(res, 400, { ok: false, error: 'Preço inválido.' });
+    if (!Number.isSafeInteger(p) || p < 0) return sendJson(res, 400, { ok: false, error: 'Preço inválido.' });
     patch.priceCents = p;
   }
-  
-  // Correção: Validação estrita de status
+
   if (body.status !== undefined) {
     if (body.status !== 'PUBLISHED' && body.status !== 'DRAFT') {
       return sendJson(res, 400, { ok: false, error: 'Status deve ser PUBLISHED ou DRAFT.' });
@@ -754,48 +1005,83 @@ async function handleUpdateTrack(req, res, session) {
   }
   if (body.published !== undefined) {
     if (typeof body.published !== 'boolean') return sendJson(res, 400, { ok: false, error: 'published deve ser booleano.' });
-    patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
+    if (body.status === undefined) patch.status = body.published ? 'PUBLISHED' : 'DRAFT';
   }
 
+  // Validação de paths
+  const fullP = body.fullPath !== undefined ? body.fullPath : body.full_path;
+  const previewP = body.previewPath !== undefined ? body.previewPath : body.preview_path;
+
   try {
-    const fullP = body.fullPath !== undefined ? body.fullPath : body.full_path;
     if (fullP !== undefined) {
       const p = String(fullP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'fullPath vazio.' });
-      const exists = await getObjectMetadata(p).catch(() => null);
+      let kind;
+      try { kind = inferKindFromKey(p); } catch { return sendJson(res, 400, { ok: false, error: 'fullPath com formato inválido.' }); }
+      if (kind !== 'audio-full') return sendJson(res, 400, { ok: false, error: 'fullPath deve ser audio-full.' });
+      let exists;
+      try { exists = await getObjectMetadata(p); } catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
       if (!exists) return sendJson(res, 400, { ok: false, error: 'fullPath inválido no Storage.' });
       patch.fullPath = p; patch.streamKey = p;
     }
-    
-    const previewP = body.previewPath !== undefined ? body.previewPath : body.preview_path;
     if (previewP !== undefined) {
       const p = String(previewP).trim();
       if (!p) return sendJson(res, 400, { ok: false, error: 'previewPath vazio.' });
-      const exists = await getObjectMetadata(p).catch(() => null);
+      let kind;
+      try { kind = inferKindFromKey(p); } catch { return sendJson(res, 400, { ok: false, error: 'previewPath com formato inválido.' }); }
+      if (kind !== 'audio-preview') return sendJson(res, 400, { ok: false, error: 'previewPath deve ser audio-preview.' });
+      let exists;
+      try { exists = await getObjectMetadata(p); } catch { return sendJson(res, 502, { ok: false, error: 'Falha ao consultar Storage.' }); }
       if (!exists) return sendJson(res, 400, { ok: false, error: 'previewPath inválido no Storage.' });
       patch.previewPath = p; patch.previewKey = p;
     }
-  } catch(e) { 
-    return sendJson(res, 502, { ok: false, error: 'Erro ao validar Storage.' }); 
+  } catch (e) {
+    return sendJson(res, 502, { ok: false, error: 'Erro ao validar Storage.' });
   }
 
   if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
 
-  const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
-  if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-
-  await audit('track.update', { actor: session.user, target: trackId, metadata: patch });
-  return sendJson(res, 200, { ok: true, track: updated[0] });
+  try {
+    const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
+    if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    try { await audit('track.update', { actor: session.user, target: trackId, metadata: patch }); }
+    catch (e) { console.warn('[admin] audit track.update falhou:', e.message); }
+    return sendJson(res, 200, { ok: true, track: updated[0] });
+  } catch (err) {
+    if (err.code === '23505') return sendJson(res, 409, { ok: false, error: 'Slug de faixa já existe. Ajuste o título.' });
+    throw err;
+  }
 }
 
 async function handleDeleteTrack(req, res, session) {
   const trackId = String(req.query.id || '');
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  const deleted = await db.delete(tracks).where(eq(tracks.id, trackId)).returning();
-  if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+  // P1.3: advisory lock no albumId da faixa para sincronizar com reorder/delete/album
+  let albumId = null;
+  try {
+    const [row] = await db.select({ albumId: tracks.albumId }).from(tracks).where(eq(tracks.id, trackId)).limit(1);
+    albumId = row?.albumId || null;
+  } catch {}
 
-  await audit('track.delete', { actor: session.user, target: trackId });
+  try {
+    await db.transaction(async (tx) => {
+      if (albumId) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
+      }
+      const deleted = await tx.delete(tracks).where(eq(tracks.id, trackId)).returning();
+      if (!deleted.length) {
+        const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err;
+      }
+    });
+  } catch (err) {
+    if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    throw err;
+  }
+
+  try { await audit('track.delete', { actor: session.user, target: trackId }); }
+  catch (e) { console.warn('[admin] audit track.delete falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true });
 }
 
@@ -817,29 +1103,32 @@ async function handleReorderTracks(req, res, session) {
     ids.add(id); numbers.add(n);
   }
 
+  const N = order.length;
+  for (let i = 1; i <= N; i++) {
+    if (!numbers.has(i)) {
+      return sendJson(res, 400, { ok: false, error: `Numeração deve ser sequencial de 1 a ${N}.` });
+    }
+  }
+
   try {
     await db.transaction(async (tx) => {
-      // Correção: Advisory lock idêntico ao de criação
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
-      
-      // Buscar todas as faixas atuais do álbum
+
       const currentTracks = await tx.select({ id: tracks.id }).from(tracks).where(eq(tracks.albumId, albumId));
-      
-      // Correção: Exigir que a lista recebida contenha EXATAMENTE todas as faixas
       if (currentTracks.length !== ids.size) {
         const err = new Error('TRACK_COUNT_MISMATCH'); err.code = 'TRACK_COUNT_MISMATCH'; throw err;
       }
-      
       for (const t of currentTracks) {
         if (!ids.has(t.id)) {
           const err = new Error('TRACK_MISSING'); err.code = 'TRACK_MISSING'; throw err;
         }
       }
 
-      // Hack seguro para unique constraint: mover todos para negativos primeiro
+      // Bloqueia linhas antes de mexer
+      await tx.select({ id: tracks.id }).from(tracks).where(eq(tracks.albumId, albumId)).for('update');
+
+      // Hack de unique constraint: mover todos para negativos
       await tx.update(tracks).set({ trackNumber: sql`${tracks.trackNumber} * -1` }).where(eq(tracks.albumId, albumId));
-      
-      // Depois aplicar os novos valores positivos
       for (const item of order) {
         await tx.update(tracks).set({ trackNumber: item.track_number }).where(eq(tracks.id, item.id));
       }
@@ -850,7 +1139,9 @@ async function handleReorderTracks(req, res, session) {
     throw err;
   }
 
-  await audit('track.reorder', { actor: session.user, metadata: { albumId, count: order.length } });
+  try { await audit('track.reorder', { actor: session.user, metadata: { albumId, count: order.length } }); }
+  catch (e) { console.warn('[admin] audit track.reorder falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true });
 }
 
@@ -859,24 +1150,42 @@ async function handleUpdateLyrics(req, res, session) {
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const lyrics = parseBody(req).lyrics;
-  if (lyrics !== null && typeof lyrics !== 'string' && !Array.isArray(lyrics)) return sendJson(res, 400, { ok: false, error: 'Letra inválida.' });
-  if (typeof lyrics === 'string' && Buffer.byteLength(lyrics, 'utf8') > 200 * 1024) return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
-  if (Array.isArray(lyrics) && lyrics.length > 500) return sendJson(res, 413, { ok: false, error: 'Número excessivo de linhas na letra.' });
+  if (lyrics !== null && typeof lyrics !== 'string' && !Array.isArray(lyrics)) {
+    return sendJson(res, 400, { ok: false, error: 'Letra inválida.' });
+  }
+  if (typeof lyrics === 'string' && Buffer.byteLength(lyrics, 'utf8') > MAX_LYRICS_BYTES) {
+    return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
+  }
+  if (Array.isArray(lyrics)) {
+    if (lyrics.length > MAX_LYRICS_LINES) return sendJson(res, 413, { ok: false, error: 'Número excessivo de linhas.' });
+    let totalBytes = 0;
+    for (const l of lyrics) {
+      if (!l || typeof l !== 'object' || Array.isArray(l)) return sendJson(res, 400, { ok: false, error: 'Item de letra inválido.' });
+      if (typeof l.text !== 'string') return sendJson(res, 400, { ok: false, error: 'Texto da letra deve ser string.' });
+      if (l.text.length > MAX_LYRICS_LINE_LENGTH) return sendJson(res, 413, { ok: false, error: 'Linha de letra muito longa.' });
+      totalBytes += Buffer.byteLength(l.text, 'utf8');
+      if (totalBytes > MAX_LYRICS_BYTES) return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
+      if (l.time !== undefined && (typeof l.time !== 'number' || !Number.isFinite(l.time) || l.time < 0)) {
+        return sendJson(res, 400, { ok: false, error: 'Timestamp da letra inválido.' });
+      }
+    }
+  }
 
   const updated = await db.update(tracks).set({ lyrics }).where(eq(tracks.id, trackId)).returning();
   if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
 
-  await audit('track.lyrics.update', { actor: session.user, target: trackId });
+  try { await audit('track.lyrics.update', { actor: session.user, target: trackId }); }
+  catch (e) { console.warn('[admin] audit track.lyrics.update falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true, track: updated[0] });
 }
 
 // ─────────────────────────────────────────────────────────────
-// CONFIGURAÇÃO E DOWNLOADS
+// STORAGE / DOWNLOADS
 // ─────────────────────────────────────────────────────────────
 async function handleStorageConfig(req, res, session) {
   try {
-    const cfg = getPublicR2Config();
-    return sendJson(res, 200, cfg);
+    return sendJson(res, 200, getPublicR2Config());
   } catch (err) {
     return sendJson(res, 503, { ok: false, error: err.message, code: err.code });
   }
@@ -889,21 +1198,21 @@ async function handleDownloadUrl(req, res, session) {
   const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
   if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
 
-  // Correção: Validar se o path realmente pertence ao tipo audio-full
   try {
     const kind = inferKindFromKey(track.fullPath);
-    if (kind !== 'audio-full') {
-      return sendJson(res, 403, { ok: false, error: 'O caminho não corresponde a um áudio completo.' });
-    }
+    if (kind !== 'audio-full') return sendJson(res, 403, { ok: false, error: 'Caminho não é áudio completo.' });
   } catch {
-    return sendJson(res, 400, { ok: false, error: 'Caminho de armazenamento inválido.' });
+    return sendJson(res, 400, { ok: false, error: 'Caminho inválido.' });
   }
 
   try {
-    const { url } = await createSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(track.title)}.mp3`);
-    await audit('download.single', { actor: session.user, target: trackId });
-    return sendJson(res, 200, { ok: true, url, filename: `${sanitizeFilename(track.title)}.mp3` });
-  } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar link.' }); }
+    const filename = `${sanitizeFilename(track.title)}.mp3`;
+    const { url } = await createSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, filename);
+    try { await audit('download.single', { actor: session.user, target: trackId }); } catch {}
+    return sendJson(res, 200, { ok: true, url, filename });
+  } catch {
+    return sendJson(res, 502, { ok: false, error: 'Falha ao gerar link.' });
+  }
 }
 
 async function handleDownloadAlbum(req, res, session) {
@@ -911,32 +1220,57 @@ async function handleDownloadAlbum(req, res, session) {
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
-  try {
-    const urls = await Promise.all(rows.map(async t => {
-      if (!t.fullPath) return { id: t.id, title: t.title, url: null, filename: null };
-      
+
+  // Concorrência limitada: 3 por vez
+  const results = [];
+  const queue = rows.slice();
+  const CONCURRENCY = 3;
+  async function worker() {
+    while (queue.length) {
+      const t = queue.shift();
+      if (!t) break;
+      if (!t.fullPath) { results.push({ id: t.id, title: t.title, url: null, filename: null }); continue; }
       try {
         const kind = inferKindFromKey(t.fullPath);
-        if (kind !== 'audio-full') return { id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' };
+        if (kind !== 'audio-full') {
+          results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' });
+          continue;
+        }
       } catch {
-        return { id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' };
+        results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' });
+        continue;
       }
+      try {
+        const filename = `${sanitizeFilename(t.title)}.mp3`;
+        const { url } = await createSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, filename);
+        results.push({ id: t.id, title: t.title, url, filename });
+      } catch {
+        results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Falha ao gerar link' });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-      const { url } = await createSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, `${sanitizeFilename(t.title)}.mp3`);
-      return { id: t.id, title: t.title, url, filename: `${sanitizeFilename(t.title)}.mp3` };
-    }));
-    await audit('download.album', { actor: session.user, target: albumId, metadata: { count: urls.filter(u => u.url).length } });
-    return sendJson(res, 200, { ok: true, tracks: urls });
-  } catch(e) { return sendJson(res, 502, { ok: false, error: 'Falha ao gerar links.' }); }
+  // Preserva ordem original
+  const byId = new Map(results.map(r => [r.id, r]));
+  const ordered = rows.map(r => byId.get(r.id)).filter(Boolean);
+
+  try { await audit('download.album', { actor: session.user, target: albumId, metadata: { count: ordered.filter(u => u.url).length } }); }
+  catch (e) { console.warn('[admin] audit download.album falhou:', e.message); }
+
+  return sendJson(res, 200, { ok: true, tracks: ordered });
 }
 
 // ─────────────────────────────────────────────────────────────
-// VENDAS E AUDITORIA
+// VENDAS / AUDITORIA / HASH
 // ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   try {
     const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
-    return sendJson(res, 200, { ok: true, sales: rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId })) });
+    return sendJson(res, 200, {
+      ok: true,
+      sales: rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId }))
+    });
   } catch (err) {
     console.error('[admin] erro vendas:', err);
     return sendJson(res, 500, { ok: false, error: 'Não foi possível carregar as vendas.' });
@@ -954,7 +1288,12 @@ async function handleGetAudit(req, res) {
 }
 
 async function handleGenHash(req, res, session) {
-  return sendJson(res, 200, { ok: true, message: 'Use o terminal para gerar o hash: node -e "console.log(require(\'crypto\').createHash(\'sha256\').update(\'sua_senha\').digest(\'hex\'))"' });
+  // Orientação compatível com verifyScrypt (não sha256)
+  return sendJson(res, 200, {
+    ok: true,
+    message:
+      'Gere o hash com scrypt no terminal: node -e "const c=require(\'crypto\');const s=c.randomBytes(16).toString(\'hex\');c.scrypt(\'sua_senha\', s, 64, (e,k)=>{if(e)throw e;console.log(s+\':\'+k.toString(\'hex\'))})"'
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -976,11 +1315,18 @@ function parseAction(query) {
 }
 
 function createSlug(text) {
-  return String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 function sanitizeFilename(s) {
-  return String(s || 'audio').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._ -]+/g, '_').trim();
+  return String(s || 'audio')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9._ -]+/g, '_')
+    .trim() || 'audio';
 }
 
 function isUuid(s) {
