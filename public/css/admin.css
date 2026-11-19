@@ -581,3 +581,30 @@
 .track-drag-handle { color: #888; font-weight: 700; letter-spacing: -2px; user-select: none; }
 
 [data-detected-duration] { display: block; font-size: 0.75rem; color: var(--accent, #d4af37); margin-top: 2px; }
+
+.upload-progress-toast {
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  background: #1a1a1a;
+  border: 1px solid #282828;
+  border-radius: 8px;
+  padding: 12px 16px;
+  min-width: 200px;
+  z-index: 10000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  font-size: 0.9rem;
+  color: #fff;
+}
+.upload-progress-toast .progress-bar {
+  margin-top: 8px;
+  height: 4px;
+  background: #535353;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.upload-progress-toast .fill {
+  height: 100%;
+  background: #d4af37;
+  transition: width 0.3s;
+}
