@@ -581,8 +581,9 @@ function openDeleteModal(userId, userName) {
     proceedBtn.textContent = 'Excluindo…';
 
     try {
-      await apiFetch(`users&id=${encodeURIComponent(userId)}`, {
-        method: 'DELETE'
+      await apiFetch('users', {
+        method: 'DELETE',
+        query: { id: userId }
       });
 
       closeAdminModal();
