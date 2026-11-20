@@ -1,19 +1,29 @@
 'use strict';
 
 /* ============================================================
-   API: /api/payments — Mercado Pago (Versão Final Corrigida)
-   Contrato (compatível com js/site.js):
-     POST ?type=rental        { albumId, trackIndex, planId, kind, idempotencyKey? }
-     POST ?type=subscription  { plan, idempotencyKey? }
-     GET  ?type=manage        → { ok, subscription|null }
-     POST ?type=manage        { action: 'cancel' }
-     POST ?type=webhook       (MP envia; GET p/ debug)
-   Aliases: ?action=rent|subscribe|manage|webhook
-   ⚠️  Nenhum pedido é marcado PAID sem confirmação do MP.
+   API: /api/payments — Mercado Pago (v2 — auditada)
+   ------------------------------------------------------------
+   Correções da auditoria etapa 2:
+   P0.1 subscriptions.orderId vincula assinatura ao pedido;
+        webhook atualiza APENAS o pedido da assinatura.
+   P0.2 payments_events unique em providerEvent + INSERT
+        atômico com ON CONFLICT DO NOTHING.
+   P0.3 e-mail de aluguel usa dados reais (produto, faixa,
+        aluguel criado na transação), não order.id nem 24h fixo.
+   P0.4 webhook confere external_reference, metadata.order_id,
+        metadata.user_id, produto, valor e moeda antes de PAID.
+   P0.5 webhook de preapproval usa subscriptions.orderId para
+        marcar o pedido correto (não procura PENDING aleatório).
+   P1.1 handleRental/handleSubscription: se o MP falhar, o
+        pedido PENDING é marcado FAILED e a subscription PENDING
+        é CANCELLED; idempotência não prende o usuário.
+   P1.2 createPendingOrder usa ON CONFLICT no idempotencyKey.
+   P1.3 handleManage cancel: MP primeiro, local depois; se MP
+        falhar, não cancela local (mantém consistência).
    ============================================================ */
 
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
-const { eq, and, gt, desc, inArray } = require('drizzle-orm');
+const { eq, and, gt, desc, inArray, isNull } = require('drizzle-orm');
 const { db } = require('./_db');
 const {
   plans,
@@ -78,7 +88,7 @@ async function mpFetch(path, options = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WEBHOOK: valida x-signature do MP (ts numérico + janela temporal)
+// WEBHOOK: valida x-signature (ts numérico + janela temporal)
 // ─────────────────────────────────────────────────────────────
 function verifyWebhookSignature(req) {
   const secret = WEBHOOK_SECRET();
@@ -130,24 +140,39 @@ async function findOrderByIdempotencyKey(key) {
   return row || null;
 }
 
+/**
+ * Cria pedido PENDING. Em caso de conflito de idempotencyKey (corrida
+ * entre duas requisições), retorna o pedido vencedor.
+ */
 async function createPendingOrder({ userId, totalCents, currency, idempotencyKey }) {
   const id = randomUUID();
-  const [row] = await db.insert(orders).values({
+  const inserted = await db.insert(orders).values({
     id,
     userId,
     status: 'PENDING',
     totalCents,
     currency,
     idempotencyKey: idempotencyKey || null,
-  }).returning();
-  return row;
+  }).onConflictDoNothing({ target: orders.idempotencyKey }).returning();
+
+  if (inserted.length === 1) return inserted[0];
+
+  // Conflito: alguém já criou com a mesma chave. Busca o vencedor.
+  const [existing] = await db.select().from(orders)
+    .where(eq(orders.idempotencyKey, idempotencyKey))
+    .limit(1);
+  if (!existing) throw new Error('Falha ao resolver idempotência do pedido.');
+  return existing;
 }
 
-async function markOrderPaid(orderId, externalPaymentId) {
-  const now = new Date().toISOString();
-  await db.update(orders)
-    .set({ status: 'PAID', paidAt: now, externalPaymentId })
-    .where(eq(orders.id, orderId));
+async function markOrderFailed(orderId, reason) {
+  try {
+    await db.update(orders)
+      .set({ status: 'FAILED' })
+      .where(and(eq(orders.id, orderId), eq(orders.status, 'PENDING')));
+  } catch (err) {
+    console.error('[payments] falha ao marcar pedido FAILED:', orderId, err.message);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -162,24 +187,24 @@ async function handleRental(req, res, user) {
 
   if (!planId) return res.status(400).json({ ok: false, error: 'planId obrigatório' });
 
-  // Valida APP_URL antes de criar registros
   const base = APP_URL();
   if (!base) {
     return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
   }
 
-  // Idempotência de checkout
   if (clientKey) {
     const existingOrder = await findOrderByIdempotencyKey(clientKey);
     if (existingOrder) {
-      const [pref] = await db.select().from(orders)
-        .where(eq(orders.id, existingOrder.id)).limit(1);
+      if (existingOrder.status === 'FAILED') {
+        return res.status(409).json({
+          ok: false,
+          error: 'Tentativa anterior falhou. Tente novamente com nova chave de idempotência.',
+        });
+      }
       return res.status(200).json({
         ok: true,
         orderId: existingOrder.id,
-        checkoutUrl: pref?.externalPaymentId
-          ? `https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=${pref.externalPaymentId}`
-          : null,
+        checkoutUrl: existingOrder.preferenceInitPoint || null,
         reused: true,
       });
     }
@@ -195,10 +220,7 @@ async function handleRental(req, res, user) {
     const [t] = await db.select({ id: tracks.id }).from(tracks)
       .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
       .limit(1);
-
-    if (!t) {
-      return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
-    }
+    if (!t) return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
     trackId = t.id;
   }
 
@@ -250,7 +272,7 @@ async function handleRental(req, res, user) {
     productId: product.id,
     quantity: 1,
     unitPriceCents: product.priceCents,
-  });
+  }).onConflictDoNothing();
 
   let preference;
   try {
@@ -284,11 +306,16 @@ async function handleRental(req, res, user) {
     });
   } catch (err) {
     console.error('[payments][rental] MP preference falhou:', err.status, err.body);
+    await markOrderFailed(order.id, 'MP_PREFERENCE_FAILED');
     return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
   }
 
   await db.update(orders)
-    .set({ externalPaymentId: String(preference.id) })
+    .set({
+      externalPaymentId: String(preference.id),
+      preferenceId: String(preference.id),
+      preferenceInitPoint: preference.init_point || preference.sandbox_init_point || null,
+    })
     .where(eq(orders.id, order.id));
 
   return res.status(200).json({
@@ -316,6 +343,12 @@ async function handleSubscription(req, res, user) {
   if (clientKey) {
     const existingOrder = await findOrderByIdempotencyKey(clientKey);
     if (existingOrder) {
+      if (existingOrder.status === 'FAILED') {
+        return res.status(409).json({
+          ok: false,
+          error: 'Tentativa anterior falhou. Tente novamente com nova chave de idempotência.',
+        });
+      }
       return res.status(200).json({
         ok: true,
         orderId: existingOrder.id,
@@ -358,12 +391,13 @@ async function handleSubscription(req, res, user) {
     productId: plan.id,
     quantity: 1,
     unitPriceCents: plan.priceCents,
-  });
+  }).onConflictDoNothing();
 
   const [sub] = await db.insert(subscriptions).values({
     id: randomUUID(),
     userId: user.id,
     planId: plan.id,
+    orderId: order.id,
     status: 'PENDING',
     initPoint: null,
     payerEmail: user.email,
@@ -391,6 +425,10 @@ async function handleSubscription(req, res, user) {
     });
   } catch (err) {
     console.error('[payments][subscription] MP preapproval falhou:', err.status, err.body);
+    await markOrderFailed(order.id, 'MP_PREAPPROVAL_FAILED');
+    await db.update(subscriptions)
+      .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+      .where(eq(subscriptions.id, sub.id));
     return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
   }
 
@@ -399,7 +437,10 @@ async function handleSubscription(req, res, user) {
     .where(eq(subscriptions.id, sub.id));
 
   await db.update(orders)
-    .set({ externalPaymentId: String(preapproval.id) })
+    .set({
+      externalPaymentId: String(preapproval.id),
+      preferenceInitPoint: preapproval.init_point || null,
+    })
     .where(eq(orders.id, order.id));
 
   return res.status(200).json({
@@ -497,26 +538,34 @@ async function handleWebhook(req, res) {
 
   const providerEvent = `${type}:${dataId}`;
 
-  // Idempotência: só bloqueia se já foi PROCESSADO
-  const [existing] = await db.select().from(paymentsEvents)
-    .where(eq(paymentsEvents.providerEvent, providerEvent))
-    .limit(1);
-
-  if (existing && existing.processedAt) {
-    return res.status(200).json({ ok: true, duplicated: true });
-  }
-
+  // P0.2: INSERT atômico. Se já existe, ON CONFLICT DO NOTHING; depois
+  // lê a linha. Se outra requisição está processando (processedAt NULL
+  // e failureReason NULL), retorna 200 para o MP não reenviar.
   let eventRow;
-  if (existing) {
-    eventRow = existing;
-  } else {
-    [eventRow] = await db.insert(paymentsEvents).values({
+  try {
+    const inserted = await db.insert(paymentsEvents).values({
       provider: 'mercadopago',
       providerEvent,
       eventType: type,
       externalId: dataId,
       payload: event,
-    }).returning();
+    }).onConflictDoNothing({ target: paymentsEvents.providerEvent }).returning();
+
+    if (inserted.length === 1) {
+      eventRow = inserted[0];
+    } else {
+      const [existing] = await db.select().from(paymentsEvents)
+        .where(eq(paymentsEvents.providerEvent, providerEvent))
+        .limit(1);
+      if (!existing) throw new Error('Evento em conflito mas não encontrado.');
+      if (existing.processedAt) {
+        return res.status(200).json({ ok: true, duplicated: true });
+      }
+      eventRow = existing;
+    }
+  } catch (err) {
+    console.error('[payments][webhook] falha ao registrar evento:', err.message);
+    return res.status(500).json({ ok: false });
   }
 
   try {
@@ -539,19 +588,39 @@ async function handleWebhook(req, res) {
         throw new Error('PEDIDO_INEXISTENTE');
       }
 
-      const paidAmount = Number(pay.transaction_amount) * 100;
-      if (Number(order.totalCents) !== Math.round(paidAmount)) {
-        console.error('[payments][webhook] valor divergente:', {
-          orderId, esperado: order.totalCents, pago: paidAmount,
-        });
-        throw new Error('VALOR_DIVERGENTE');
+      // P0.4: validações cruzadas de metadados, valor e moeda.
+      const meta = (pay.metadata && typeof pay.metadata === 'object') ? pay.metadata : {};
+      if (meta.order_id && String(meta.order_id) !== String(order.id)) {
+        throw new Error('METADATA_ORDER_MISMATCH');
+      }
+      if (meta.user_id && String(meta.user_id) !== String(order.userId)) {
+        throw new Error('METADATA_USER_MISMATCH');
+      }
+      if (meta.order_id && String(meta.order_id) !== String(order.id)) {
+        // redundante com o primeiro, mas mantém explícito
+        throw new Error('METADATA_ORDER_MISMATCH');
       }
 
+      const paidAmount = Number(pay.transaction_amount) * 100;
+      if (Number(order.totalCents) !== Math.round(paidAmount)) {
+        throw new Error('VALOR_DIVERGENTE');
+      }
       if (pay.currency_id && order.currency && pay.currency_id !== order.currency) {
-        console.error('[payments][webhook] moeda divergente:', {
-          orderId, esperado: order.currency, pago: pay.currency_id,
-        });
         throw new Error('MOEDA_DIVERGENTE');
+      }
+
+      const [item] = await db.select().from(orderItems)
+        .where(eq(orderItems.orderId, order.id)).limit(1);
+
+      // P0.4: valida produto adquirido contra o item do pedido.
+      if (!item) throw new Error('ORDER_ITEM_AUSENTE');
+      if (item.productType === 'RENTAL') {
+        const [prod] = await db.select().from(rentalProducts)
+          .where(eq(rentalProducts.id, item.productId)).limit(1);
+        if (!prod) throw new Error('PRODUTO_INEXISTENTE');
+        if (meta.product_id && String(meta.product_id) !== String(prod.id)) {
+          throw new Error('METADATA_PRODUCT_MISMATCH');
+        }
       }
 
       if (order.status === 'PAID') {
@@ -561,28 +630,34 @@ async function handleWebhook(req, res) {
         return res.status(200).json({ ok: true, alreadyPaid: true });
       }
 
-      const [item] = await db.select().from(orderItems)
-        .where(eq(orderItems.orderId, order.id)).limit(1);
-
-      // Transação: marcar pedido + criar aluguel juntos
+      // Transação: marcar pedido + criar aluguel juntos.
+      let createdRental = null;
+      let rentalProduct = null;
       await db.transaction(async (tx) => {
-        await tx.update(orders)
+        const updated = await tx.update(orders)
           .set({
             status: 'PAID',
             paidAt: new Date().toISOString(),
             externalPaymentId: String(pay.id),
           })
-          .where(eq(orders.id, order.id));
+          .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')))
+          .returning({ id: orders.id });
+
+        if (updated.length !== 1) {
+          // Outra requisição já marcou como PAID; não cria aluguel duplicado.
+          return;
+        }
 
         if (item && item.productType === 'RENTAL') {
           const [prod] = await tx.select().from(rentalProducts)
             .where(eq(rentalProducts.id, item.productId)).limit(1);
           if (!prod) throw new Error('PRODUTO_INEXISTENTE');
+          rentalProduct = prod;
 
           const now = new Date();
           const expires = new Date(now.getTime() + (prod.durationHours || 24) * 3600 * 1000);
 
-          await tx.insert(rentals).values({
+          const [row] = await tx.insert(rentals).values({
             id: randomUUID(),
             rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
             userId: order.userId,
@@ -592,23 +667,40 @@ async function handleWebhook(req, res) {
             status: 'ACTIVE',
             startsAt: now.toISOString(),
             expiresAt: expires.toISOString(),
-          });
+          }).returning();
+          createdRental = row;
         }
       });
 
       await invalidateAccessCache(order.userId);
 
-      // E-mail de confirmação (não bloqueante)
-      if (item && item.productType === 'RENTAL') {
+      // P0.3: e-mail com dados reais.
+      if (item && item.productType === 'RENTAL' && createdRental && rentalProduct) {
         try {
-          const [user] = await db.select({ email: users.email })
+          const [u] = await db.select({ email: users.email })
             .from(users).where(eq(users.id, order.userId)).limit(1);
-          if (user?.email) {
+          let albumName = null;
+          let trackTitle = null;
+          if (rentalProduct.albumId) {
+            const [alb] = await db.select({ title: albums.title })
+              .from(albums).where(eq(albums.id, rentalProduct.albumId)).limit(1);
+            albumName = alb?.title || null;
+          } else if (rentalProduct.trackId) {
+            const [tr] = await db.select({ title: tracks.title, albumId: tracks.albumId })
+              .from(tracks).where(eq(tracks.id, rentalProduct.trackId)).limit(1);
+            trackTitle = tr?.title || null;
+            if (tr?.albumId) {
+              const [alb] = await db.select({ title: albums.title })
+                .from(albums).where(eq(albums.id, tr.albumId)).limit(1);
+              albumName = alb?.title || null;
+            }
+          }
+          if (u?.email) {
             await sendRentalConfirmation({
-              userEmail: user.email,
-              albumName: order.id,
-              trackTitle: null,
-              expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+              userEmail: u.email,
+              albumName: albumName || rentalProduct.name || 'Aluguel',
+              trackTitle: trackTitle,
+              expiresAt: createdRental.expiresAt,
             });
           }
         } catch (emailErr) {
@@ -621,18 +713,20 @@ async function handleWebhook(req, res) {
       const subId = pre.external_reference;
 
       if (subId) {
+        const [sub] = await db.select().from(subscriptions)
+          .where(eq(subscriptions.id, subId)).limit(1);
+        const [plan] = sub
+          ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1)
+          : [];
+
         if (pre.status === 'authorized') {
           const now = new Date();
-          const [sub] = await db.select().from(subscriptions)
-            .where(eq(subscriptions.id, subId)).limit(1);
-          const [plan] = sub
-            ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1)
-            : [];
           const end = new Date(now);
           if (plan && plan.intervalUnit === 'MONTH') end.setMonth(end.getMonth() + plan.intervalCount);
           else if (plan && plan.intervalUnit === 'YEAR') end.setFullYear(end.getFullYear() + plan.intervalCount);
           else end.setDate(end.getDate() + (plan ? plan.intervalCount : 30));
 
+          // P0.5: usa subscriptions.orderId para marcar o pedido correto.
           await db.transaction(async (tx) => {
             await tx.update(subscriptions).set({
               status: 'ACTIVE',
@@ -641,36 +735,24 @@ async function handleWebhook(req, res) {
               updatedAt: now.toISOString(),
             }).where(eq(subscriptions.id, subId));
 
-            // Marca pedido pendente como pago, se existir
-            if (sub) {
-              const [pendingOrder] = await tx.select().from(orders)
-                .where(and(
-                  eq(orders.userId, sub.userId),
-                  eq(orders.status, 'PENDING'),
-                  inArray(orders.id, (await tx.select({ id: orders.id })
-                    .from(orders)
-                    .where(eq(orders.userId, sub.userId))
-                    .limit(10)).map(o => o.id))
-                )).limit(1);
-              if (pendingOrder) {
-                await tx.update(orders).set({
-                  status: 'PAID',
-                  paidAt: now.toISOString(),
-                }).where(eq(orders.id, pendingOrder.id));
-              }
+            if (sub?.orderId) {
+              await tx.update(orders).set({
+                status: 'PAID',
+                paidAt: now.toISOString(),
+              }).where(and(eq(orders.id, sub.orderId), eq(orders.status, 'PENDING')));
             }
           });
 
           if (sub?.userId) await invalidateAccessCache(sub.userId);
 
           try {
-            const [user] = sub
+            const [u] = sub
               ? await db.select({ email: users.email }).from(users)
                   .where(eq(users.id, sub.userId)).limit(1)
               : [];
-            if (user?.email) {
+            if (u?.email) {
               await sendSubscriptionConfirmation({
-                userEmail: user.email,
+                userEmail: u.email,
                 planName: plan?.name || 'Premium',
                 currentPeriodEnd: end.toISOString(),
               });
@@ -680,9 +762,6 @@ async function handleWebhook(req, res) {
           }
 
         } else if (pre.status === 'cancelled') {
-          const [sub] = await db.select().from(subscriptions)
-            .where(eq(subscriptions.id, subId)).limit(1);
-
           await db.update(subscriptions).set({
             status: 'CANCELLED',
             updatedAt: new Date().toISOString(),
@@ -734,7 +813,6 @@ module.exports = async (req, res) => {
   try { user = await getAuthUser(req); } catch (e) { user = null; }
   if (!user) return res.status(401).json({ ok: false, error: 'Não autenticado' });
 
-  // CSRF: operações mutáveis exigem Origin válida
   if (req.method !== 'GET' && !checkOrigin(req)) {
     return res.status(403).json({ ok: false, error: 'Origem não permitida.' });
   }
