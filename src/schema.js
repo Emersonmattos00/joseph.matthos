@@ -3,7 +3,7 @@
 
 const {
   pgTable, text, uuid, timestamp, integer, boolean, jsonb, pgEnum,
-  date, char, bigserial, index, uniqueIndex
+  date, char, bigserial, index, uniqueIndex, check
 } = require('drizzle-orm/pg-core');
 const { sql } = require('drizzle-orm');
 
@@ -124,10 +124,12 @@ const plans = pgTable('plans', {
 }, (t) => [uniqueIndex('plans_name_key').on(t.name)]);
 
 // ─── Subscriptions ──────────────────────────────────
+// NOVO: orderId vincula a assinatura ao pedido que a originou.
 const subscriptions = pgTable('subscriptions', {
   id: uuid().primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   planId: uuid('plan_id').notNull().references(() => plans.id, { onDelete: 'restrict' }),
+  orderId: uuid('order_id').references(() => orders.id, { onDelete: 'set null' }),
   externalSubscriptionId: text('external_subscription_id'),
   status: subscriptionStatus().default('PENDING').notNull(),
   currentPeriodStart: timestamp('current_period_start', { withTimezone: true, mode: 'string' }),
@@ -141,17 +143,19 @@ const subscriptions = pgTable('subscriptions', {
   index('idx_subscriptions_status').on(t.status),
   index('idx_subscriptions_user').on(t.userId),
   index('idx_subscriptions_user_status').on(t.userId, t.status),
+  index('idx_subscriptions_order').on(t.orderId),
   uniqueIndex('subscriptions_external_subscription_id_key').on(t.externalSubscriptionId)
 ]);
 
 // ─── Rentals ──────────────────────────────────────────
+// NOVO: orderId com FK para orders.
 const rentals = pgTable('rentals', {
   id: uuid().primaryKey().defaultRandom(),
   rentalCode: text('rental_code').notNull(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   trackId: uuid('track_id').references(() => tracks.id, { onDelete: 'set null' }),
   albumId: uuid('album_id').references(() => albums.id, { onDelete: 'set null' }),
-  orderId: uuid('order_id'),
+  orderId: uuid('order_id').references(() => orders.id, { onDelete: 'set null' }),
   status: rentalStatus().default('PENDING').notNull(),
   startsAt: timestamp('starts_at', { withTimezone: true, mode: 'string' }).notNull(),
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
@@ -159,12 +163,14 @@ const rentals = pgTable('rentals', {
 }, (t) => [
   index('idx_rentals_user_track').on(t.userId, t.trackId),
   index('rentals_album_id_idx').on(t.albumId),
+  index('rentals_order_id_idx').on(t.orderId),
   uniqueIndex('rentals_rental_code_key').on(t.rentalCode),
   index('rentals_track_id_idx').on(t.trackId),
   index('rentals_user_id_idx').on(t.userId)
 ]);
 
 // ─── Rental Products ──────────────────────────────────
+// NOVO: CHECK garante exatamente um de trackId/albumId.
 const rentalProducts = pgTable('rental_products', {
   id: uuid().primaryKey().defaultRandom(),
   trackId: uuid('track_id').references(() => tracks.id, { onDelete: 'cascade' }),
@@ -177,7 +183,11 @@ const rentalProducts = pgTable('rental_products', {
   sortOrder: integer('sort_order').default(0).notNull()
 }, (t) => [
   index('rental_products_album_id_idx').on(t.albumId),
-  index('rental_products_track_id_idx').on(t.trackId)
+  index('rental_products_track_id_idx').on(t.trackId),
+  check(
+    'rental_products_exactly_one_target',
+    sql`(${t.trackId} IS NOT NULL AND ${t.albumId} IS NULL) OR (${t.trackId} IS NULL AND ${t.albumId} IS NOT NULL)`
+  )
 ]);
 
 // ─── Site Content ──────────────────────────────────
@@ -223,6 +233,7 @@ const authAuditLog = pgTable('auth_audit_log', {
 });
 
 // ─── Payments Events ──────────────────────────────
+// NOVO: unique em providerEvent (idempotência real).
 const paymentsEvents = pgTable('payments_events', {
   id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
   provider: text().default('mercadopago').notNull(),
@@ -233,19 +244,11 @@ const paymentsEvents = pgTable('payments_events', {
   processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
   failureReason: text('failure_reason'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
-});
-
-const paymentEventsLegacy = pgTable('payment_events', {
-  id: bigserial({ mode: 'bigint' }).primaryKey().notNull(),
-  provider: text().default('mercadopago').notNull(),
-  providerEvent: text('provider_event').notNull(),
-  eventType: text('event_type').notNull(),
-  externalId: text('external_id'),
-  payload: jsonb().notNull(),
-  processedAt: timestamp('processed_at', { withTimezone: true, mode: 'string' }),
-  failureReason: text('failure_reason'),
-  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull()
-});
+}, (t) => [
+  uniqueIndex('payments_events_provider_event_key').on(t.providerEvent),
+  index('payments_events_event_type_idx').on(t.eventType),
+  index('payments_events_processed_at_idx').on(t.processedAt)
+]);
 
 // ─── Upload Intents ──────────────────────────────
 const uploadIntents = pgTable('upload_intents', {
@@ -360,7 +363,7 @@ const playbackEvents = pgTable('playback_events', {
 module.exports = {
   adminAudit, albums, artists, authAuditLog, emailVerificationTokens,
   newsletterSubscribers, orderItems, orderStatus, orders, passwordResetTokens,
-  paymentEventsLegacy, paymentsEvents, plans, playbackEvents, prismaMigrations,
+  paymentsEvents, plans, playbackEvents, prismaMigrations,
   productType, refreshTokens, rentalProducts, rentalStatus, rentals,
   siteContent, siteContentHistory, socialLinks, subscriptionStatus,
   subscriptions, trackStatus, tracks, uploadIntents, userRole, users
