@@ -1,15 +1,20 @@
 'use strict';
 
 /* ============================================================
-   api/stream.js — Entrega segura de áudio (Versão Final)
+   api/stream.js — Entrega segura de áudio (v2 — auditada)
    ------------------------------------------------------------
-   - Validação de status (tracks.status === 'PUBLISHED')
-   - Autorização Premium / Aluguel (com startsAt e expiresAt)
-   - Rate limit diferenciado (429 excesso / 503 indisponível)
-   - URL assinada do B2 para áudio completo
-   - CDN pública para prévias
-   - CORS restrito a ALLOWED_ORIGINS
-   - Proteção contra chaves inválidas
+   Correções da auditoria etapa 2:
+   P1.1 CDN_BASE via env (R2_PUBLIC_BASE_URL ou CDN_BASE_URL),
+        validada como HTTPS.
+   P1.2 Contrato duplo:
+        - default: 302 para a URL assinada (player <audio src>)
+        - ?format=json (ou Accept: application/json): 200 com
+          { ok, audioUrl, expiresAt } para renewSignedUrl() em
+          site.js.
+   P1.3 IP: usa clientIp() (já documentado como dependente de
+        proxy confiável em _lib.js).
+   Mantém: validação de status, autorização premium/aluguel,
+   rate limit, CORS restrito, bloqueio de chaves inválidas.
    ============================================================ */
 
 const { eq, and, gt, lte, or } = require('drizzle-orm');
@@ -19,14 +24,28 @@ const { tracks, rentals, subscriptions } = require('../src/schema.js');
 
 const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
-const { getPlaybackUrl } = require('./_storage');
+const { getPlaybackUrl, createSignedDownloadUrl } = require('./_storage');
 
-const CDN_BASE = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+const CDN_BASE = (() => {
+  const raw = String(
+    process.env.CDN_BASE_URL ||
+    process.env.R2_PUBLIC_BASE_URL ||
+    ''
+  ).trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:') return '';
+    return u.origin;
+  } catch {
+    return '';
+  }
+})();
+
+const SIGNED_TTL_SEC = 300;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/* ─── Helpers ─────────────────────────────────────────── */
 
 function sendError(res, status, error, message) {
   return res.status(status).json({
@@ -46,19 +65,21 @@ function encodeObjectKey(key) {
 
 function getAllowedOrigin(req) {
   const origin = req.headers.origin;
-  // Requisições sem Origin podem ser de players nativos ou testes internos.
   if (!origin) return true;
   return ALLOWED_ORIGINS.has(origin);
 }
 
-/* ─── Handler ────────────────────────────────────────── */
+function wantsJson(req) {
+  if (String(req.query?.format || '').toLowerCase() === 'json') return true;
+  const accept = String(req.headers?.accept || '').toLowerCase();
+  return accept.includes('application/json');
+}
 
 module.exports = async (req, res) => {
   res.setHeader('Vary', 'Origin');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     if (!getAllowedOrigin(req)) {
       return sendError(res, 403, 'ORIGIN_NOT_ALLOWED');
@@ -84,7 +105,6 @@ module.exports = async (req, res) => {
   if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
 
   try {
-    /* 1. IP e rate limit */
     const ip = clientIp(req);
     if (!ip) {
       return sendError(res, 503, 'CLIENT_IP_UNAVAILABLE',
@@ -101,22 +121,18 @@ module.exports = async (req, res) => {
         'Muitas requisições. Tente novamente mais tarde.');
     }
 
-    /* 2. Validação do ID */
     const trackId = String(req.query?.trackId || '').trim();
     if (!UUID_RE.test(trackId)) {
       return sendError(res, 400, 'INVALID_TRACK_ID');
     }
 
-    /* 3. Busca da faixa */
     const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
     if (!track) return sendError(res, 404, 'TRACK_NOT_FOUND');
 
-    /* 4. Status oficial */
     if (track.status !== 'PUBLISHED') {
       return sendError(res, 404, 'TRACK_NOT_AVAILABLE');
     }
 
-    /* 5. Usuário */
     let user = null;
     try {
       user = await getAuthUser(req);
@@ -131,7 +147,6 @@ module.exports = async (req, res) => {
     if (user) {
       const now = new Date().toISOString();
 
-      /* 6. Assinatura ativa */
       try {
         const [sub] = await db
           .select({ id: subscriptions.id })
@@ -142,14 +157,12 @@ module.exports = async (req, res) => {
             gt(subscriptions.currentPeriodEnd, now)
           ))
           .limit(1);
-
         if (sub) accessLevel = 'full';
       } catch (subErr) {
         console.error('[stream] Falha ao consultar assinatura:', subErr.message);
         return sendError(res, 503, 'SUBSCRIPTION_LOOKUP_FAILED');
       }
 
-      /* 7. Aluguel ativo (startsAt ≤ now < expiresAt) */
       if (accessLevel !== 'full') {
         try {
           const conditions = [
@@ -168,7 +181,6 @@ module.exports = async (req, res) => {
             .from(rentals)
             .where(and(...conditions))
             .limit(1);
-
           if (rental) accessLevel = 'full';
         } catch (rentalErr) {
           console.error('[stream] Falha ao consultar aluguel:', rentalErr.message);
@@ -177,7 +189,6 @@ module.exports = async (req, res) => {
       }
     }
 
-    /* 8. Objeto correto */
     const objectKey = accessLevel === 'full'
       ? (track.streamKey || track.fullPath)
       : (track.previewKey || track.previewPath);
@@ -196,10 +207,23 @@ module.exports = async (req, res) => {
       return sendError(res, 500, 'INVALID_STORAGE_KEY');
     }
 
-    /* 9. Áudio completo → URL assinada do B2 */
+    const asJson = wantsJson(req);
+
     if (accessLevel === 'full') {
       try {
-        const signedUrl = await getPlaybackUrl(cleanKey, true);
+        if (asJson) {
+          const { url, expiresIn } = await createSignedDownloadUrl(cleanKey, SIGNED_TTL_SEC, null);
+          if (typeof url !== 'string' || !url.startsWith('https://')) {
+            throw new Error('URL assinada inválida.');
+          }
+          return res.status(200).json({
+            ok: true,
+            audioUrl: url,
+            expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString(),
+            expiresIn,
+          });
+        }
+        const signedUrl = await getPlaybackUrl(cleanKey);
         if (typeof signedUrl !== 'string' || !signedUrl.startsWith('https://')) {
           throw new Error('URL assinada inválida.');
         }
@@ -211,12 +235,21 @@ module.exports = async (req, res) => {
       }
     }
 
-    /* 10. Prévia → CDN pública */
-    if (!CDN_BASE || !CDN_BASE.startsWith('https://')) {
+    if (!CDN_BASE) {
       return sendError(res, 503, 'CDN_UNAVAILABLE');
     }
 
     const cdnUrl = `${CDN_BASE}/${encodeObjectKey(cleanKey)}`;
+
+    if (asJson) {
+      return res.status(200).json({
+        ok: true,
+        audioUrl: cdnUrl,
+        expiresAt: null,
+        expiresIn: null,
+      });
+    }
+
     return res.redirect(302, cdnUrl);
 
   } catch (error) {
