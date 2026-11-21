@@ -23,7 +23,8 @@
       "tag": "0002_faulty_bushwacker",
       "breakpoints": true
     },
-    {
+    
+{
       "idx": 3,
       "version": "7",
       "when": 1793016073979,
@@ -48,7 +49,15 @@
       "idx": 6,
       "version": "7",
       "when": 1794234867933,
-      "tag": "0006_baseline",
+      "tag": 
+"0006_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795228800000,
+      "tag": "0007_payment_linkage_and_webhook_lease",
       "breakpoints": true
     }
   ]
