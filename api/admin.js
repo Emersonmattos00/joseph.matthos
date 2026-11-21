@@ -13,15 +13,14 @@ const crypto = require('crypto');
 const {
   sendJson, methodNotAllowed, parseBody, parseCookies, clientIp,
   checkAndIncrement, resetBucket, audit, VALID_PLANS,
-  signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD,
-  invalidatePlanCache
+  signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
-const { db, eq, and, asc, desc, drizzleSql, inArray, sql, isNull } = require('./_db');
+const { db, eq, and, asc, desc, gte, drizzleSql, inArray, sql, isNull } = require('./_db');
 const schema = require('./_db').schema;
 const {
-  tracks, albums, artists, orders, adminAudit, uploadIntents, users,
-  subscriptions, plans
+  tracks, albums, artists, orders, orderItems, rentals, paymentsEvents,
+  adminAudit, uploadIntents, users, subscriptions, plans
 } = schema;
 
 const {
@@ -240,7 +239,12 @@ async function handleLogout(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetContent(req, res) {
   const [row] = await db.select().from(schema.siteContent).where(eq(schema.siteContent.key, CONTENT_KEY)).limit(1);
-  return sendJson(res, 200, { ok: true, data: row?.data || {}, version: row?.version || 0 });
+  return sendJson(res, 200, {
+    ok: true,
+    data: row?.data || {},
+    version: row?.version ?? 0,
+    updatedAt: row?.updatedAt || null,
+  });
 }
 
 async function handlePutContent(req, res, session) {
@@ -248,8 +252,16 @@ async function handlePutContent(req, res, session) {
   const data = body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
 
-  const expectedVersion = Number(body.version);
-  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return sendJson(res, 400, { ok: false, error: 'Versão inválida.' });
+  // Contrato canônico: baseVersion. Mantém fallback temporário para
+  // clientes antigos que ainda enviem `version`.
+  const rawBaseVersion = body.baseVersion !== undefined
+    ? body.baseVersion
+    : body.version;
+  const expectedVersion = Number(rawBaseVersion);
+  if (rawBaseVersion === null || rawBaseVersion === undefined ||
+      !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+    return sendJson(res, 400, { ok: false, code: 'INVALID_BASE_VERSION', error: 'Versão-base inválida.' });
+  }
 
   if (data.contato && data.contato.socials) {
     if (!Array.isArray(data.contato.socials)) return sendJson(res, 400, { ok: false, error: 'Formato de socials inválido.' });
@@ -298,7 +310,7 @@ async function handlePutContent(req, res, session) {
   try { await audit('content.update', { actor: session.user, metadata: { version: newVersion } }); }
   catch (e) { console.warn('[admin] audit content.update falhou:', e.message); }
 
-  return sendJson(res, 200, { ok: true, version: newVersion });
+  return sendJson(res, 200, { ok: true, version: newVersion, updatedAt: new Date().toISOString() });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -627,149 +639,54 @@ async function handleGetUsers(req, res) {
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })), plansError: plansError || undefined });
 }
 
-function addPlanIntervalIso(start, intervalUnit, intervalCount) {
-  const date = new Date(start);
-  const count = Number(intervalCount);
-  const unit = String(intervalUnit || '').toLowerCase();
-  if (!Number.isInteger(count) || count < 1 || count > 120) {
-    const err = new Error('INVALID_PLAN_INTERVAL'); err.code = 'INVALID_PLAN_INTERVAL'; throw err;
-  }
-
-  if (unit === 'day') date.setUTCDate(date.getUTCDate() + count);
-  else if (unit === 'week') date.setUTCDate(date.getUTCDate() + count * 7);
-  else if (unit === 'month' || unit === 'year') {
-    const originalDay = date.getUTCDate();
-    date.setUTCDate(1);
-    if (unit === 'month') date.setUTCMonth(date.getUTCMonth() + count);
-    else date.setUTCFullYear(date.getUTCFullYear() + count);
-    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
-    date.setUTCDate(Math.min(originalDay, lastDay));
-  } else {
-    const err = new Error('INVALID_PLAN_INTERVAL'); err.code = 'INVALID_PLAN_INTERVAL'; throw err;
-  }
-  return date.toISOString();
+function daysFromPlan(planRow) {
+  const unit = String(planRow.intervalUnit || '').toLowerCase();
+  const count = Number(planRow.intervalCount) || 1;
+  if (unit === 'day') return count;
+  if (unit === 'week') return count * 7;
+  if (unit === 'month') return count * 30;
+  if (unit === 'year') return count * 365;
+  return 30;
 }
 
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
-  if (!isUuid(userId) || !VALID_PLANS.has(plan)) {
-    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
-  }
-
-  const now = new Date();
-  const nowIso = now.toISOString();
-  let createdSubscriptionId = null;
+  if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
   try {
     await db.transaction(async (tx) => {
-      // Serializa alterações administrativas concorrentes para o mesmo usuário.
-      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
-
-      const [u] = await tx.select({ id: users.id })
-        .from(users).where(eq(users.id, userId)).limit(1);
-      if (!u) {
-        const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err;
-      }
+      const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!u) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
 
       let planRow = null;
       if (plan !== 'free') {
-        const rows = await tx.select({
-          id: plans.id,
-          intervalUnit: plans.intervalUnit,
-          intervalCount: plans.intervalCount,
-        }).from(plans).where(and(eq(plans.name, plan), eq(plans.active, true))).limit(1);
+        const rows = await tx.select({ id: plans.id, intervalUnit: plans.intervalUnit, intervalCount: plans.intervalCount }).from(plans).where(eq(plans.name, plan)).limit(1);
         planRow = rows[0] || null;
-        if (!planRow) {
-          const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err;
-        }
+        if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
       }
 
-      // Não cancelar localmente uma assinatura do Mercado Pago: isso não
-      // encerra a cobrança no provedor e poderia continuar debitando o cliente.
-      const existing = await tx.select({
-        id: subscriptions.id,
-        externalSubscriptionId: subscriptions.externalSubscriptionId,
-        status: subscriptions.status,
-      }).from(subscriptions).where(and(
-        eq(subscriptions.userId, userId),
-        inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
-      ));
-
-      const externalActive = existing.some((sub) =>
-        !String(sub.externalSubscriptionId || '').startsWith('manual_')
-      );
-      if (externalActive) {
-        const err = new Error('EXTERNAL_SUBSCRIPTION_ACTIVE');
-        err.code = 'EXTERNAL_SUBSCRIPTION_ACTIVE';
-        throw err;
-      }
-
-      // Encerra apenas assinaturas manuais criadas pelo painel.
-      await tx.update(subscriptions).set({
-        status: 'CANCELLED',
-        updatedAt: nowIso,
-      }).where(and(
-        eq(subscriptions.userId, userId),
-        inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
-      ));
+      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE','PENDING'])));
 
       if (planRow) {
-        const periodEnd = addPlanIntervalIso(nowIso, planRow.intervalUnit, planRow.intervalCount);
-        createdSubscriptionId = crypto.randomUUID();
+        const planDays = daysFromPlan(planRow);
         await tx.insert(subscriptions).values({
-          id: createdSubscriptionId,
-          userId,
-          planId: planRow.id,
-          externalSubscriptionId: `manual_${crypto.randomUUID()}`,
-          status: 'ACTIVE',
-          currentPeriodStart: nowIso,
-          currentPeriodEnd: periodEnd,
-          updatedAt: nowIso,
+          id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${crypto.randomUUID()}`,
+          status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), currentPeriodEnd: addDaysIso(planDays), updatedAt: new Date().toISOString()
         });
       }
     });
   } catch (err) {
-    if (err.code === 'USER_NOT_FOUND') {
-      return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    }
-    if (err.code === 'PLAN_NOT_FOUND') {
-      return sendJson(res, 400, { ok: false, error: 'Plano inexistente ou inativo.' });
-    }
-    if (err.code === 'INVALID_PLAN_INTERVAL') {
-      return sendJson(res, 500, { ok: false, error: 'A duração configurada para este plano é inválida.' });
-    }
-    if (err.code === 'EXTERNAL_SUBSCRIPTION_ACTIVE') {
-      return sendJson(res, 409, {
-        ok: false,
-        code: 'EXTERNAL_SUBSCRIPTION_ACTIVE',
-        error: 'Este usuário possui uma assinatura do provedor de pagamento ativa ou pendente. Cancele-a primeiro no Mercado Pago e depois altere o plano.',
-      });
-    }
+    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Plano inexistente.' });
     throw err;
   }
 
-  // A transação já foi confirmada; agora elimina o plano antigo do Redis.
-  await invalidatePlanCache(userId);
+  try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
+  catch (e) { console.warn('[admin] audit user.plan.change falhou:', e.message); }
 
-  try {
-    await audit('user.plan.change', {
-      actor: session.user,
-      target: userId,
-      metadata: { plan, subscriptionId: createdSubscriptionId, source: 'admin_manual' },
-    });
-  } catch (e) {
-    console.warn('[admin] audit user.plan.change falhou:', e.message);
-  }
-
-  return sendJson(res, 200, {
-    ok: true,
-    userId,
-    plan,
-    source: 'admin_manual',
-    subscriptionId: createdSubscriptionId,
-  });
+  return sendJson(res, 200, { ok: true, plan });
 }
 
 async function handleDeleteUser(req, res, session) {
@@ -1218,8 +1135,133 @@ async function handleDownloadAlbum(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 async function handleGetSales(req, res) {
   try {
-    const rows = await db.select().from(orders).orderBy(desc(orders.createdAt)).limit(50);
-    return sendJson(res, 200, { ok: true, sales: rows.map(o => ({ id: o.id, status: o.status, totalCents: o.totalCents, createdAt: o.createdAt, userId: o.userId })) });
+    const requestedDays = String(req.query?.days || 'all');
+    const allowedPeriods = new Set(['all', '7', '30', '90', '365']);
+    if (!allowedPeriods.has(requestedDays)) {
+      return sendJson(res, 400, { ok: false, error: 'Período inválido.' });
+    }
+
+    const cutoff = requestedDays === 'all'
+      ? null
+      : new Date(Date.now() - Number(requestedDays) * 86400000).toISOString();
+    const inPeriod = (column) => cutoff ? gte(column, cutoff) : undefined;
+
+    const subscriptionBase = db.select({
+      id: subscriptions.id,
+      created_at: subscriptions.createdAt,
+      plan: plans.name,
+      rawStatus: subscriptions.status,
+      current_period_end: subscriptions.currentPeriodEnd,
+    }).from(subscriptions)
+      .leftJoin(plans, eq(plans.id, subscriptions.planId));
+    const subscriptionsRows = cutoff
+      ? await subscriptionBase.where(inPeriod(subscriptions.createdAt)).orderBy(desc(subscriptions.createdAt)).limit(500)
+      : await subscriptionBase.orderBy(desc(subscriptions.createdAt)).limit(500);
+
+    const rentalBase = db.select({
+      id: rentals.id,
+      created_at: rentals.createdAt,
+      track_id: rentals.trackId,
+      album_id: rentals.albumId,
+      expires_at: rentals.expiresAt,
+      status: rentals.status,
+      amount_cents: orderItems.unitPriceCents,
+      quantity: orderItems.quantity,
+    }).from(rentals)
+      .leftJoin(orderItems, eq(orderItems.orderId, rentals.orderId));
+    const rentalsRows = cutoff
+      ? await rentalBase.where(inPeriod(rentals.createdAt)).orderBy(desc(rentals.createdAt)).limit(500)
+      : await rentalBase.orderBy(desc(rentals.createdAt)).limit(500);
+
+    const paymentBase = db.select({
+      id: paymentsEvents.id,
+      created_at: paymentsEvents.createdAt,
+      processed_at: paymentsEvents.processedAt,
+      failure_reason: paymentsEvents.failureReason,
+      event_type: paymentsEvents.eventType,
+    }).from(paymentsEvents);
+    const paymentRowsRaw = cutoff
+      ? await paymentBase.where(inPeriod(paymentsEvents.createdAt)).orderBy(desc(paymentsEvents.createdAt)).limit(500)
+      : await paymentBase.orderBy(desc(paymentsEvents.createdAt)).limit(500);
+    const paymentRows = paymentRowsRaw.map((row) => ({ ...row, id: String(row.id) }));
+
+    const orderBase = db.select({
+      id: orders.id,
+      status: orders.status,
+      totalCents: orders.totalCents,
+      createdAt: orders.createdAt,
+      userId: orders.userId,
+      paidAt: orders.paidAt,
+    }).from(orders);
+    const orderRows = cutoff
+      ? await orderBase.where(inPeriod(orders.createdAt)).orderBy(desc(orders.createdAt)).limit(500)
+      : await orderBase.orderBy(desc(orders.createdAt)).limit(500);
+
+    // Agregações sem depender das listas limitadas a 500 linhas.
+    const aggregateResult = await db.execute(drizzleSql`      SELECT
+        (SELECT COUNT(*) FROM subscriptions s
+          WHERE (${cutoff}::timestamptz IS NULL OR s.created_at >= ${cutoff}::timestamptz))::int AS subscriptions_total,
+        (SELECT COUNT(*) FROM subscriptions s
+          WHERE s.status = 'ACTIVE'
+            AND (s.current_period_end IS NULL OR s.current_period_end > NOW())
+            AND (${cutoff}::timestamptz IS NULL OR s.created_at >= ${cutoff}::timestamptz))::int AS subscriptions_active,
+        (SELECT COUNT(*) FROM rentals r
+          WHERE (${cutoff}::timestamptz IS NULL OR r.created_at >= ${cutoff}::timestamptz))::int AS rentals_total,
+        (SELECT COALESCE(SUM(oi.unit_price_cents * oi.quantity), 0)
+          FROM orders o JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.status = 'PAID' AND oi.product_type = 'RENTAL'
+            AND (${cutoff}::timestamptz IS NULL OR o.created_at >= ${cutoff}::timestamptz))::bigint AS rental_revenue_cents,
+        (SELECT COUNT(*) FROM payments_events pe
+          WHERE (${cutoff}::timestamptz IS NULL OR pe.created_at >= ${cutoff}::timestamptz))::int AS payments_total,
+        (SELECT COUNT(*) FROM payments_events pe
+          WHERE pe.failure_reason IS NOT NULL
+            AND (${cutoff}::timestamptz IS NULL OR pe.created_at >= ${cutoff}::timestamptz))::int AS payments_failed,
+        (SELECT COUNT(*) FROM payments_events pe
+          WHERE pe.processed_at IS NULL
+            AND (${cutoff}::timestamptz IS NULL OR pe.created_at >= ${cutoff}::timestamptz))::int AS payments_pending
+    `);
+    const aggregate = aggregateResult.rows?.[0] || aggregateResult[0] || {};
+
+    const normalizedSubscriptions = subscriptionsRows.map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      plan: row.plan || '—',
+      status: row.rawStatus === 'ACTIVE' ? 'authorized'
+        : row.rawStatus === 'PENDING' ? 'pending'
+        : row.rawStatus === 'PAUSED' ? 'paused'
+        : row.rawStatus === 'CANCELLED' ? 'canceled'
+        : String(row.rawStatus || '').toLowerCase(),
+      current_period_end: row.current_period_end,
+    }));
+
+    const normalizedRentals = rentalsRows.map((row) => ({
+      ...row,
+      amount_cents: Number(row.amount_cents || 0) * Number(row.quantity || 1),
+    }));
+
+    return sendJson(res, 200, {
+      ok: true,
+      period: requestedDays,
+      subscriptions: normalizedSubscriptions,
+      rentals: normalizedRentals,
+      payments: paymentRows,
+      sales: orderRows,
+      summary: {
+        subscriptions: {
+          total: Number(aggregate.subscriptions_total || 0),
+          active: Number(aggregate.subscriptions_active || 0),
+        },
+        rentals: {
+          total: Number(aggregate.rentals_total || 0),
+          revenueCents: Number(aggregate.rental_revenue_cents || 0),
+        },
+        payments: {
+          total: Number(aggregate.payments_total || 0),
+          failed: Number(aggregate.payments_failed || 0),
+          pending: Number(aggregate.payments_pending || 0),
+        },
+      },
+    });
   } catch (err) {
     console.error('[admin] erro vendas:', err);
     return sendJson(res, 500, { ok: false, error: 'Não foi possível carregar as vendas.' });
@@ -1283,4 +1325,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-}
+                                           }
