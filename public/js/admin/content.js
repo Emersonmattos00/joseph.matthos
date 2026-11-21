@@ -1,13 +1,10 @@
 /* ============================================================
    admin/content.js — Conteúdo do site (GET/PUT)
    ------------------------------------------------------------
-   - GET: tenta API, propaga 401/403, cai para DEFAULT_CONTENT
-     só em falha de rede/5xx
-   - PUT: envia baseVersion (controle de conflito otimista),
-     preserva status/code do erro, marca "clean" ao salvar
-   - ✅ NOVO: validateContentSchema() antes do PUT — garante
-     integridade mínima das seções conhecidas sem bloquear
-     extensões futuras
+   - GET: falhas de API/rede são propagadas; nunca substitui
+     silenciosamente o conteúdo remoto por DEFAULT_CONTENT.
+   - PUT: contrato baseVersion compartilhado com api/admin.js.
+   - Valida estrutura e tamanho real em UTF-8 antes do PUT.
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -20,41 +17,38 @@ const MAX_PAYLOAD_BYTES = 2_000_000;
 // GET
 // ─────────────────────────────────────────────────────────────
 export async function loadContent() {
-  try {
-    const result = await apiFetch('content', { method: 'GET' });
+  // Falhas de rede, HTTP 5xx ou payload inválido devem interromper
+  // a inicialização do editor. Não é seguro editar defaults como se
+  // fossem o conteúdo persistido no banco.
+  const result = await apiFetch('content', { method: 'GET' });
 
-    if (result && result.ok) {
-      const rawData =
-        result.data && typeof result.data === 'object'
-          ? result.data
-          : {};
-
-      // Normaliza/valida antes de devolver ao caller
-      const data = normalizeContent(rawData);
-
-      return {
-        data,
-        version: Number(result.version) || 0,
-        updatedAt: result.updatedAt || null
-      };
-    }
-
-    throw new Error(result?.error || 'Resposta inválida do servidor.');
-  } catch (err) {
-    if (err && (err.status === 401 || err.status === 403)) {
-      throw err;
-    }
-
-    console.warn(
-      '[content] API indisponível, usando DEFAULT_CONTENT:',
-      err?.message || err
-    );
-    return {
-      data: JSON.parse(JSON.stringify(DEFAULT_CONTENT)),
-      version: 0,
-      updatedAt: null
-    };
+  if (!result || result.ok !== true) {
+    const err = new Error(result?.error || 'Resposta inválida do servidor.');
+    err.status = 502;
+    err.code = 'INVALID_CONTENT_RESPONSE';
+    throw err;
   }
+
+  if (!result.data || typeof result.data !== 'object' || Array.isArray(result.data)) {
+    const err = new Error('O servidor retornou um conteúdo inválido.');
+    err.status = 502;
+    err.code = 'INVALID_CONTENT_DATA';
+    throw err;
+  }
+
+  const version = Number(result.version);
+  if (!Number.isSafeInteger(version) || version < 0) {
+    const err = new Error('A versão do conteúdo retornada pelo servidor é inválida.');
+    err.status = 502;
+    err.code = 'INVALID_CONTENT_VERSION';
+    throw err;
+  }
+
+  return {
+    data: normalizeContent(result.data),
+    version,
+    updatedAt: result.updatedAt || null
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -80,19 +74,26 @@ export async function saveContent(data, options = {}) {
   // Aplica normalização (defaults + coerção segura)
   const normalized = normalizeContent(validation.data);
 
-  // Check local de tamanho
+  // Serializa uma vez e mede bytes UTF-8, não unidades UTF-16.
   const serialized = JSON.stringify(normalized);
-  if (serialized.length > MAX_PAYLOAD_BYTES) {
+
+  // Versão base para controle de concorrência otimista
+  const baseVersion = Number(options.baseVersion);
+  if (options.baseVersion === null || options.baseVersion === undefined ||
+      !Number.isSafeInteger(baseVersion) || baseVersion < 0) {
+    const err = new Error('Versão-base inválida. Recarregue o conteúdo antes de salvar.');
+    err.status = 409;
+    err.code = 'INVALID_BASE_VERSION';
+    throw err;
+  }
+
+  const payloadBytes = new TextEncoder().encode(serialized).byteLength;
+  if (payloadBytes > MAX_PAYLOAD_BYTES) {
     const err = new Error('Conteúdo muito grande. Reduza imagens ou remova itens.');
     err.status = 413;
     err.code = 'PAYLOAD_TOO_LARGE';
     throw err;
   }
-
-  // Versão base para controle de concorrência otimista
-  const baseVersion = Number.isFinite(options.baseVersion)
-    ? Number(options.baseVersion)
-    : undefined;
 
   let result;
   try {
@@ -397,4 +398,4 @@ export function normalizeContent(content) {
   }
 
   return out;
-}
+        }
