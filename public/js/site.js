@@ -1216,27 +1216,69 @@ function renderRentOptions(kind) {
   });
 }
 
+let _rentCheckoutInFlight = false;
+let _subscriptionCheckoutInFlight = false;
+
+function getCheckoutAttemptKey(scope, fingerprint) {
+  const storageKey = `jm:checkout:${scope}:${fingerprint}`;
+  const now = Date.now();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Number(saved.createdAt) > now - 15 * 60 * 1000) {
+      return saved.key;
+    }
+  } catch {}
+
+  const key = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `jm-${now}-${Math.random().toString(36).slice(2, 14)}`;
+  try { sessionStorage.setItem(storageKey, JSON.stringify({ key, createdAt: now })); } catch {}
+  return key;
+}
+
+function clearCheckoutAttemptKey(scope, fingerprint) {
+  try { sessionStorage.removeItem(`jm:checkout:${scope}:${fingerprint}`); } catch {}
+}
+
 async function confirmRent(e) {
   if (e) e.preventDefault();
+  if (_rentCheckoutInFlight) return;
   const errEl = document.getElementById('rentError');
   if (!SITE.user) { closeModal('rentModal'); toast('Entre na sua conta para alugar.', 'ℹ'); openModal('loginModal'); return; }
   if (!_rentContext.albumId || !_rentContext.planId) { if (errEl) errEl.textContent = 'Escolha um período.'; return; }
   const plans = _rentContext.kind === 'track' ? SITE.rentalPlans : SITE.albumRentalPlans;
   const selected = plans.find((p) => p.id === _rentContext.planId);
   if (!selected || !selected.available) { if (errEl) errEl.textContent = 'Período indisponível. Escolha outro.'; return; }
+  const fingerprint = `${SITE.user.id || SITE.user.email || 'user'}:${_rentContext.albumId}:${_rentContext.kind}:${_rentContext.trackIndex ?? 'album'}:${_rentContext.planId}`;
+  const idempotencyKey = getCheckoutAttemptKey('rental', fingerprint);
+  _rentCheckoutInFlight = true;
   try {
     if (errEl) errEl.textContent = 'Abrindo checkout...';
     const r = await fetch('/api/payments?type=rental', {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ albumId: _rentContext.albumId, trackIndex: _rentContext.kind === 'track' ? _rentContext.trackIndex : null, planId: _rentContext.planId, kind: _rentContext.kind })
+      body: JSON.stringify({ albumId: _rentContext.albumId, trackIndex: _rentContext.kind === 'track' ? _rentContext.trackIndex : null, planId: _rentContext.planId, kind: _rentContext.kind, idempotencyKey })
     });
     const json = await r.json();
-    if (!r.ok || !json.ok || !json.checkoutUrl) { if (errEl) errEl.textContent = json.error || 'Não foi possível iniciar o pagamento.'; return; }
+    if (!r.ok || !json.ok || !json.checkoutUrl) {
+      if (!['CHECKOUT_IN_PROGRESS', 'IDEMPOTENCY_CONFLICT'].includes(json.code)) {
+        clearCheckoutAttemptKey('rental', fingerprint);
+      }
+      if (errEl) errEl.textContent = json.error || 'Não foi possível iniciar o pagamento.';
+      return;
+    }
     window.location.assign(json.checkoutUrl);
-  } catch (err) { console.error('[rent]', err); if (errEl) errEl.textContent = 'Gateway de pagamento indisponível.'; }
+  } catch (err) {
+    console.error('[rent]', err);
+    // Mantém a chave em falha de rede: a próxima tentativa poderá recuperar
+    // o checkout caso o servidor tenha concluído a criação.
+    if (errEl) errEl.textContent = 'Gateway de pagamento indisponível.';
+  } finally {
+    _rentCheckoutInFlight = false;
+  }
 }
 
 async function subscribe(planId) {
+  if (_subscriptionCheckoutInFlight) return;
   if (!SITE.user) { toast('Crie uma conta para assinar.', 'ℹ'); openModal('signupModal'); return; }
   let planInfo = SITE.plans[planId];
   if (!planInfo && (planId === 'premium' || planId === 'anual')) {
@@ -1251,19 +1293,30 @@ async function subscribe(planId) {
   const wantsPaid = planKind === 'premium' || planKind === 'anual' || ['premium', 'anual'].includes(planId);
   if (currentIsPremium && wantsPaid) { toast('Você já tem uma assinatura ativa.', 'ℹ'); closeModal('plansModal'); openManageModal(); return; }
   if (planInfo && planInfo.available === false) { toast('Pagamento indisponível para este plano.', '⚠'); return; }
+  const fingerprint = `${SITE.user.id || SITE.user.email || 'user'}:${backendPlanId}`;
+  const idempotencyKey = getCheckoutAttemptKey('subscription', fingerprint);
+  _subscriptionCheckoutInFlight = true;
   try {
     toast('Abrindo checkout seguro...', '✦');
     const r = await fetch('/api/payments?type=subscription', {
       method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan: backendPlanId })
+      body: JSON.stringify({ plan: backendPlanId, idempotencyKey })
     });
     const json = await r.json();
     if (!r.ok || !json.ok || !json.checkoutUrl) {
-      if (r.status === 409) { toast('Você já tem uma assinatura ativa.', 'ℹ'); closeModal('plansModal'); openManageModal(); return; }
+      if (!['CHECKOUT_IN_PROGRESS', 'IDEMPOTENCY_CONFLICT'].includes(json.code)) {
+        clearCheckoutAttemptKey('subscription', fingerprint);
+      }
+      if (r.status === 409 && json.code !== 'CHECKOUT_IN_PROGRESS' && json.code !== 'IDEMPOTENCY_CONFLICT') { toast(json.error || 'Você já tem uma assinatura ativa.', 'ℹ'); closeModal('plansModal'); openManageModal(); return; }
       toast(json.error || 'Pagamento indisponível.', '⚠'); return;
     }
     window.location.assign(json.checkoutUrl);
-  } catch (err) { console.error('[subscribe]', err); toast('Gateway de pagamento indisponível.', '⚠'); }
+  } catch (err) {
+    console.error('[subscribe]', err);
+    toast('Gateway de pagamento indisponível.', '⚠');
+  } finally {
+    _subscriptionCheckoutInFlight = false;
+  }
 }
 
 async function openManageModal() {
