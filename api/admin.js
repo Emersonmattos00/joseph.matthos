@@ -13,7 +13,8 @@ const crypto = require('crypto');
 const {
   sendJson, methodNotAllowed, parseBody, parseCookies, clientIp,
   checkAndIncrement, resetBucket, audit, VALID_PLANS,
-  signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD
+  signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD,
+  invalidatePlanCache
 } = require('./_lib');
 
 const { db, eq, and, asc, desc, drizzleSql, inArray, sql, isNull } = require('./_db');
@@ -626,54 +627,149 @@ async function handleGetUsers(req, res) {
   return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })), plansError: plansError || undefined });
 }
 
-function daysFromPlan(planRow) {
-  const unit = String(planRow.intervalUnit || '').toLowerCase();
-  const count = Number(planRow.intervalCount) || 1;
-  if (unit === 'day') return count;
-  if (unit === 'week') return count * 7;
-  if (unit === 'month') return count * 30;
-  if (unit === 'year') return count * 365;
-  return 30;
+function addPlanIntervalIso(start, intervalUnit, intervalCount) {
+  const date = new Date(start);
+  const count = Number(intervalCount);
+  const unit = String(intervalUnit || '').toLowerCase();
+  if (!Number.isInteger(count) || count < 1 || count > 120) {
+    const err = new Error('INVALID_PLAN_INTERVAL'); err.code = 'INVALID_PLAN_INTERVAL'; throw err;
+  }
+
+  if (unit === 'day') date.setUTCDate(date.getUTCDate() + count);
+  else if (unit === 'week') date.setUTCDate(date.getUTCDate() + count * 7);
+  else if (unit === 'month' || unit === 'year') {
+    const originalDay = date.getUTCDate();
+    date.setUTCDate(1);
+    if (unit === 'month') date.setUTCMonth(date.getUTCMonth() + count);
+    else date.setUTCFullYear(date.getUTCFullYear() + count);
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(originalDay, lastDay));
+  } else {
+    const err = new Error('INVALID_PLAN_INTERVAL'); err.code = 'INVALID_PLAN_INTERVAL'; throw err;
+  }
+  return date.toISOString();
 }
 
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
-  if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  if (!isUuid(userId) || !VALID_PLANS.has(plan)) {
+    return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
+  }
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let createdSubscriptionId = null;
 
   try {
     await db.transaction(async (tx) => {
-      const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-      if (!u) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
+      // Serializa alterações administrativas concorrentes para o mesmo usuário.
+      await tx.execute(drizzleSql`SELECT pg_advisory_xact_lock(hashtext(${userId}))`);
+
+      const [u] = await tx.select({ id: users.id })
+        .from(users).where(eq(users.id, userId)).limit(1);
+      if (!u) {
+        const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err;
+      }
 
       let planRow = null;
       if (plan !== 'free') {
-        const rows = await tx.select({ id: plans.id, intervalUnit: plans.intervalUnit, intervalCount: plans.intervalCount }).from(plans).where(eq(plans.name, plan)).limit(1);
+        const rows = await tx.select({
+          id: plans.id,
+          intervalUnit: plans.intervalUnit,
+          intervalCount: plans.intervalCount,
+        }).from(plans).where(and(eq(plans.name, plan), eq(plans.active, true))).limit(1);
         planRow = rows[0] || null;
-        if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
+        if (!planRow) {
+          const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err;
+        }
       }
 
-      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE','PENDING'])));
+      // Não cancelar localmente uma assinatura do Mercado Pago: isso não
+      // encerra a cobrança no provedor e poderia continuar debitando o cliente.
+      const existing = await tx.select({
+        id: subscriptions.id,
+        externalSubscriptionId: subscriptions.externalSubscriptionId,
+        status: subscriptions.status,
+      }).from(subscriptions).where(and(
+        eq(subscriptions.userId, userId),
+        inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
+      ));
+
+      const externalActive = existing.some((sub) =>
+        !String(sub.externalSubscriptionId || '').startsWith('manual_')
+      );
+      if (externalActive) {
+        const err = new Error('EXTERNAL_SUBSCRIPTION_ACTIVE');
+        err.code = 'EXTERNAL_SUBSCRIPTION_ACTIVE';
+        throw err;
+      }
+
+      // Encerra apenas assinaturas manuais criadas pelo painel.
+      await tx.update(subscriptions).set({
+        status: 'CANCELLED',
+        updatedAt: nowIso,
+      }).where(and(
+        eq(subscriptions.userId, userId),
+        inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
+      ));
 
       if (planRow) {
-        const planDays = daysFromPlan(planRow);
+        const periodEnd = addPlanIntervalIso(nowIso, planRow.intervalUnit, planRow.intervalCount);
+        createdSubscriptionId = crypto.randomUUID();
         await tx.insert(subscriptions).values({
-          id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${crypto.randomUUID()}`,
-          status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), currentPeriodEnd: addDaysIso(planDays), updatedAt: new Date().toISOString()
+          id: createdSubscriptionId,
+          userId,
+          planId: planRow.id,
+          externalSubscriptionId: `manual_${crypto.randomUUID()}`,
+          status: 'ACTIVE',
+          currentPeriodStart: nowIso,
+          currentPeriodEnd: periodEnd,
+          updatedAt: nowIso,
         });
       }
     });
   } catch (err) {
-    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Plano inexistente.' });
+    if (err.code === 'USER_NOT_FOUND') {
+      return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    }
+    if (err.code === 'PLAN_NOT_FOUND') {
+      return sendJson(res, 400, { ok: false, error: 'Plano inexistente ou inativo.' });
+    }
+    if (err.code === 'INVALID_PLAN_INTERVAL') {
+      return sendJson(res, 500, { ok: false, error: 'A duração configurada para este plano é inválida.' });
+    }
+    if (err.code === 'EXTERNAL_SUBSCRIPTION_ACTIVE') {
+      return sendJson(res, 409, {
+        ok: false,
+        code: 'EXTERNAL_SUBSCRIPTION_ACTIVE',
+        error: 'Este usuário possui uma assinatura do provedor de pagamento ativa ou pendente. Cancele-a primeiro no Mercado Pago e depois altere o plano.',
+      });
+    }
     throw err;
   }
 
-  try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
-  catch (e) { console.warn('[admin] audit user.plan.change falhou:', e.message); }
+  // A transação já foi confirmada; agora elimina o plano antigo do Redis.
+  await invalidatePlanCache(userId);
 
-  return sendJson(res, 200, { ok: true, plan });
+  try {
+    await audit('user.plan.change', {
+      actor: session.user,
+      target: userId,
+      metadata: { plan, subscriptionId: createdSubscriptionId, source: 'admin_manual' },
+    });
+  } catch (e) {
+    console.warn('[admin] audit user.plan.change falhou:', e.message);
+  }
+
+  return sendJson(res, 200, {
+    ok: true,
+    userId,
+    plan,
+    source: 'admin_manual',
+    subscriptionId: createdSubscriptionId,
+  });
 }
 
 async function handleDeleteUser(req, res, session) {
