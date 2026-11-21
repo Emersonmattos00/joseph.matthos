@@ -9,7 +9,7 @@
    - Uploads de imagem via Base64; áudio em editors/albums.js
    ============================================================ */
 
-import { AdminState, markDirty, markClean } from './state.js';
+import { AdminState, markDirty, markClean, updateSaveButtonState } from './state.js';
 import {
   initAdminShortcuts,
   openAdminSite,
@@ -34,6 +34,8 @@ import { safeMediaUrl } from '../utils.js';
 
 export { AdminState };
 
+let bootstrapped = false;
+
 const TAB_TITLES = {
   dashboard: 'Dashboard',
   geral: 'Geral',
@@ -54,6 +56,8 @@ const TAB_TITLES = {
 // Bootstrap
 // ─────────────────────────────────────────────────────────────
 async function bootstrap() {
+  if (bootstrapped) return;
+  bootstrapped = true;
   console.log('[admin] bootstrap iniciado');
 
   initAdminShortcuts();
@@ -85,16 +89,36 @@ export async function loadAdminContentAndRender() {
     AdminState.content = loaded.data;
     AdminState.contentVersion = loaded.version;
     AdminState.contentUpdatedAt = loaded.updatedAt || null;
+    AdminState.contentReady = true;
     console.log('[admin] conteúdo carregado, versão', loaded.version);
+    markClean();
   } catch (err) {
-    if (err && (err.status === 401 || err.status === 403)) {
+    AdminState.content = null;
+    AdminState.contentVersion = null;
+    AdminState.contentUpdatedAt = null;
+    AdminState.contentReady = false;
+    markClean();
+
+    if (err?.status === 401) {
       console.warn('[admin] sessão inválida ao carregar conteúdo');
       showAdminLogin();
       return;
     }
-    console.error('[admin] loadContent falhou:', err);
-    AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
-    AdminState.contentVersion = 0;
+    if (err?.status === 403) {
+      toast('Acesso negado ao conteúdo administrativo.', '⚠');
+    } else {
+      console.error('[admin] loadContent falhou:', err);
+      toast('Não foi possível carregar o conteúdo salvo. A edição foi bloqueada para proteger os dados.', '⚠');
+    }
+
+    // O dashboard é independente do conteúdo editorial; pode carregar,
+    // mas os editores permanecem bloqueados até uma leitura bem-sucedida.
+    renderDashboard().catch((dashboardErr) => {
+      if (dashboardErr?.status === 401) showAdminLogin();
+      else if (dashboardErr?.status === 403) toast('Acesso negado ao dashboard.', '⚠');
+      else console.warn('[admin] dashboard:', dashboardErr);
+    });
+    return;
   }
 
   safeCall('applyContentToSite', AdminState.content);
@@ -105,7 +129,14 @@ export async function loadAdminContentAndRender() {
   loadAllAdminFields();
 
   renderDashboard().catch((err) => {
-    if (err && (err.status === 401 || err.status === 403)) return;
+    if (err?.status === 401) {
+      showAdminLogin();
+      return;
+    }
+    if (err?.status === 403) {
+      toast('Acesso negado ao dashboard.', '⚠');
+      return;
+    }
     console.warn('[admin] dashboard:', err);
   });
 
@@ -161,6 +192,15 @@ async function onClickNavButton(event) {
   const tab = btn.dataset.tab;
   if (!tab) return;
 
+  const contentTabs = new Set([
+    'geral', 'hero', 'sobre', 'filosofia', 'discografia',
+    'playlists', 'planos', 'contato', 'aparencia'
+  ]);
+  if (contentTabs.has(tab) && (!AdminState.contentReady || !AdminState.content)) {
+    toast('Conteúdo não carregado. Tente novamente antes de abrir este editor.', '⚠');
+    return;
+  }
+
   document.querySelectorAll('.admin-nav button').forEach((b) => b.classList.remove('active'));
   document.querySelectorAll('.admin-section').forEach((s) => s.classList.remove('active'));
   btn.classList.add('active');
@@ -190,9 +230,13 @@ async function onClickNavButton(event) {
       renderPlaylistsEditor(AdminState.content);
     }
   } catch (err) {
-    if (err && (err.status === 401 || err.status === 403)) {
-      toast('Sessão expirada.', '⚠');
+    if (err?.status === 401) {
+      toast('Sua sessão expirou. Entre novamente.', '⚠');
       showAdminLogin();
+      return;
+    }
+    if (err?.status === 403) {
+      toast('Você não tem permissão para acessar esta área.', '⚠');
       return;
     }
     console.error(`[admin] tab ${tab}:`, err);
@@ -269,6 +313,10 @@ function bindContentInputs() {
     el.dataset.bound = '1';
 
     el.addEventListener('input', () => {
+      if (!AdminState.contentReady || !AdminState.content) {
+        toast('Conteúdo não carregado. Recarregue antes de editar.', '⚠');
+        return;
+      }
       let val = el.value;
       if (el.type === 'checkbox') val = el.checked;
       else if (el.type === 'number') val = parseFloat(val) || 0;
@@ -297,6 +345,10 @@ function bindEditorButtons() {
   if (addFraseBtn && addFraseBtn.dataset.bound !== '1') {
     addFraseBtn.dataset.bound = '1';
     addFraseBtn.addEventListener('click', () => {
+      if (!AdminState.contentReady || !AdminState.content) {
+        toast('Conteúdo não carregado. Recarregue antes de editar.', '⚠');
+        return;
+      }
       if (!AdminState.content.filosofia) AdminState.content.filosofia = {};
       if (!Array.isArray(AdminState.content.filosofia.frases)) AdminState.content.filosofia.frases = [];
       AdminState.content.filosofia.frases.push({
@@ -340,7 +392,7 @@ function bindUploadZones() {
 
   try {
     bindUpload('bgUpload', ({ url }) => {
-      if (!url) return;
+      if (!AdminState.contentReady || !AdminState.content || !url) return;
       if (!AdminState.content.branding) AdminState.content.branding = {};
       AdminState.content.branding.bgImage = url;
       markDirty();
@@ -352,7 +404,7 @@ function bindUploadZones() {
 
   try {
     bindUpload('vinylUpload', ({ url }) => {
-      if (!url) return;
+      if (!AdminState.contentReady || !AdminState.content || !url) return;
       if (!AdminState.content.hero) AdminState.content.hero = {};
       if (!AdminState.content.hero.vinyl) AdminState.content.hero.vinyl = {};
       AdminState.content.hero.vinyl.image = url;
@@ -365,7 +417,7 @@ function bindUploadZones() {
 
   try {
     bindUpload('sobreUpload', ({ url }) => {
-      if (!url) return;
+      if (!AdminState.contentReady || !AdminState.content || !url) return;
       if (!AdminState.content.sobre) AdminState.content.sobre = {};
       AdminState.content.sobre.image = url;
       markDirty();
@@ -389,9 +441,13 @@ function bindRefreshButtons() {
         await renderSales({ force: true });
         toast('Vendas atualizadas.', '↻');
       } catch (err) {
-        if (err && (err.status === 401 || err.status === 403)) {
-          toast('Sessão expirada.', '⚠');
+        if (err?.status === 401) {
+          toast('Sua sessão expirou. Entre novamente.', '⚠');
           showAdminLogin();
+          return;
+        }
+        if (err?.status === 403) {
+          toast('Você não tem permissão para atualizar estes dados.', '⚠');
           return;
         }
         toast(err?.message || 'Falha ao atualizar.', '⚠');
@@ -408,9 +464,13 @@ function bindRefreshButtons() {
         await renderUsersTable({ force: true });
         toast('Usuários atualizados.', '↻');
       } catch (err) {
-        if (err && (err.status === 401 || err.status === 403)) {
-          toast('Sessão expirada.', '⚠');
+        if (err?.status === 401) {
+          toast('Sua sessão expirou. Entre novamente.', '⚠');
           showAdminLogin();
+          return;
+        }
+        if (err?.status === 403) {
+          toast('Você não tem permissão para atualizar estes dados.', '⚠');
           return;
         }
         toast(err?.message || 'Falha ao atualizar.', '⚠');
@@ -428,6 +488,10 @@ function bindGlobalActions() {
     saveBtn.dataset.bound = '1';
     saveBtn.addEventListener('click', async () => {
       if (saveBtn.disabled) return;
+      if (!AdminState.contentReady || !AdminState.content || !Number.isSafeInteger(AdminState.contentVersion)) {
+        toast('Conteúdo não carregado. Recarregue antes de salvar.', '⚠');
+        return;
+      }
       saveBtn.disabled = true;
       saveBtn.textContent = '💾 Salvando...';
 
@@ -442,17 +506,16 @@ function bindGlobalActions() {
         console.error('[admin] save:', err);
         if (err?.code === 'VERSION_CONFLICT' || err?.status === 409) {
           toast('Alterado por outro admin. Recarregue.', '⚠');
-        } else if (err?.status === 401 || err?.status === 403) {
-          toast('Sessão expirada.', '⚠');
+        } else if (err?.status === 401) {
+          toast('Sua sessão expirou. Entre novamente.', '⚠');
           showAdminLogin();
+        } else if (err?.status === 403) {
+          toast('Você não tem permissão para salvar este conteúdo.', '⚠');
         } else {
           toast(err?.message || 'Não foi possível salvar.', '⚠');
         }
       } finally {
-        saveBtn.disabled = false;
-        saveBtn.textContent = AdminState.dirty
-          ? '💾 Salvar alterações *'
-          : '💾 Salvar alterações';
+        updateSaveButtonState();
       }
     });
   }
@@ -461,10 +524,18 @@ function bindGlobalActions() {
   if (resetBtn && resetBtn.dataset.bound !== '1') {
     resetBtn.dataset.bound = '1';
     resetBtn.addEventListener('click', async () => {
+      if (!AdminState.contentReady || !AdminState.content || !Number.isSafeInteger(AdminState.contentVersion)) {
+        toast('Conteúdo não carregado. Recarregue antes de restaurar.', '⚠');
+        return;
+      }
       if (!confirm('Restaurar todo o conteúdo para o padrão?')) return;
+      resetBtn.disabled = true;
       try {
-        AdminState.content = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
-        await saveContent(AdminState.content, { baseVersion: AdminState.contentVersion });
+        const nextContent = JSON.parse(JSON.stringify(DEFAULT_CONTENT));
+        const saved = await saveContent(nextContent, { baseVersion: AdminState.contentVersion });
+        AdminState.content = nextContent;
+        AdminState.contentVersion = saved.version;
+        AdminState.contentUpdatedAt = saved.updatedAt || null;
         loadAllAdminFields();
         markClean();
         safeCall('applyContentToSite', AdminState.content);
@@ -473,7 +544,11 @@ function bindGlobalActions() {
         toast('Conteúdo restaurado.', '↺');
       } catch (err) {
         console.error('[admin] reset:', err);
-        toast(err?.message || 'Falha ao restaurar.', '⚠');
+        if (err?.status === 401) showAdminLogin();
+        else if (err?.status === 403) toast('Você não tem permissão para restaurar o conteúdo.', '⚠');
+        else toast(err?.message || 'Falha ao restaurar.', '⚠');
+      } finally {
+        resetBtn.disabled = false;
       }
     });
   }
@@ -482,6 +557,10 @@ function bindGlobalActions() {
   if (exportBtn && exportBtn.dataset.bound !== '1') {
     exportBtn.dataset.bound = '1';
     exportBtn.addEventListener('click', () => {
+      if (!AdminState.contentReady || !AdminState.content) {
+        toast('Conteúdo não carregado. Exportação bloqueada.', '⚠');
+        return;
+      }
       const pack = {
         _version: AdminState.contentVersion,
         _exportedAt: new Date().toISOString(),
@@ -495,7 +574,7 @@ function bindGlobalActions() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       toast('Exportado.', '⬇');
     });
   }
@@ -506,21 +585,39 @@ function bindGlobalActions() {
     importFile.addEventListener('change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;
+      importFile.disabled = true;
       try {
+        if (!AdminState.contentReady || !AdminState.content || !Number.isSafeInteger(AdminState.contentVersion)) {
+          throw new Error('Conteúdo remoto não carregado. Importação bloqueada.');
+        }
+        if (f.size > 2_000_000) throw new Error('Arquivo excede o limite de 2 MB.');
         const text = await f.text();
         const parsed = JSON.parse(text);
-        const data = parsed.content || parsed;
-        AdminState.content = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONTENT)), data);
-        await saveContent(AdminState.content, { baseVersion: AdminState.contentVersion });
+        const data = parsed && Object.prototype.hasOwnProperty.call(parsed, 'content')
+          ? parsed.content
+          : parsed;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+          throw new Error('O arquivo deve conter um objeto de conteúdo.');
+        }
+        const nextContent = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONTENT)), data);
+        const saved = await saveContent(nextContent, { baseVersion: AdminState.contentVersion });
+        AdminState.content = nextContent;
+        AdminState.contentVersion = saved.version;
+        AdminState.contentUpdatedAt = saved.updatedAt || null;
         loadAllAdminFields();
         markClean();
         safeCall('applyContentToSite', AdminState.content);
-        toast('Conteúdo importado.', '⬆');
+        safeCall('refreshFlatPlaylist');
+        safeCall('refreshPlanConfig');
+        toast('Conteúdo importado e salvo.', '⬆');
       } catch (err) {
         console.error('[admin] import:', err);
-        toast('Arquivo inválido.', '⚠');
+        if (err?.status === 401) showAdminLogin();
+        else if (err?.status === 403) toast('Você não tem permissão para importar conteúdo.', '⚠');
+        else toast(err?.message || 'Arquivo inválido.', '⚠');
       } finally {
         e.target.value = '';
+        importFile.disabled = false;
       }
     });
   }
@@ -574,12 +671,19 @@ function updateSobrePreview(content = AdminState.content) {
 function deepMerge(target, source) {
   if (Array.isArray(source)) return JSON.parse(JSON.stringify(source));
   if (!source || typeof source !== 'object') return source === undefined ? target : source;
-  const out = { ...target };
+
+  const out = target && typeof target === 'object' && !Array.isArray(target)
+    ? { ...target }
+    : {};
+
   for (const key of Object.keys(source)) {
-    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-      out[key] = deepMerge(target[key] || {}, source[key]);
+    // Evita prototype pollution durante a importação de JSON.
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') continue;
+    const value = source[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      out[key] = deepMerge(out[key], value);
     } else {
-      out[key] = source[key];
+      out[key] = value;
     }
   }
   return out;
