@@ -20,7 +20,8 @@ const { db, eq, and, asc, desc, gte, drizzleSql, inArray, sql, isNull } = requir
 const schema = require('./_db').schema;
 const {
   tracks, albums, artists, orders, orderItems, rentals, paymentsEvents,
-  adminAudit, uploadIntents, users, subscriptions, plans
+  adminAudit, authAuditLog, playbackEvents, uploadIntents,
+  users, subscriptions, plans
 } = schema;
 
 const {
@@ -627,25 +628,90 @@ async function handleReconcileUploads(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 // USUÁRIOS
 // ─────────────────────────────────────────────────────────────
+function normalizePlanCode(name, intervalUnit = '') {
+  const normalized = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  const interval = String(intervalUnit || '').toLowerCase().trim();
+  if (!normalized || normalized === 'free') return 'free';
+  if (/(anual|annual|year|ano)/.test(normalized) || ['year', 'years', 'yr'].includes(interval)) return 'anual';
+  if (/(premium|mensal|monthly|month|mes)/.test(normalized) || ['month', 'months', 'mo'].includes(interval)) return 'premium';
+  return null;
+}
+
 async function handleGetUsers(req, res) {
-  const rows = await db.select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt }).from(users).orderBy(desc(users.createdAt));
+  const rows = await db.select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt })
+    .from(users).orderBy(desc(users.createdAt));
+
   let planMap = new Map();
   let plansError = false;
   try {
-    const planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`);
-    planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
-  } catch (e) { console.error('[admin] falha ao consultar planos efetivos:', e.message); plansError = true; }
+    const planRows = await db.execute(drizzleSql`
+      SELECT u.id AS user_id,
+        COALESCE((
+          SELECT CASE
+            WHEN lower(p.name) LIKE '%anual%' OR lower(p.name) LIKE '%annual%'
+              OR lower(p.interval_unit) IN ('year', 'years', 'yr') THEN 'anual'
+            ELSE 'premium'
+          END
+          FROM subscriptions s
+          JOIN plans p ON p.id = s.plan_id
+          WHERE s.user_id = u.id
+            AND s.status = 'ACTIVE'
+            AND s.current_period_end > NOW()
+          ORDER BY s.current_period_end DESC NULLS LAST, s.created_at DESC
+          LIMIT 1
+        ), CASE WHEN EXISTS (
+          SELECT 1 FROM rentals r
+          WHERE r.user_id = u.id AND r.status = 'ACTIVE'
+            AND r.starts_at <= NOW() AND r.expires_at > NOW()
+        ) THEN 'premium' ELSE 'free' END) AS plan
+      FROM users u
+    `);
+    const normalizedRows = planRows.rows || planRows;
+    planMap = new Map(normalizedRows.map((r) => [r.user_id, normalizePlanCode(r.plan) || 'free']));
+  } catch (e) {
+    console.error('[admin] falha ao consultar planos efetivos:', e.message);
+    plansError = true;
+  }
 
-  return sendJson(res, 200, { ok: true, users: rows.map(u => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })), plansError: plansError || undefined });
+  return sendJson(res, 200, {
+    ok: true,
+    users: rows.map((u) => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })),
+    total: rows.length,
+    plansError: plansError || undefined
+  });
+}
+
+async function cancelMercadoPagoPreapproval(preapprovalId) {
+  const token = String(process.env.MP_ACCESS_TOKEN || '').trim();
+  if (!token) {
+    const err = new Error('MP_ACCESS_TOKEN ausente; não é seguro alterar a assinatura recorrente.');
+    err.code = 'MP_NOT_CONFIGURED';
+    throw err;
+  }
+  const response = await fetch(`https://api.mercadopago.com/preapproval/${encodeURIComponent(preapprovalId)}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({ status: 'cancelled' }),
+    signal: AbortSignal.timeout(12_000)
+  });
+  if (!response.ok) {
+    const err = new Error(`Mercado Pago recusou o cancelamento da recorrência (HTTP ${response.status}).`);
+    err.code = 'MP_CANCELLATION_FAILED';
+    throw err;
+  }
 }
 
 function daysFromPlan(planRow) {
   const unit = String(planRow.intervalUnit || '').toLowerCase();
   const count = Number(planRow.intervalCount) || 1;
-  if (unit === 'day') return count;
-  if (unit === 'week') return count * 7;
-  if (unit === 'month') return count * 30;
-  if (unit === 'year') return count * 365;
+  if (unit === 'day' || unit === 'days') return count;
+  if (unit === 'week' || unit === 'weeks') return count * 7;
+  if (unit === 'month' || unit === 'months') return count * 30;
+  if (unit === 'year' || unit === 'years') return count * 365;
   return 30;
 }
 
@@ -655,6 +721,42 @@ async function handlePatchUser(req, res, session) {
   const plan = String(body.plan || '').trim().toLowerCase();
   if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
+  const [targetUser] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!targetUser) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+
+  // Valida o plano comercial antes de cancelar qualquer recorrência externa.
+  if (plan !== 'free') {
+    const availablePlans = await db.select({
+      id: plans.id, name: plans.name, intervalUnit: plans.intervalUnit,
+      intervalCount: plans.intervalCount, active: plans.active
+    }).from(plans).where(eq(plans.active, true));
+    const candidates = availablePlans.filter((candidate) =>
+      normalizePlanCode(candidate.name, candidate.intervalUnit) === plan
+    );
+    if (!candidates.length) return sendJson(res, 400, { ok: false, error: 'Não existe um plano comercial ativo correspondente a esta opção. Confira os planos cadastrados.' });
+    if (candidates.length > 1) return sendJson(res, 409, { ok: false, error: 'Há mais de um plano ativo correspondente. Ajuste os nomes/intervalos dos planos antes de continuar.' });
+  }
+
+  // Cancela recorrências reais no Mercado Pago antes de substituir a assinatura
+  // por uma concessão manual; mudar apenas o banco deixaria cobranças futuras ativas.
+  try {
+    const externalSubs = await db.select({ externalSubscriptionId: subscriptions.externalSubscriptionId })
+      .from(subscriptions)
+      .where(and(
+        eq(subscriptions.userId, userId),
+        inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE']),
+        sql`${subscriptions.externalSubscriptionId} IS NOT NULL`,
+        sql`${subscriptions.externalSubscriptionId} NOT LIKE 'manual_%'`
+      ));
+    for (const sub of externalSubs) {
+      await cancelMercadoPagoPreapproval(sub.externalSubscriptionId);
+    }
+  } catch (err) {
+    console.error('[admin] falha ao cancelar recorrência antes da alteração de plano:', err.code || err.message);
+    if (err.code === 'MP_NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Mercado Pago não está configurado. A alteração foi interrompida para evitar cobranças recorrentes indevidas.' });
+    return sendJson(res, 502, { ok: false, error: 'Não foi possível cancelar a recorrência no Mercado Pago. O plano não foi alterado.' });
+  }
+
   try {
     await db.transaction(async (tx) => {
       const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
@@ -662,12 +764,21 @@ async function handlePatchUser(req, res, session) {
 
       let planRow = null;
       if (plan !== 'free') {
-        const rows = await tx.select({ id: plans.id, intervalUnit: plans.intervalUnit, intervalCount: plans.intervalCount }).from(plans).where(eq(plans.name, plan)).limit(1);
-        planRow = rows[0] || null;
+        const availablePlans = await tx.select({
+          id: plans.id, name: plans.name, intervalUnit: plans.intervalUnit,
+          intervalCount: plans.intervalCount, active: plans.active
+        }).from(plans).where(eq(plans.active, true));
+        const candidates = availablePlans.filter((candidate) =>
+          normalizePlanCode(candidate.name, candidate.intervalUnit) === plan
+        );
+        if (candidates.length > 1) {
+          const err = new Error('PLAN_AMBIGUOUS'); err.code = 'PLAN_AMBIGUOUS'; throw err;
+        }
+        planRow = candidates[0] || null;
         if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
       }
 
-      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE','PENDING'])));
+      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'])));
 
       if (planRow) {
         const planDays = daysFromPlan(planRow);
@@ -679,7 +790,8 @@ async function handlePatchUser(req, res, session) {
     });
   } catch (err) {
     if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Plano inexistente.' });
+    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Não existe um plano comercial ativo correspondente a esta opção. Confira os planos cadastrados.' });
+    if (err.code === 'PLAN_AMBIGUOUS') return sendJson(res, 409, { ok: false, error: 'Há mais de um plano ativo correspondente. Ajuste os nomes/intervalos dos planos antes de continuar.' });
     throw err;
   }
 
@@ -693,24 +805,70 @@ async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  try {
-    const adminIdentity = getAdminIdentity();
-    const [adminUser] = await db.select({ id: users.id }).from(users)
-      .where(adminIdentity.kind === 'id' ? eq(users.id, adminIdentity.value) : eq(users.email, adminIdentity.value))
-      .limit(1);
-    if (adminUser && adminUser.id === userId) return sendJson(res, 403, { ok: false, error: 'Não é permitido excluir a própria conta de administrador.' });
-  } catch (e) { console.warn('[admin] check de admin falhou:', e.message); }
+  const adminIdentity = getAdminIdentity();
+  const [adminUser] = await db.select({ id: users.id }).from(users)
+    .where(adminIdentity.kind === 'id' ? eq(users.id, adminIdentity.value) : eq(users.email, adminIdentity.value))
+    .limit(1);
+  if (adminUser && adminUser.id === userId) {
+    return sendJson(res, 403, { ok: false, error: 'Não é permitido excluir a própria conta de administrador.' });
+  }
 
   try {
-    const deleted = await db.delete(users).where(eq(users.id, userId)).returning({ id: users.id });
-    if (!deleted.length) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    try { await audit('user.delete', { actor: session.user, target: userId, success: true }); } catch (e) { console.warn('[admin] audit user.delete falhou:', e.message); }
-    return sendJson(res, 200, { ok: true });
+    await db.transaction(async (tx) => {
+      const [target] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!target) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
+
+      // Não apagar a conta enquanto houver cobrança recorrente externa ativa/pendente.
+      // A assinatura deve ser cancelada no provedor antes da remoção do usuário.
+      const externalSubs = await tx.select({ id: subscriptions.id, status: subscriptions.status })
+        .from(subscriptions)
+        .where(and(
+          eq(subscriptions.userId, userId),
+          inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE']),
+          sql`${subscriptions.externalSubscriptionId} IS NOT NULL`,
+          sql`${subscriptions.externalSubscriptionId} NOT LIKE 'manual_%'`
+        ));
+      if (externalSubs.length) {
+        const err = new Error('EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION');
+        err.code = 'EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION';
+        throw err;
+      }
+
+      const pendingOrders = await tx.select({ id: orders.id }).from(orders)
+        .where(and(eq(orders.userId, userId), eq(orders.status, 'PENDING')));
+      if (pendingOrders.length) {
+        const err = new Error('PENDING_ORDERS_MUST_BE_RESOLVED');
+        err.code = 'PENDING_ORDERS_MUST_BE_RESOLVED';
+        throw err;
+      }
+
+      // Preserva métricas/auditoria sem manter o vínculo identificável com a conta.
+      await tx.update(playbackEvents).set({ userId: null }).where(eq(playbackEvents.userId, userId));
+      await tx.update(authAuditLog).set({ userId: null, emailHash: null }).where(eq(authAuditLog.userId, userId));
+
+      // Remove os registros que possuem FK RESTRICT para users.
+      await tx.delete(rentals).where(eq(rentals.userId, userId));
+      await tx.delete(subscriptions).where(eq(subscriptions.userId, userId));
+      // order_items são removidos por ON DELETE CASCADE ao excluir orders.
+      await tx.delete(orders).where(eq(orders.userId, userId));
+      await tx.delete(users).where(eq(users.id, userId));
+    });
   } catch (err) {
-    try { await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' }); } catch {}
-    if (err.code === '23503') return sendJson(res, 409, { ok: false, error: 'Usuário possui dependências e não pode ser excluído.' });
+    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    if (err.code === 'EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION') {
+      return sendJson(res, 409, { ok: false, error: 'Este usuário possui uma assinatura recorrente no Mercado Pago. Cancele a recorrência no provedor antes de excluir a conta, para evitar novas cobranças.' });
+    }
+    if (err.code === 'PENDING_ORDERS_MUST_BE_RESOLVED') {
+      return sendJson(res, 409, { ok: false, error: 'Este usuário possui pedidos com pagamento pendente. Aguarde a confirmação ou o cancelamento do pagamento antes de excluir a conta.' });
+    }
+    if (err.code === '23503') return sendJson(res, 409, { ok: false, error: 'Existem outros registros vinculados que impedem a exclusão. Nenhum dado foi removido.' });
+    console.error('[admin] falha ao excluir usuário:', err.code || err.message);
     throw err;
   }
+
+  try { await audit('user.delete', { actor: session.user, target: userId, success: true }); }
+  catch (e) { console.warn('[admin] audit user.delete falhou:', e.message); }
+  return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1325,4 +1483,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-                                           }
+                         }
