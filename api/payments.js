@@ -1,29 +1,19 @@
 'use strict';
 
 /* ============================================================
-   API: /api/payments — Mercado Pago (v2 — auditada)
-   ------------------------------------------------------------
-   Correções da auditoria etapa 2:
-   P0.1 subscriptions.orderId vincula assinatura ao pedido;
-        webhook atualiza APENAS o pedido da assinatura.
-   P0.2 payments_events unique em providerEvent + INSERT
-        atômico com ON CONFLICT DO NOTHING.
-   P0.3 e-mail de aluguel usa dados reais (produto, faixa,
-        aluguel criado na transação), não order.id nem 24h fixo.
-   P0.4 webhook confere external_reference, metadata.order_id,
-        metadata.user_id, produto, valor e moeda antes de PAID.
-   P0.5 webhook de preapproval usa subscriptions.orderId para
-        marcar o pedido correto (não procura PENDING aleatório).
-   P1.1 handleRental/handleSubscription: se o MP falhar, o
-        pedido PENDING é marcado FAILED e a subscription PENDING
-        é CANCELLED; idempotência não prende o usuário.
-   P1.2 createPendingOrder usa ON CONFLICT no idempotencyKey.
-   P1.3 handleManage cancel: MP primeiro, local depois; se MP
-        falhar, não cancela local (mantém consistência).
+   API: /api/payments — Mercado Pago (Versão Final Corrigida)
+   Contrato (compatível com js/site.js):
+     POST ?type=rental        { albumId, trackIndex, planId, kind, idempotencyKey? }
+     POST ?type=subscription  { plan, idempotencyKey? }
+     GET  ?type=manage        → { ok, subscription|null }
+     POST ?type=manage        { action: 'cancel' }
+     POST ?type=webhook       (MP envia; GET p/ debug)
+   Aliases: ?action=rent|subscribe|manage|webhook
+   ⚠️  Nenhum pedido é marcado PAID sem confirmação do MP.
    ============================================================ */
 
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
-const { eq, and, gt, desc, inArray, isNull } = require('drizzle-orm');
+const { eq, and, gt, desc, isNull, lt, or } = require('drizzle-orm');
 const { db } = require('./_db');
 const {
   plans,
@@ -88,15 +78,15 @@ async function mpFetch(path, options = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WEBHOOK: valida x-signature (ts numérico + janela temporal)
+// WEBHOOK: valida x-signature do MP (ts numérico + janela temporal)
 // ─────────────────────────────────────────────────────────────
 function verifyWebhookSignature(req) {
   const secret = WEBHOOK_SECRET();
   if (!secret) return false;
 
   const signature = String(req.headers['x-signature'] || '');
-  const requestId = String(req.headers['x-request-id'] || '');
-  if (!signature) return false;
+  const requestId = String(req.headers['x-request-id'] || '').trim();
+  if (!signature || !requestId) return false;
 
   const parts = Object.fromEntries(
     signature.split(',').map((p) => {
@@ -132,48 +122,44 @@ function verifyWebhookSignature(req) {
 // ─────────────────────────────────────────────────────────────
 // HELPERS DE PEDIDO
 // ─────────────────────────────────────────────────────────────
-async function findOrderByIdempotencyKey(key) {
-  if (!key) return null;
+async function findOrderByIdempotencyKey(userId, key) {
+  if (!userId || !key) return null;
   const [row] = await db.select().from(orders)
-    .where(eq(orders.idempotencyKey, key))
+    .where(and(eq(orders.userId, userId), eq(orders.idempotencyKey, key)))
     .limit(1);
   return row || null;
 }
 
-/**
- * Cria pedido PENDING. Em caso de conflito de idempotencyKey (corrida
- * entre duas requisições), retorna o pedido vencedor.
- */
-async function createPendingOrder({ userId, totalCents, currency, idempotencyKey }) {
-  const id = randomUUID();
-  const inserted = await db.insert(orders).values({
-    id,
-    userId,
-    status: 'PENDING',
-    totalCents,
-    currency,
-    idempotencyKey: idempotencyKey || null,
-  }).onConflictDoNothing({ target: orders.idempotencyKey }).returning();
-
-  if (inserted.length === 1) return inserted[0];
-
-  // Conflito: alguém já criou com a mesma chave. Busca o vencedor.
-  const [existing] = await db.select().from(orders)
-    .where(eq(orders.idempotencyKey, idempotencyKey))
-    .limit(1);
-  if (!existing) throw new Error('Falha ao resolver idempotência do pedido.');
-  return existing;
-}
-
-async function markOrderFailed(orderId, reason) {
-  try {
-    await db.update(orders)
-      .set({ status: 'FAILED' })
-      .where(and(eq(orders.id, orderId), eq(orders.status, 'PENDING')));
-  } catch (err) {
-    console.error('[payments] falha ao marcar pedido FAILED:', orderId, err.message);
+function scopedIdempotencyKey(userId, rawKey, scope) {
+  const raw = rawKey == null ? '' : String(rawKey).trim();
+  if (raw && (raw.length < 8 || raw.length > 128 || !/^[a-zA-Z0-9._:-]+$/.test(raw))) {
+    const err = new Error('Chave de idempotência inválida.');
+    err.status = 400;
+    throw err;
   }
+  // Namespace evita colisões entre usuários e entre tipos de checkout.
+  return `${scope}:${userId}:${raw || randomUUID()}`;
 }
+
+async function createPendingOrderTx(tx, values) {
+  const id = randomUUID();
+  const [row] = await tx.insert(orders).values({
+    id,
+    userId: values.userId,
+    status: 'PENDING',
+    totalCents: values.totalCents,
+    currency: values.currency,
+    idempotencyKey: values.idempotencyKey,
+  }).onConflictDoNothing({ target: orders.idempotencyKey }).returning();
+  if (!row) {
+    const err = new Error('Já existe uma tentativa de checkout com esta chave.');
+    err.status = 409;
+    err.code = 'IDEMPOTENCY_CONFLICT';
+    throw err;
+  }
+  return row;
+}
+
 
 // ─────────────────────────────────────────────────────────────
 // AÇÃO: rental
@@ -184,30 +170,14 @@ async function handleRental(req, res, user) {
   const albumId = body.albumId || null;
   const trackIndex = body.trackIndex ?? null;
   const clientKey = body.idempotencyKey || null;
+  const idempotencyKey = scopedIdempotencyKey(user.id, clientKey, 'rental');
 
   if (!planId) return res.status(400).json({ ok: false, error: 'planId obrigatório' });
 
+  // Valida APP_URL antes de criar registros
   const base = APP_URL();
   if (!base) {
     return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
-  }
-
-  if (clientKey) {
-    const existingOrder = await findOrderByIdempotencyKey(clientKey);
-    if (existingOrder) {
-      if (existingOrder.status === 'FAILED') {
-        return res.status(409).json({
-          ok: false,
-          error: 'Tentativa anterior falhou. Tente novamente com nova chave de idempotência.',
-        });
-      }
-      return res.status(200).json({
-        ok: true,
-        orderId: existingOrder.id,
-        checkoutUrl: existingOrder.preferenceInitPoint || null,
-        reused: true,
-      });
-    }
   }
 
   const [plan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
@@ -220,7 +190,10 @@ async function handleRental(req, res, user) {
     const [t] = await db.select({ id: tracks.id }).from(tracks)
       .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
       .limit(1);
-    if (!t) return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
+
+    if (!t) {
+      return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
+    }
     trackId = t.id;
   }
 
@@ -236,6 +209,30 @@ async function handleRental(req, res, user) {
       ok: false,
       error: 'Produto de aluguel não encontrado para este item',
     });
+  }
+
+  const existingOrder = await findOrderByIdempotencyKey(user.id, idempotencyKey);
+  if (existingOrder) {
+    const [existingItem] = await db.select().from(orderItems)
+      .where(eq(orderItems.orderId, existingOrder.id)).limit(1);
+    if (!existingItem || existingItem.productType !== 'RENTAL' || existingItem.productId !== product.id) {
+      return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_KEY_REUSED', error: 'A chave de checkout já foi usada para outro produto.' });
+    }
+    if (existingOrder.status === 'PAID') {
+      return res.status(409).json({ ok: false, code: 'ORDER_ALREADY_PAID', error: 'Este pedido já foi pago.' });
+    }
+    if (existingOrder.preferenceInitPoint) {
+      return res.status(200).json({ ok: true, orderId: existingOrder.id, checkoutUrl: existingOrder.preferenceInitPoint, reused: true });
+    }
+    if (existingOrder.status === 'FAILED' || existingOrder.status === 'CANCELLED') {
+      return res.status(409).json({ ok: false, code: 'CHECKOUT_FAILED', error: 'A tentativa anterior falhou. Inicie um novo checkout.' });
+    }
+    if (Date.now() - new Date(existingOrder.createdAt).getTime() > 3 * 60 * 1000) {
+      await db.update(orders).set({ status: 'FAILED' })
+        .where(and(eq(orders.id, existingOrder.id), eq(orders.status, 'PENDING')));
+      return res.status(409).json({ ok: false, code: 'CHECKOUT_FAILED', error: 'O checkout anterior expirou sem gerar um link. Inicie uma nova tentativa.' });
+    }
+    return res.status(409).json({ ok: false, code: 'CHECKOUT_IN_PROGRESS', error: 'O checkout está sendo preparado. Aguarde alguns segundos e tente novamente.' });
   }
 
   const now = new Date();
@@ -255,24 +252,23 @@ async function handleRental(req, res, user) {
     });
   }
 
-  const idempotencyKey = clientKey
-    || `rental:${user.id}:${product.id}:${Math.floor(Date.now() / 60000)}`;
-
-  const order = await createPendingOrder({
-    userId: user.id,
-    totalCents: product.priceCents,
-    currency: product.currency || 'BRL',
-    idempotencyKey,
+  const order = await db.transaction(async (tx) => {
+    const created = await createPendingOrderTx(tx, {
+      userId: user.id,
+      totalCents: product.priceCents,
+      currency: product.currency || 'BRL',
+      idempotencyKey,
+    });
+    await tx.insert(orderItems).values({
+      id: randomUUID(),
+      orderId: created.id,
+      productType: 'RENTAL',
+      productId: product.id,
+      quantity: 1,
+      unitPriceCents: product.priceCents,
+    });
+    return created;
   });
-
-  await db.insert(orderItems).values({
-    id: randomUUID(),
-    orderId: order.id,
-    productType: 'RENTAL',
-    productId: product.id,
-    quantity: 1,
-    unitPriceCents: product.priceCents,
-  }).onConflictDoNothing();
 
   let preference;
   try {
@@ -306,7 +302,7 @@ async function handleRental(req, res, user) {
     });
   } catch (err) {
     console.error('[payments][rental] MP preference falhou:', err.status, err.body);
-    await markOrderFailed(order.id, 'MP_PREFERENCE_FAILED');
+    await db.update(orders).set({ status: 'FAILED' }).where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')));
     return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
   }
 
@@ -332,6 +328,7 @@ async function handleSubscription(req, res, user) {
   const body = req.body || {};
   const planId = body.plan || body.planId;
   const clientKey = body.idempotencyKey || null;
+  const idempotencyKey = scopedIdempotencyKey(user.id, clientKey, 'subscription');
 
   if (!planId) return res.status(400).json({ ok: false, error: 'plan obrigatório' });
 
@@ -340,27 +337,39 @@ async function handleSubscription(req, res, user) {
     return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
   }
 
-  if (clientKey) {
-    const existingOrder = await findOrderByIdempotencyKey(clientKey);
-    if (existingOrder) {
-      if (existingOrder.status === 'FAILED') {
-        return res.status(409).json({
-          ok: false,
-          error: 'Tentativa anterior falhou. Tente novamente com nova chave de idempotência.',
-        });
-      }
-      return res.status(200).json({
-        ok: true,
-        orderId: existingOrder.id,
-        subscriptionId: existingOrder.externalPaymentId,
-        reused: true,
-      });
-    }
-  }
-
   const [plan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
   if (!plan || !plan.active) {
     return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
+  }
+
+  const existingOrder = await findOrderByIdempotencyKey(user.id, idempotencyKey);
+  if (existingOrder) {
+    const [existingItem] = await db.select().from(orderItems)
+      .where(eq(orderItems.orderId, existingOrder.id)).limit(1);
+    const [existingSub] = await db.select().from(subscriptions)
+      .where(eq(subscriptions.orderId, existingOrder.id)).limit(1);
+    if (!existingItem || existingItem.productType !== 'SUBSCRIPTION' || existingItem.productId !== plan.id || !existingSub) {
+      return res.status(409).json({ ok: false, code: 'IDEMPOTENCY_KEY_REUSED', error: 'A chave de checkout já foi usada para outro produto.' });
+    }
+    if (existingSub.status === 'ACTIVE' || existingOrder.status === 'PAID') {
+      return res.status(409).json({ ok: false, code: 'ORDER_ALREADY_PAID', error: 'Esta assinatura já foi confirmada.', subscriptionId: existingSub.id });
+    }
+    if (existingSub.initPoint) {
+      return res.status(200).json({ ok: true, orderId: existingOrder.id, subscriptionId: existingSub.id, checkoutUrl: existingSub.initPoint, reused: true });
+    }
+    if (existingOrder.status === 'FAILED' || existingOrder.status === 'CANCELLED' || existingSub.status === 'CANCELLED') {
+      return res.status(409).json({ ok: false, code: 'CHECKOUT_FAILED', error: 'A tentativa anterior falhou. Inicie um novo checkout.' });
+    }
+    if (Date.now() - new Date(existingOrder.createdAt).getTime() > 3 * 60 * 1000) {
+      await db.transaction(async (tx) => {
+        await tx.update(orders).set({ status: 'FAILED' })
+          .where(and(eq(orders.id, existingOrder.id), eq(orders.status, 'PENDING')));
+        await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+          .where(and(eq(subscriptions.id, existingSub.id), eq(subscriptions.status, 'PENDING')));
+      });
+      return res.status(409).json({ ok: false, code: 'CHECKOUT_FAILED', error: 'O checkout anterior expirou sem gerar um link. Inicie uma nova tentativa.' });
+    }
+    return res.status(409).json({ ok: false, code: 'CHECKOUT_IN_PROGRESS', error: 'O checkout está sendo preparado. Aguarde alguns segundos e tente novamente.' });
   }
 
   const [active] = await db.select().from(subscriptions)
@@ -374,34 +383,33 @@ async function handleSubscription(req, res, user) {
     });
   }
 
-  const idempotencyKey = clientKey
-    || `sub:${user.id}:${plan.id}:${Math.floor(Date.now() / 60000)}`;
-
-  const order = await createPendingOrder({
-    userId: user.id,
-    totalCents: plan.priceCents,
-    currency: plan.currency || 'BRL',
-    idempotencyKey,
+  const { order, sub } = await db.transaction(async (tx) => {
+    const createdOrder = await createPendingOrderTx(tx, {
+      userId: user.id,
+      totalCents: plan.priceCents,
+      currency: plan.currency || 'BRL',
+      idempotencyKey,
+    });
+    await tx.insert(orderItems).values({
+      id: randomUUID(),
+      orderId: createdOrder.id,
+      productType: 'SUBSCRIPTION',
+      productId: plan.id,
+      quantity: 1,
+      unitPriceCents: plan.priceCents,
+    });
+    const [createdSub] = await tx.insert(subscriptions).values({
+      id: randomUUID(),
+      userId: user.id,
+      planId: plan.id,
+      orderId: createdOrder.id,
+      status: 'PENDING',
+      initPoint: null,
+      payerEmail: user.email,
+      updatedAt: new Date().toISOString(),
+    }).returning();
+    return { order: createdOrder, sub: createdSub };
   });
-
-  await db.insert(orderItems).values({
-    id: randomUUID(),
-    orderId: order.id,
-    productType: 'SUBSCRIPTION',
-    productId: plan.id,
-    quantity: 1,
-    unitPriceCents: plan.priceCents,
-  }).onConflictDoNothing();
-
-  const [sub] = await db.insert(subscriptions).values({
-    id: randomUUID(),
-    userId: user.id,
-    planId: plan.id,
-    orderId: order.id,
-    status: 'PENDING',
-    initPoint: null,
-    payerEmail: user.email,
-  }).returning();
 
   let preapproval;
   try {
@@ -425,23 +433,18 @@ async function handleSubscription(req, res, user) {
     });
   } catch (err) {
     console.error('[payments][subscription] MP preapproval falhou:', err.status, err.body);
-    await markOrderFailed(order.id, 'MP_PREAPPROVAL_FAILED');
-    await db.update(subscriptions)
-      .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
-      .where(eq(subscriptions.id, sub.id));
+    await db.transaction(async (tx) => {
+      await tx.update(orders).set({ status: 'FAILED' })
+        .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')));
+      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(eq(subscriptions.id, sub.id), eq(subscriptions.status, 'PENDING')));
+    });
     return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
   }
 
   await db.update(subscriptions)
-    .set({ initPoint: preapproval.init_point, externalSubscriptionId: String(preapproval.id) })
+    .set({ initPoint: preapproval.init_point, externalSubscriptionId: String(preapproval.id), updatedAt: new Date().toISOString() })
     .where(eq(subscriptions.id, sub.id));
-
-  await db.update(orders)
-    .set({
-      externalPaymentId: String(preapproval.id),
-      preferenceInitPoint: preapproval.init_point || null,
-    })
-    .where(eq(orders.id, order.id));
 
   return res.status(200).json({
     ok: true,
@@ -536,172 +539,290 @@ async function handleWebhook(req, res) {
   const dataId = String((event.data && event.data.id) || '');
   if (!type || !dataId) return res.status(400).json({ ok: false, error: 'Payload inválido' });
 
-  const providerEvent = `${type}:${dataId}`;
+  const provider = 'mercadopago';
+  const notificationId = String(event.id || req.headers['x-request-id'] || '').trim();
+  // Identifica a notificação, não apenas o pagamento: um mesmo pagamento
+  // pode receber eventos distintos (pending -> approved -> refunded).
+  const providerEvent = `${type}:${notificationId || `${dataId}:${String(event.action || event.topic || 'notification')}`}`;
 
-  // P0.2: INSERT atômico. Se já existe, ON CONFLICT DO NOTHING; depois
-  // lê a linha. Se outra requisição está processando (processedAt NULL
-  // e failureReason NULL), retorna 200 para o MP não reenviar.
-  let eventRow;
-  try {
-    const inserted = await db.insert(paymentsEvents).values({
-      provider: 'mercadopago',
-      providerEvent,
-      eventType: type,
-      externalId: dataId,
-      payload: event,
-    }).onConflictDoNothing({ target: paymentsEvents.providerEvent }).returning();
+  // Registra o evento com conflito atômico. A constraint composta
+  // (provider, provider_event) impede duas linhas para o mesmo evento.
+  const [insertedEvent] = await db.insert(paymentsEvents).values({
+    provider,
+    providerEvent,
+    eventType: type,
+    externalId: dataId,
+    payload: event,
+  }).onConflictDoNothing({ target: [paymentsEvents.provider, paymentsEvents.providerEvent] }).returning();
 
-    if (inserted.length === 1) {
-      eventRow = inserted[0];
-    } else {
-      const [existing] = await db.select().from(paymentsEvents)
-        .where(eq(paymentsEvents.providerEvent, providerEvent))
-        .limit(1);
-      if (!existing) throw new Error('Evento em conflito mas não encontrado.');
-      if (existing.processedAt) {
-        return res.status(200).json({ ok: true, duplicated: true });
-      }
-      eventRow = existing;
-    }
-  } catch (err) {
-    console.error('[payments][webhook] falha ao registrar evento:', err.message);
-    return res.status(500).json({ ok: false });
+  let eventRow = insertedEvent;
+  if (!eventRow) {
+    [eventRow] = await db.select().from(paymentsEvents)
+      .where(and(eq(paymentsEvents.provider, provider), eq(paymentsEvents.providerEvent, providerEvent)))
+      .limit(1);
   }
+  if (!eventRow) throw new Error('WEBHOOK_EVENT_PERSIST_FAILED');
+  if (eventRow.processedAt) return res.status(200).json({ ok: true, duplicated: true });
+
+  // Lease atômico: apenas uma execução pode processar o evento. Se a
+  // execução anterior morrer, a lease expira e o provedor pode reenviar.
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+  const [claimedEvent] = await db.update(paymentsEvents)
+    .set({ processingAt: now.toISOString(), failureReason: null })
+    .where(and(
+      eq(paymentsEvents.id, eventRow.id),
+      isNull(paymentsEvents.processedAt),
+      or(isNull(paymentsEvents.processingAt), lt(paymentsEvents.processingAt, staleBefore))
+    ))
+    .returning();
+
+  if (!claimedEvent) {
+    return res.status(503).json({ ok: false, error: 'Evento já está em processamento. Tente novamente.' });
+  }
+  eventRow = claimedEvent;
 
   try {
     if (type === 'payment') {
       const pay = await mpFetch(`/v1/payments/${encodeURIComponent(dataId)}`);
 
-      const status = pay.status;
-      const orderId = pay.external_reference;
-      if (!orderId || status !== 'approved') {
+      const status = String(pay.status || '').toLowerCase();
+      const orderId = String(
+        pay.external_reference || pay.metadata?.order_id ||
+        pay.metadata?.subscription_id || pay.metadata?.preapproval_id || ''
+      ).trim();
+      if (!orderId) {
         await db.update(paymentsEvents)
-          .set({ processedAt: new Date().toISOString() })
+          .set({ processedAt: new Date().toISOString(), processingAt: null, failureReason: 'Pagamento sem referência externa.' })
           .where(eq(paymentsEvents.id, eventRow.id));
         return res.status(200).json({ ok: true, ignored: true });
       }
 
-      const [order] = await db.select().from(orders)
-        .where(eq(orders.id, orderId)).limit(1);
+      const isUuidReference = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orderId);
+      const [order] = isUuidReference
+        ? await db.select().from(orders).where(eq(orders.id, orderId)).limit(1)
+        : [];
+      let referencedSub = null;
       if (!order) {
-        console.error('[payments][webhook] pedido inexistente:', orderId);
-        throw new Error('PEDIDO_INEXISTENTE');
+        const [sub] = await db.select().from(subscriptions)
+          .where(isUuidReference
+            ? or(eq(subscriptions.id, orderId), eq(subscriptions.externalSubscriptionId, orderId))
+            : eq(subscriptions.externalSubscriptionId, orderId))
+          .limit(1);
+        referencedSub = sub || null;
       }
 
-      // P0.4: validações cruzadas de metadados, valor e moeda.
-      const meta = (pay.metadata && typeof pay.metadata === 'object') ? pay.metadata : {};
-      if (meta.order_id && String(meta.order_id) !== String(order.id)) {
-        throw new Error('METADATA_ORDER_MISMATCH');
+      // Pagamentos recorrentes do Mercado Pago podem referenciar a assinatura,
+      // e não um pedido de compra avulso. Trate esse caso separadamente.
+      if (!order && referencedSub) {
+        if (['pending', 'in_process', 'authorized'].includes(status)) {
+          await db.update(paymentsEvents).set({ processingAt: null, failureReason: null })
+            .where(eq(paymentsEvents.id, eventRow.id));
+          return res.status(200).json({ ok: true, pending: true, subscription: true });
+        }
+
+        const [plan] = await db.select().from(plans).where(eq(plans.id, referencedSub.planId)).limit(1);
+        if (!plan) throw new Error('PLANO_DA_ASSINATURA_INEXISTENTE');
+        const now = new Date();
+
+        if (status === 'approved') {
+          const paidCents = Math.round(Number(pay.transaction_amount) * 100);
+          if (!Number.isFinite(paidCents) || paidCents !== Number(plan.priceCents)) {
+            throw new Error('VALOR_DA_ASSINATURA_DIVERGENTE');
+          }
+          if (pay.currency_id && plan.currency && pay.currency_id !== plan.currency) {
+            throw new Error('MOEDA_DA_ASSINATURA_DIVERGENTE');
+          }
+
+          let preapproval = null;
+          if (referencedSub.externalSubscriptionId) {
+            try {
+              preapproval = await mpFetch(`/preapproval/${encodeURIComponent(referencedSub.externalSubscriptionId)}`);
+            } catch (lookupErr) {
+              console.warn('[payments][webhook] não foi possível consultar pré-aprovação recorrente:', lookupErr.status || lookupErr.message);
+            }
+          }
+
+          const currentEnd = referencedSub.currentPeriodEnd
+            ? new Date(referencedSub.currentPeriodEnd)
+            : null;
+          const wasActive = referencedSub.status === 'ACTIVE' && currentEnd && currentEnd.getTime() > now.getTime();
+          const gatewayNextDate = preapproval?.next_payment_date || preapproval?.auto_recurring?.next_payment_date;
+          let nextEnd = gatewayNextDate ? new Date(gatewayNextDate) : null;
+          if (!nextEnd || !Number.isFinite(nextEnd.getTime()) || nextEnd.getTime() <= now.getTime()) {
+            if (wasActive) nextEnd = currentEnd;
+            else {
+              nextEnd = new Date(now);
+              const unit = String(plan.intervalUnit || '').toUpperCase();
+              if (unit === 'MONTH') nextEnd.setMonth(nextEnd.getMonth() + plan.intervalCount);
+              else if (unit === 'YEAR') nextEnd.setFullYear(nextEnd.getFullYear() + plan.intervalCount);
+              else nextEnd.setDate(nextEnd.getDate() + (Number(plan.intervalCount) || 30));
+            }
+          }
+
+          await db.update(subscriptions).set({
+            status: 'ACTIVE',
+            currentPeriodStart: referencedSub.currentPeriodStart || pay.date_approved || now.toISOString(),
+            currentPeriodEnd: nextEnd.toISOString(),
+            updatedAt: now.toISOString(),
+          }).where(eq(subscriptions.id, referencedSub.id));
+          await invalidateAccessCache(referencedSub.userId);
+
+          if (!wasActive) {
+            try {
+              const [user] = await db.select({ email: users.email }).from(users)
+                .where(eq(users.id, referencedSub.userId)).limit(1);
+              if (user?.email) await sendSubscriptionConfirmation(user.email, plan.name || 'Premium', nextEnd.toISOString());
+            } catch (emailErr) {
+              console.warn('[payments][webhook] falha no e-mail recorrente:', emailErr.message);
+            }
+          }
+        } else {
+          const updates = {
+            status: 'PAST_DUE',
+            updatedAt: now.toISOString(),
+          };
+          if (status === 'refunded' || status === 'charged_back') {
+            updates.currentPeriodEnd = now.toISOString();
+          }
+          await db.update(subscriptions).set(updates)
+            .where(eq(subscriptions.id, referencedSub.id));
+          await invalidateAccessCache(referencedSub.userId);
+        }
+
+        await db.update(paymentsEvents).set({
+          processedAt: new Date().toISOString(),
+          processingAt: null,
+          failureReason: status === 'approved' ? null : `Pagamento recorrente ${status}.`,
+        }).where(eq(paymentsEvents.id, eventRow.id));
+        return res.status(200).json({ ok: true, subscription: true, paymentStatus: status });
       }
-      if (meta.user_id && String(meta.user_id) !== String(order.userId)) {
-        throw new Error('METADATA_USER_MISMATCH');
-      }
-      if (meta.order_id && String(meta.order_id) !== String(order.id)) {
-        // redundante com o primeiro, mas mantém explícito
-        throw new Error('METADATA_ORDER_MISMATCH');
+
+      if (!order) throw new Error('PEDIDO_OU_ASSINATURA_INEXISTENTE');
+
+      if (status !== 'approved') {
+        // Estados transitórios não podem ser marcados como processados:
+        // o mesmo pagamento pode gerar nova notificação quando aprovado.
+        if (['pending', 'in_process', 'authorized'].includes(status)) {
+          await db.update(paymentsEvents)
+            .set({ processingAt: null, failureReason: null })
+            .where(eq(paymentsEvents.id, eventRow.id));
+          return res.status(200).json({ ok: true, pending: true });
+        }
+
+        const terminalOrderStatus = status === 'refunded' || status === 'charged_back'
+          ? 'REFUNDED'
+          : status === 'cancelled' ? 'CANCELLED' : 'FAILED';
+
+        if (terminalOrderStatus === 'REFUNDED') {
+          const [targetOrder] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+          if (targetOrder) {
+            await db.transaction(async (tx) => {
+              await tx.update(orders).set({ status: 'REFUNDED' }).where(eq(orders.id, targetOrder.id));
+              await tx.update(rentals).set({ status: 'CANCELLED' })
+                .where(and(eq(rentals.orderId, targetOrder.id), eq(rentals.status, 'ACTIVE')));
+            });
+            await invalidateAccessCache(targetOrder.userId);
+          }
+        } else {
+          await db.update(orders)
+            .set({ status: terminalOrderStatus })
+            .where(and(eq(orders.id, orderId), eq(orders.status, 'PENDING')));
+        }
+
+        await db.update(paymentsEvents)
+          .set({
+            processedAt: new Date().toISOString(),
+            processingAt: null,
+            failureReason: terminalOrderStatus === 'FAILED' || terminalOrderStatus === 'CANCELLED'
+              ? `Pagamento ${status}.` : null,
+          })
+          .where(eq(paymentsEvents.id, eventRow.id));
+        return res.status(200).json({ ok: true, ignored: true, paymentStatus: status });
       }
 
       const paidAmount = Number(pay.transaction_amount) * 100;
       if (Number(order.totalCents) !== Math.round(paidAmount)) {
+        console.error('[payments][webhook] valor divergente:', {
+          orderId, esperado: order.totalCents, pago: paidAmount,
+        });
         throw new Error('VALOR_DIVERGENTE');
       }
+
       if (pay.currency_id && order.currency && pay.currency_id !== order.currency) {
+        console.error('[payments][webhook] moeda divergente:', {
+          orderId, esperado: order.currency, pago: pay.currency_id,
+        });
         throw new Error('MOEDA_DIVERGENTE');
-      }
-
-      const [item] = await db.select().from(orderItems)
-        .where(eq(orderItems.orderId, order.id)).limit(1);
-
-      // P0.4: valida produto adquirido contra o item do pedido.
-      if (!item) throw new Error('ORDER_ITEM_AUSENTE');
-      if (item.productType === 'RENTAL') {
-        const [prod] = await db.select().from(rentalProducts)
-          .where(eq(rentalProducts.id, item.productId)).limit(1);
-        if (!prod) throw new Error('PRODUTO_INEXISTENTE');
-        if (meta.product_id && String(meta.product_id) !== String(prod.id)) {
-          throw new Error('METADATA_PRODUCT_MISMATCH');
-        }
       }
 
       if (order.status === 'PAID') {
         await db.update(paymentsEvents)
-          .set({ processedAt: new Date().toISOString() })
+          .set({ processedAt: new Date().toISOString(), processingAt: null })
           .where(eq(paymentsEvents.id, eventRow.id));
         return res.status(200).json({ ok: true, alreadyPaid: true });
       }
 
-      // Transação: marcar pedido + criar aluguel juntos.
-      let createdRental = null;
-      let rentalProduct = null;
-      await db.transaction(async (tx) => {
-        const updated = await tx.update(orders)
-          .set({
-            status: 'PAID',
-            paidAt: new Date().toISOString(),
-            externalPaymentId: String(pay.id),
-          })
+      // A transição PENDING -> PAID e a concessão do acesso são atômicas.
+      // A atualização condicional impede uma segunda notificação concorrente
+      // de conceder um segundo aluguel para o mesmo pedido.
+      const fulfillment = await db.transaction(async (tx) => {
+        const [paidOrder] = await tx.update(orders)
+          .set({ status: 'PAID', paidAt: new Date().toISOString(), externalPaymentId: String(pay.id) })
           .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')))
           .returning({ id: orders.id });
 
-        if (updated.length !== 1) {
-          // Outra requisição já marcou como PAID; não cria aluguel duplicado.
-          return;
+        if (!paidOrder) return { alreadyProcessed: true, rental: null, product: null };
+
+        const [orderItem] = await tx.select().from(orderItems)
+          .where(eq(orderItems.orderId, order.id)).limit(1);
+        if (!orderItem) throw new Error('ITEM_PEDIDO_INEXISTENTE');
+
+        if (orderItem.productType !== 'RENTAL') {
+          return { alreadyProcessed: false, rental: null, product: null };
         }
 
-        if (item && item.productType === 'RENTAL') {
-          const [prod] = await tx.select().from(rentalProducts)
-            .where(eq(rentalProducts.id, item.productId)).limit(1);
-          if (!prod) throw new Error('PRODUTO_INEXISTENTE');
-          rentalProduct = prod;
-
-          const now = new Date();
-          const expires = new Date(now.getTime() + (prod.durationHours || 24) * 3600 * 1000);
-
-          const [row] = await tx.insert(rentals).values({
-            id: randomUUID(),
-            rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
-            userId: order.userId,
-            trackId: prod.trackId,
-            albumId: prod.albumId,
-            orderId: order.id,
-            status: 'ACTIVE',
-            startsAt: now.toISOString(),
-            expiresAt: expires.toISOString(),
-          }).returning();
-          createdRental = row;
+        const [prod] = await tx.select().from(rentalProducts)
+          .where(eq(rentalProducts.id, orderItem.productId)).limit(1);
+        if (!prod || !prod.active || !Number.isInteger(prod.durationHours) || prod.durationHours <= 0) {
+          throw new Error('PRODUTO_INEXISTENTE_OU_INVALIDO');
         }
+
+        const startedAt = new Date();
+        const expiresAt = new Date(startedAt.getTime() + prod.durationHours * 3600 * 1000);
+        const [rental] = await tx.insert(rentals).values({
+          id: randomUUID(),
+          rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
+          userId: order.userId,
+          trackId: prod.trackId,
+          albumId: prod.albumId,
+          orderId: order.id,
+          status: 'ACTIVE',
+          startsAt: startedAt.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        }).returning();
+        return { alreadyProcessed: false, rental, product: prod };
       });
+
+      if (fulfillment.alreadyProcessed) {
+        await db.update(paymentsEvents).set({ processedAt: new Date().toISOString(), processingAt: null })
+          .where(eq(paymentsEvents.id, eventRow.id));
+        return res.status(200).json({ ok: true, alreadyPaid: true });
+      }
 
       await invalidateAccessCache(order.userId);
 
-      // P0.3: e-mail com dados reais.
-      if (item && item.productType === 'RENTAL' && createdRental && rentalProduct) {
+      // E-mail posicional conforme o contrato real de api/_email.js.
+      if (fulfillment.rental && fulfillment.product) {
         try {
-          const [u] = await db.select({ email: users.email })
+          const [user] = await db.select({ email: users.email })
             .from(users).where(eq(users.id, order.userId)).limit(1);
-          let albumName = null;
-          let trackTitle = null;
-          if (rentalProduct.albumId) {
-            const [alb] = await db.select({ title: albums.title })
-              .from(albums).where(eq(albums.id, rentalProduct.albumId)).limit(1);
-            albumName = alb?.title || null;
-          } else if (rentalProduct.trackId) {
-            const [tr] = await db.select({ title: tracks.title, albumId: tracks.albumId })
-              .from(tracks).where(eq(tracks.id, rentalProduct.trackId)).limit(1);
-            trackTitle = tr?.title || null;
-            if (tr?.albumId) {
-              const [alb] = await db.select({ title: albums.title })
-                .from(albums).where(eq(albums.id, tr.albumId)).limit(1);
-              albumName = alb?.title || null;
-            }
-          }
-          if (u?.email) {
-            await sendRentalConfirmation({
-              userEmail: u.email,
-              albumName: albumName || rentalProduct.name || 'Aluguel',
-              trackTitle: trackTitle,
-              expiresAt: createdRental.expiresAt,
-            });
+          if (user?.email) {
+            await sendRentalConfirmation(
+              user.email,
+              fulfillment.product.name,
+              fulfillment.rental.expiresAt
+            );
           }
         } catch (emailErr) {
           console.warn('[payments][webhook] falha no e-mail:', emailErr.message);
@@ -713,67 +834,106 @@ async function handleWebhook(req, res) {
       const subId = pre.external_reference;
 
       if (subId) {
-        const [sub] = await db.select().from(subscriptions)
-          .where(eq(subscriptions.id, subId)).limit(1);
-        const [plan] = sub
-          ? await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1)
-          : [];
-
         if (pre.status === 'authorized') {
           const now = new Date();
-          const end = new Date(now);
-          if (plan && plan.intervalUnit === 'MONTH') end.setMonth(end.getMonth() + plan.intervalCount);
-          else if (plan && plan.intervalUnit === 'YEAR') end.setFullYear(end.getFullYear() + plan.intervalCount);
-          else end.setDate(end.getDate() + (plan ? plan.intervalCount : 30));
+          const [sub] = await db.select().from(subscriptions)
+            .where(and(
+              eq(subscriptions.id, subId),
+              eq(subscriptions.externalSubscriptionId, String(pre.id))
+            )).limit(1);
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
+          const [plan] = await db.select().from(plans).where(eq(plans.id, sub.planId)).limit(1);
+          const alreadyActive = sub.status === 'ACTIVE' &&
+            (!sub.currentPeriodEnd || new Date(sub.currentPeriodEnd).getTime() > now.getTime());
+          const end = sub.currentPeriodEnd && alreadyActive
+            ? new Date(sub.currentPeriodEnd)
+            : new Date(now);
+          if (!alreadyActive) {
+            if (plan && String(plan.intervalUnit).toUpperCase() === 'MONTH') end.setMonth(end.getMonth() + plan.intervalCount);
+            else if (plan && String(plan.intervalUnit).toUpperCase() === 'YEAR') end.setFullYear(end.getFullYear() + plan.intervalCount);
+            else end.setDate(end.getDate() + (plan ? plan.intervalCount : 30));
+          }
 
-          // P0.5: usa subscriptions.orderId para marcar o pedido correto.
           await db.transaction(async (tx) => {
-            await tx.update(subscriptions).set({
-              status: 'ACTIVE',
-              currentPeriodStart: now.toISOString(),
-              currentPeriodEnd: end.toISOString(),
-              updatedAt: now.toISOString(),
-            }).where(eq(subscriptions.id, subId));
+            if (!alreadyActive) {
+              await tx.update(subscriptions).set({
+                status: 'ACTIVE',
+                currentPeriodStart: now.toISOString(),
+                currentPeriodEnd: end.toISOString(),
+                updatedAt: now.toISOString(),
+              }).where(eq(subscriptions.id, subId));
+            }
 
-            if (sub?.orderId) {
+            // Vincula a confirmação ao pedido exato que originou esta assinatura.
+            if (sub.orderId) {
               await tx.update(orders).set({
                 status: 'PAID',
                 paidAt: now.toISOString(),
-              }).where(and(eq(orders.id, sub.orderId), eq(orders.status, 'PENDING')));
+              }).where(and(
+                eq(orders.id, sub.orderId),
+                eq(orders.userId, sub.userId),
+                eq(orders.status, 'PENDING')
+              ));
             }
           });
 
-          if (sub?.userId) await invalidateAccessCache(sub.userId);
+          if (sub.userId) await invalidateAccessCache(sub.userId);
 
-          try {
-            const [u] = sub
-              ? await db.select({ email: users.email }).from(users)
-                  .where(eq(users.id, sub.userId)).limit(1)
-              : [];
-            if (u?.email) {
-              await sendSubscriptionConfirmation({
-                userEmail: u.email,
-                planName: plan?.name || 'Premium',
-                currentPeriodEnd: end.toISOString(),
-              });
+          if (!alreadyActive) {
+            try {
+              const [user] = await db.select({ email: users.email }).from(users)
+                .where(eq(users.id, sub.userId)).limit(1);
+              if (user?.email) {
+                await sendSubscriptionConfirmation(
+                  user.email,
+                  plan?.name || 'Premium',
+                  end.toISOString()
+                );
+              }
+            } catch (emailErr) {
+              console.warn('[payments][webhook] falha no e-mail:', emailErr.message);
             }
-          } catch (emailErr) {
-            console.warn('[payments][webhook] falha no e-mail:', emailErr.message);
           }
 
-        } else if (pre.status === 'cancelled') {
+        } else if (pre.status === 'paused') {
+          const [sub] = await db.select().from(subscriptions)
+            .where(and(
+              eq(subscriptions.id, subId),
+              eq(subscriptions.externalSubscriptionId, String(pre.id))
+            )).limit(1);
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
           await db.update(subscriptions).set({
-            status: 'CANCELLED',
+            status: 'PAUSED',
             updatedAt: new Date().toISOString(),
           }).where(eq(subscriptions.id, subId));
+          await invalidateAccessCache(sub.userId);
 
-          if (sub?.userId) await invalidateAccessCache(sub.userId);
+        } else if (pre.status === 'cancelled' || pre.status === 'canceled') {
+          const [sub] = await db.select().from(subscriptions)
+            .where(and(
+              eq(subscriptions.id, subId),
+              eq(subscriptions.externalSubscriptionId, String(pre.id))
+            )).limit(1);
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
+
+          await db.transaction(async (tx) => {
+            await tx.update(subscriptions).set({
+              status: 'CANCELLED',
+              updatedAt: new Date().toISOString(),
+            }).where(eq(subscriptions.id, subId));
+            if (sub.orderId) {
+              await tx.update(orders).set({ status: 'CANCELLED' })
+                .where(and(eq(orders.id, sub.orderId), eq(orders.status, 'PENDING')));
+            }
+          });
+
+          if (sub.userId) await invalidateAccessCache(sub.userId);
         }
       }
     }
 
     await db.update(paymentsEvents)
-      .set({ processedAt: new Date().toISOString() })
+      .set({ processedAt: new Date().toISOString(), processingAt: null, failureReason: null })
       .where(eq(paymentsEvents.id, eventRow.id));
 
     return res.status(200).json({ ok: true });
@@ -781,7 +941,7 @@ async function handleWebhook(req, res) {
   } catch (err) {
     console.error('[payments][webhook] erro:', err.message, err.body || '');
     await db.update(paymentsEvents)
-      .set({ failureReason: err.message })
+      .set({ failureReason: String(err.message || 'WEBHOOK_ERROR').slice(0, 500), processingAt: null })
       .where(eq(paymentsEvents.id, eventRow.id));
     return res.status(500).json({ ok: false });
   }
@@ -813,6 +973,7 @@ module.exports = async (req, res) => {
   try { user = await getAuthUser(req); } catch (e) { user = null; }
   if (!user) return res.status(401).json({ ok: false, error: 'Não autenticado' });
 
+  // CSRF: operações mutáveis exigem Origin válida
   if (req.method !== 'GET' && !checkOrigin(req)) {
     return res.status(403).json({ ok: false, error: 'Origem não permitida.' });
   }
@@ -823,6 +984,9 @@ module.exports = async (req, res) => {
     if (op === 'manage') return await handleManage(req, res, user);
     return res.status(400).json({ ok: false, error: 'Ação inválida' });
   } catch (err) {
+    if (err?.status && err.status >= 400 && err.status < 500) {
+      return res.status(err.status).json({ ok: false, error: err.message || 'Requisição inválida.', code: err.code || null });
+    }
     console.error('[payments] erro:', err.message);
     return res.status(500).json({ ok: false, error: 'Erro interno' });
   }
