@@ -3375,3 +3375,93 @@ section[aria-labelledby="destaqueTitle"] {
   font-weight: 500;
   margin-right: 0.5rem; /* Espaço extra para o botão de curtir */
 }
+
+/* Dashboard — grid responsivo */
+#statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+#statsGrid .stat-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+}
+
+#statsGrid .stat-card .value {
+  font-size: clamp(1.25rem, 2vw, 2rem);
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+#statsGrid .stat-card .hint {
+  overflow-wrap: anywhere;
+}
+
+#statsGrid .btn-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: 8px;
+  padding: 8px 12px;
+}
+
+/* Tablet */
+@media (max-width: 1023px) {
+  #statsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+}
+
+/* Celular */
+@media (max-width: 480px) {
+  #statsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  #statsGrid .stat-card {
+    padding: 12px;
+  }
+
+  #statsGrid .stat-card .label {
+    font-size: 0.8rem;
+  }
+
+  #statsGrid .stat-card .value {
+    font-size: 1.35rem;
+  }
+
+  #statsGrid .stat-card .hint {
+    font-size: 0.72rem;
+  }
+}
+
+/* Telas muito estreitas */
+@media (max-width: 340px) {
+  #statsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.recent-users-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.recent-users-wrapper .admin-table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+}
+
+.recent-users-wrapper th,
+.recent-users-wrapper td {
+  white-space: nowrap;
+                                }
