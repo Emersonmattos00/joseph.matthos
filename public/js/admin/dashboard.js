@@ -13,6 +13,8 @@
 
 import { apiFetch } from './api.js';
 import { esc, formatCents, formatDate } from './ui/format.js';
+import { showAdminLogin } from './auth.js';
+import { toast } from './ui/toast.js';
 
 // ─────────────────────────────────────────────────────────────
 // Estado interno do dashboard
@@ -47,18 +49,19 @@ export async function renderDashboard() {
     fetchSales()
   ]);
 
-  // 3) Se AMBOS falharam com 401/403, propaga (login expirou)
-  const usersAuthFail =
-    DashState.users.status === 'error' &&
-    (DashState.users.error?.status === 401 || DashState.users.error?.status === 403);
+  // 3) Qualquer 401 indica sessão inválida; não aguardar os dois
+  // endpoints falharem para interromper o painel. 403 é autorização,
+  // não expiração de sessão, mas deve ser reportado ao entrypoint.
+  const usersAuthError = DashState.users.status === 'error' &&
+    [401, 403].includes(DashState.users.error?.status)
+      ? DashState.users.error : null;
+  const salesAuthError = DashState.sales.status === 'error' &&
+    [401, 403].includes(DashState.sales.error?.status)
+      ? DashState.sales.error : null;
 
-  const salesAuthFail =
-    DashState.sales.status === 'error' &&
-    (DashState.sales.error?.status === 401 || DashState.sales.error?.status === 403);
-
-  if (usersAuthFail && salesAuthFail) {
-    throw DashState.users.error || DashState.sales.error;
-  }
+  const authError = [usersAuthError, salesAuthError].find((err) => err?.status === 401)
+    || usersAuthError || salesAuthError;
+  if (authError) throw authError;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -83,7 +86,8 @@ async function fetchUsers() {
     if (err?.status === 401 || err?.status === 403) {
       DashState.users.status = 'error';
       DashState.users.error = err;
-      throw err; // propaga para o renderDashboard decidir
+      if (err.status === 403) paintUsersError(err);
+      throw err; // propaga para o entrypoint
     }
 
     DashState.users.status = 'error';
@@ -118,6 +122,7 @@ async function fetchSales() {
     if (err?.status === 401 || err?.status === 403) {
       DashState.sales.status = 'error';
       DashState.sales.error = err;
+      if (err.status === 403) paintSalesError(err);
       throw err;
     }
 
@@ -152,12 +157,13 @@ export async function retrySales() {
 
 // Expõe no window para os botões onclick inline
 if (typeof window !== 'undefined') {
-  window.__dashboardRetryUsers = () => {
-    retryUsers().catch((e) => console.warn('[dashboard] retryUsers:', e));
+  const handleRetryError = (err) => {
+    if (err?.status === 401) showAdminLogin();
+    else if (err?.status === 403) toast('Você não tem permissão para consultar estes dados.', '⚠');
+    else console.warn('[dashboard] retry:', err);
   };
-  window.__dashboardRetrySales = () => {
-    retrySales().catch((e) => console.warn('[dashboard] retrySales:', e));
-  };
+  window.__dashboardRetryUsers = () => retryUsers().catch(handleRetryError);
+  window.__dashboardRetrySales = () => retrySales().catch(handleRetryError);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -394,9 +400,10 @@ function normalizeCents(r) {
 }
 
 function friendlyError(err, label) {
-  if (err?.status === 401 || err?.status === 403) return 'Sessão expirada.';
+  if (err?.status === 401) return 'Sessão expirada.';
+  if (err?.status === 403) return 'Acesso não autorizado para este painel.';
   if (err?.status === 429) return 'Muitas tentativas. Aguarde.';
   if (err?.status >= 500) return `Servidor indisponível (${label}).`;
   if (err?.message?.toLowerCase().includes('network')) return 'Sem conexão.';
   return err?.message || `Erro ao carregar ${label}.`;
-}
+    }
