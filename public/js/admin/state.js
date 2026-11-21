@@ -17,7 +17,8 @@
 
 export const AdminState = {
   content: null,
-  contentVersion: 0,
+  contentVersion: null,
+  contentReady: false,
   contentUpdatedAt: null,
   user: null,
   dirty: false,
@@ -65,7 +66,8 @@ export function isBusy() {
 // ─────────────────────────────────────────────────────────────
 export function resetState() {
   AdminState.content = null;
-  AdminState.contentVersion = 0;
+  AdminState.contentVersion = null;
+  AdminState.contentReady = false;
   AdminState.contentUpdatedAt = null;
   AdminState.user = null;
   AdminState.dirty = false;
@@ -85,6 +87,14 @@ export function resetState() {
 export function updateSaveButtonState() {
   const btn = document.getElementById('adminSaveBtn');
   if (!btn) return;
+
+  // Sem conteúdo confirmado no servidor, não permitir edição/salvamento.
+  if (!AdminState.contentReady || !AdminState.content || !Number.isSafeInteger(AdminState.contentVersion)) {
+    btn.disabled = true;
+    btn.classList.remove('is-dirty', 'is-busy');
+    btn.textContent = 'Conteúdo indisponível';
+    return;
+  }
 
   // 1) Operação em andamento (upload/import/save)
   if (AdminState.busy) {
@@ -133,4 +143,4 @@ if (typeof window !== 'undefined' && !window.__adminBeforeUnloadBound) {
       return '';
     }
   });
-}
+  }
