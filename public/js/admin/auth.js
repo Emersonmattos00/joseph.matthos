@@ -21,7 +21,8 @@ let loginBound = false;
 // Exibição
 // ─────────────────────────────────────────────────────────────
 export function showAdminLogin() {
-  AdminState.user = null;
+  // Ao perder a autenticação, remove dados administrativos da memória.
+  resetState();
   setDisplay('adminLogin', 'flex');
   setDisplay('adminDashboard', 'none');
   showLoginForm();
@@ -335,4 +336,4 @@ function setError(id, message) {
 
 function clearError(id) {
   setError(id, '');
-}
+     }
