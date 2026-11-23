@@ -1,3 +1,4 @@
+
 'use strict';
 
 /* ============================================================
@@ -26,8 +27,8 @@ const {
 
 const {
   uploadObject, createSignedUploadUrl, createSignedDownloadUrl,
-  getPublicUrl, getObjectMetadata, buildPathForKind, buildDefinitivePath,
-  inferKindFromKey, getPublicR2Config, ALLOWED_MEDIA,
+  getPublicUrl, getObjectMetadata, buildPathForKind,
+  inferKindFromKey, getPrefixForKind, getPublicR2Config, ALLOWED_MEDIA,
   promoteFromQuarantine, isQuarantinePath, deleteObject
 } = require('./_storage');
 
@@ -97,6 +98,7 @@ function checkConfig() {
   try {
     getSessionSecret();
     getAdminIdentity();
+    if (!String(process.env.ADMIN_USER || '').trim()) return { ok: false, error: 'ADMIN_USER ausente.' };
     if (!process.env.ADMIN_PASSWORD_HASH) return { ok: false, error: 'ADMIN_PASSWORD_HASH ausente.' };
     return { ok: true };
   } catch (err) {
@@ -107,6 +109,20 @@ function checkConfig() {
 function getAdminUpdatedBy() {
   const id = String(process.env.ADMIN_USER_ID || '').trim();
   return isUuid(id) ? id : null;
+}
+
+// Caminho definitivo estável por intenção: permite reconciliação após falha
+// entre a atualização do banco e a promoção do objeto no R2.
+function buildIntentDefinitivePath(kind, intentionId, quarantinePath) {
+  if (!isUuid(intentionId)) throw new Error('Intenção de upload inválida.');
+  const ext = String(quarantinePath || '').split('.').pop().toLowerCase();
+  if (!/^[a-z0-9]{1,8}$/.test(ext)) throw new Error('Extensão inválida.');
+  const prefix = getPrefixForKind(kind);
+  const digest = crypto.createHash('sha256')
+    .update(`${kind}:${intentionId}`)
+    .digest('hex')
+    .slice(0, 32);
+  return `${prefix}/intent_${digest}.${ext}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -154,7 +170,7 @@ module.exports = async function handler(req, res) {
       case 'upload-confirm': if (method === 'POST') return handleUploadConfirm(req, res, session); break;
       case 'reconcile-uploads': if (method === 'POST') return handleReconcileUploads(req, res, session); break;
       case 'users':
-        if (method === 'GET') return (req, res);
+        if (method === 'GET') return handleGetUsers(req, res);
         if (method === 'PATCH') return handlePatchUser(req, res, session);
         if (method === 'DELETE') return handleDeleteUser(req, res, session);
         break;
@@ -203,6 +219,41 @@ async function handleLogin(req, res) {
   const body = parseBody(req);
   const user = String(body.user || '').trim();
   const pass = String(body.pass || '');
+  const expectedUser = String(process.env.ADMIN_USER || '').trim();
+  const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
+
+  if (!expectedUser || !hash) return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+
+  const userOk = timingSafeEq(user, expectedUser);
+  const passOk = await verifyScrypt(pass, hash);
+
+  if (!userOk || !passOk) {
+    try { await audit('admin_login', { ip, success: false, reason: 'invalid', target: user }); } catch {}
+    return sendJson(res, 401, { ok: false, error: 'Usuário ou senha incorretos.' });
+  }
+
+  try { await resetBucket(`admin-login:${ip}`); } catch {}
+
+  const token = signHmac({ user: expectedUser, iat: Date.now(), jti: crypto.randomUUID() }, getSessionSecret());
+  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE}`, IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; ${attrs}`);
+
+  try { await audit('admin_login', { actor: expectedUser, ip, success: true }); } catch {}
+  return sendJson(res, 200, { ok: true, user: expectedUser });
+}
+
+async function handleSession(req, res, session) {
+  return sendJson(res, 200, { ok: true, user: session.user });
+}
+
+async function handleLogout(req, res, session) {
+  try { await audit('admin_logout', { actor: session.user, ip: clientIp(req) }); } catch {}
+  const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0', IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; ${attrs}`);
+  return sendJson(res, 200, { ok: true });
+}
+
+
   const expectedUser = String(process.env.ADMIN_USER || '').trim();
   const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
 
@@ -423,6 +474,8 @@ async function handleUploadSign(req, res, session) {
   catch (err) { return sendJson(res, 400, { ok: false, error: err.message }); }
 
   let signed;
+
+
   try { signed = await createSignedUploadUrl(quarantinePath, validation.mime, sizeBytes, SIGNED_UPLOAD_TTL_SEC); }
   catch (err) {
     if (err.code === 'NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Storage indisponível.' });
@@ -460,7 +513,7 @@ async function handleUploadConfirm(req, res, session) {
   if (!isUuid(intentionId)) return sendJson(res, 400, { ok: false, error: 'intentionId inválido.' });
   if (!['audio-full', 'audio-preview'].includes(kind)) return sendJson(res, 400, { ok: false, error: 'Tipo não permitido para associação com faixa.' });
   if (!isQuarantinePath(path)) return sendJson(res, 400, { ok: false, error: 'O upload precisa estar em quarentena.' });
-  
+
   let inferredKind;
   try { inferredKind = inferKindFromKey(path); }
   catch { return sendJson(res, 400, { ok: false, error: 'Caminho de storage inválido.' }); }
@@ -492,8 +545,7 @@ async function handleUploadConfirm(req, res, session) {
       if (consumed.length !== 1) { const err = new Error('UPLOAD_INTENT_ALREADY_CONSUMED'); err.code = 'UPLOAD_INTENT_ALREADY_CONSUMED'; throw err; }
       intentSnapshot = consumed[0];
 
-      const ext = String(path).split('.').pop();
-      definitiveKey = buildDefinitivePath(kind, ext);
+      definitiveKey = buildIntentDefinitivePath(kind, intentionId, path);
 
       const patch = kind === 'audio-full'
         ? { fullPath: definitiveKey, streamKey: definitiveKey, updatedAt: new Date().toISOString() }
@@ -570,8 +622,7 @@ async function handleReconcileUploads(req, res, session) {
 
     let candidateDefinitive = null;
     try {
-      const ext = String(it.path).split('.').pop();
-      candidateDefinitive = buildDefinitivePath(it.kind, ext);
+      candidateDefinitive = buildIntentDefinitivePath(it.kind, it.id, it.path);
     } catch (e) {
       item.reason = 'invalid_kind_or_ext';
       results.push(item);
@@ -625,31 +676,27 @@ async function handleReconcileUploads(req, res, session) {
   return sendJson(res, 200, { ok: true, scanned: intents.length, results });
 }
 
-// ─────────────────────────────────────────────────────────────
-// USUÁRIOS
-// ─────────────────────────────────────────────────────────────
-function normalizePlanCode(name, intervalUnit = '') {
-  const normalized = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-  const interval = String(intervalUnit || '').toLowerCase().trim();
-  if (!normalized || normalized === 'free') return 'free';
-  if (/(anual|annual|year|ano)/.test(normalized) || ['year', 'years', 'yr'].includes(interval)) return 'anual';
-  if (/(premium|mensal|monthly|month|mes)/.test(normalized) || ['month', 'months', 'mo'].includes(interval)) return 'premium';
-  return null;
-}
 
-// ─────────────────────────────────────────────────────────────
-// GET /users — com plansError explícito
-// ─────────────────────────────────────────────────────────────
-async function handleGetUsers(req, res) {
-  const rows = await db.select({
-    id: users.id, email: users.email, name: users.name, createdAt: users.createdAt
   }).from(users).orderBy(desc(users.createdAt));
 
   let planMap = new Map();
   let plansError = false;
   try {
-    const planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`);
-    planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
+    const [effectiveResult, dbPlans] = await Promise.all([
+      db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`),
+      db.select({ name: plans.name, intervalUnit: plans.intervalUnit }).from(plans)
+    ]);
+
+    const intervalByName = new Map(
+      dbPlans.map((p) => [String(p.name), p.intervalUnit])
+    );
+
+    const effectiveRows = effectiveResult.rows || effectiveResult;
+    planMap = new Map(effectiveRows.map((r) => {
+      const rawPlan = String(r.plan || 'free');
+      const code = normalizePlanCode(rawPlan, intervalByName.get(rawPlan) || '');
+      return [r.user_id, code || 'free'];
+    }));
   } catch (e) {
     console.error('[admin] falha ao consultar planos efetivos:', e.message);
     plansError = true;
@@ -669,6 +716,72 @@ async function handleGetUsers(req, res) {
 // ─────────────────────────────────────────────────────────────
 // PATCH /users — valida ANTES de cancelar externo
 // ─────────────────────────────────────────────────────────────
+// Cancela no Mercado Pago antes de substituir/anonimizar assinaturas locais.
+// Falha fechada: não altera o banco se houver uma cobrança externa que não
+// possa ser cancelada no gateway.
+async function cancelExternalSubscriptionsForUser(userId) {
+  const rows = await db.select({
+    id: subscriptions.id,
+    externalSubscriptionId: subscriptions.externalSubscriptionId
+  }).from(subscriptions).where(and(
+    eq(subscriptions.userId, userId),
+    inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'])
+  ));
+
+  const externalIds = [...new Set(
+    rows
+      .map((row) => String(row.externalSubscriptionId || '').trim())
+      .filter((id) => id && !id.startsWith('manual_'))
+  )];
+
+  if (!externalIds.length) return;
+
+  const token = String(process.env.MP_ACCESS_TOKEN || '').trim();
+  if (!token) throw new Error('MP_ACCESS_TOKEN ausente para cancelar cobrança recorrente.');
+
+  for (const externalId of externalIds) {
+    const url = `https://api.mercadopago.com/preapproval/${encodeURIComponent(externalId)}`;
+
+    const currentResponse = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    const currentText = await currentResponse.text();
+    let current = null;
+    try { current = currentText ? JSON.parse(currentText) : null; } catch {}
+
+    if (!currentResponse.ok) {
+      throw new Error(`Falha ao consultar pré-aprovação ${externalId}: HTTP ${currentResponse.status}`);
+    }
+
+    const currentStatus = String(current?.status || '').toLowerCase();
+    if (currentStatus === 'cancelled' || currentStatus === 'canceled') continue;
+
+    const cancelResponse = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status: 'cancelled' })
+    });
+
+    const cancelText = await cancelResponse.text();
+    let canceled = null;
+    try { canceled = cancelText ? JSON.parse(cancelText) : null; } catch {}
+
+    if (!cancelResponse.ok) {
+      throw new Error(`Falha ao cancelar pré-aprovação ${externalId}: HTTP ${cancelResponse.status}`);
+    }
+
+    const finalStatus = String(canceled?.status || '').toLowerCase();
+    if (finalStatus && finalStatus !== 'cancelled' && finalStatus !== 'canceled') {
+      throw new Error(`Mercado Pago não confirmou o cancelamento da pré-aprovação ${externalId}.`);
+    }
+  }
+}
+
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
@@ -677,48 +790,117 @@ async function handlePatchUser(req, res, session) {
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
   if (!VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Plano inválido.' });
 
-  // P0.1: valida usuário e plano ANTES de qualquer operação externa
-  let user, planRow = null;
+  let user;
+  let planRow = null;
+
   try {
-    const [u] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+    const [u] = await db.select({
+      id: users.id,
+      email: users.email
+    }).from(users).where(eq(users.id, userId)).limit(1);
+
     if (!u) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
     user = u;
 
     if (plan !== 'free') {
-      const rows = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
-      planRow = rows[0] || null;
-      if (!planRow) return sendJson(res, 400, { ok: false, error: 'Plano inexistente no banco.' });
+      const availablePlans = await db.select({
+        id: plans.id,
+        name: plans.name,
+        intervalUnit: plans.intervalUnit,
+        intervalCount: plans.intervalCount,
+        active: plans.active
+      }).from(plans).where(eq(plans.active, true));
+
+      const matches = availablePlans.filter((p) =>
+        normalizePlanCode(p.name, p.intervalUnit) === plan
+      );
+
+      if (matches.length === 0) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: `Não existe plano comercial ativo correspondente a "${plan}".`
+        });
+      }
+
+      if (matches.length > 1) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: `Há mais de um plano comercial correspondente a "${plan}". Corrija a configuração dos planos no banco.`
+        });
+      }
+
+      planRow = matches[0];
     }
   } catch (err) {
     console.error('[admin] patchUser validação:', err);
     return sendJson(res, 500, { ok: false, error: 'Falha ao validar operação.' });
   }
 
-  const planDays = plan === 'anual' ? 365
-    : plan === 'trimestral' ? 90
-    : plan === 'semestral' ? 180
-    : 30;
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let periodEnd = null;
 
-  // P0.1: transação única — cancelamento e criação no mesmo commit
+  if (planRow) {
+    const count = Math.max(1, Number(planRow.intervalCount) || 1);
+    const unit = String(planRow.intervalUnit || '').toLowerCase();
+
+    periodEnd = new Date(now);
+
+    if (['year', 'years', 'yr'].includes(unit)) {
+      periodEnd.setFullYear(periodEnd.getFullYear() + count);
+    } else if (['month', 'months', 'mo'].includes(unit)) {
+      const day = periodEnd.getDate();
+      periodEnd.setDate(1);
+      periodEnd.setMonth(periodEnd.getMonth() + count);
+      const lastDay = new Date(
+        periodEnd.getFullYear(),
+        periodEnd.getMonth() + 1,
+        0
+      ).getDate();
+      periodEnd.setDate(Math.min(day, lastDay));
+    } else if (['week', 'weeks'].includes(unit)) {
+      periodEnd.setDate(periodEnd.getDate() + (7 * count));
+    } else {
+      periodEnd.setDate(periodEnd.getDate() + count);
+    }
+  }
+
+  try {
+    await cancelExternalSubscriptionsForUser(userId);
+  } catch (err) {
+    console.error('[admin] falha ao cancelar assinatura externa antes da troca de plano:', err.message);
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Não foi possível cancelar a cobrança recorrente no Mercado Pago. O plano local não foi alterado.'
+    });
+  }
+
   try {
     await db.transaction(async (tx) => {
-      await tx.update(schema.subscriptions)
-        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+      await tx.update(subscriptions)
+        .set({
+          status: 'CANCELLED',
+          updatedAt: nowIso
+        })
         .where(and(
-          eq(schema.subscriptions.userId, userId),
-          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
+          eq(subscriptions.userId, userId),
+          inArray(subscriptions.status, [
+            'ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'
+          ])
         ));
 
       if (planRow) {
-        await tx.insert(schema.subscriptions).values({
+        await tx.insert(subscriptions).values({
           id: crypto.randomUUID(),
           userId,
           planId: planRow.id,
-          externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          // Assinatura manual não possui ID de pré-aprovação no gateway.
+          externalSubscriptionId: null,
           status: 'ACTIVE',
-          currentPeriodStart: new Date().toISOString(),
-          currentPeriodEnd: addDaysIso(planDays),
-          updatedAt: new Date().toISOString()
+          currentPeriodStart: nowIso,
+          currentPeriodEnd: periodEnd.toISOString(),
+          updatedAt: nowIso,
+          payerEmail: user.email
         });
       }
     });
@@ -727,13 +909,58 @@ async function handlePatchUser(req, res, session) {
     return sendJson(res, 500, { ok: false, error: 'Falha ao atualizar plano.' });
   }
 
-  try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
-  catch (e) { console.warn('[admin] audit user.plan.change falhou:', e.message); }
+  try {
+    await audit('user.plan.change', {
+      actor: session.user,
+      target: userId,
+      metadata: { plan, planId: planRow?.id || null }
+    });
+  } catch (e) {
+    console.warn('[admin] audit user.plan.change falhou:', e.message);
+  }
 
-  // Invalida cache de permissão do usuário
   try {
     const { invalidateUserCache } = require('./_cache');
-    await invalidateUserCache(userId);
+    const invalidated = await invalidateUserCache(userId);
+    if (!invalidated) {
+      console.warn('[admin] cache do usuário não foi invalidado; a autorização deve continuar sendo validada no banco.');
+    }
+  } catch (e) {
+    console.warn('[admin] invalidateUserCache falhou:', e.message);
+  }
+
+  return sendJson(res, 200, { ok: true, plan });
+}
+
+
+          currentPeriodStart: nowIso,
+          currentPeriodEnd: periodEnd.toISOString(),
+          updatedAt: nowIso,
+          payerEmail: user.email
+        });
+      }
+    });
+  } catch (err) {
+    console.error('[admin] patchUser transação:', err);
+    return sendJson(res, 500, { ok: false, error: 'Falha ao atualizar plano.' });
+  }
+
+  try {
+    await audit('user.plan.change', {
+      actor: session.user,
+      target: userId,
+      metadata: { plan, planId: planRow?.id || null }
+    });
+  } catch (e) {
+    console.warn('[admin] audit user.plan.change falhou:', e.message);
+  }
+
+  try {
+    const { invalidateUserCache } = require('./_cache');
+    const invalidated = await invalidateUserCache(userId);
+    if (!invalidated) {
+      console.warn('[admin] cache do usuário não foi invalidado; a autorização deve continuar sendo validada no banco.');
+    }
   } catch (e) {
     console.warn('[admin] invalidateUserCache falhou:', e.message);
   }
@@ -766,6 +993,16 @@ async function handleDeleteUser(req, res, session) {
   if (!user) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
 
   try {
+    await cancelExternalSubscriptionsForUser(userId);
+  } catch (err) {
+    console.error('[admin] falha ao cancelar assinatura externa antes da anonimização:', err.message);
+    return sendJson(res, 502, {
+      ok: false,
+      error: 'Não foi possível cancelar a cobrança recorrente no Mercado Pago. O usuário não foi anonimizado.'
+    });
+  }
+
+  try {
     await db.transaction(async (tx) => {
       // Cancela assinaturas
       await tx.update(schema.subscriptions)
@@ -776,11 +1013,22 @@ async function handleDeleteUser(req, res, session) {
         ));
 
       // Anonimiza dados pessoais
+      const anonymizedAt = new Date().toISOString();
+
+      // Invalida tokens de atualização e versões de sessão existentes.
+      await tx.update(schema.refreshTokens)
+        .set({ revokedAt: anonymizedAt })
+        .where(and(
+          eq(schema.refreshTokens.userId, userId),
+          isNull(schema.refreshTokens.revokedAt)
+        ));
+
       await tx.update(users).set({
         email: `anon_${userId}@deleted.local`,
         name: 'Usuário Anonimizado',
         passwordHash: null,
-        updatedAt: new Date().toISOString()
+        sessionVersion: sql`${users.sessionVersion} + 1`,
+        updatedAt: anonymizedAt
       }).where(eq(users.id, userId));
     });
   } catch (err) {
@@ -904,7 +1152,8 @@ async function handleDeleteAlbum(req, res, session) {
     await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
       const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
-      if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
+
+
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
@@ -1125,6 +1374,8 @@ async function handleReorderTracks(req, res, session) {
   try { await audit('track.reorder', { actor: session.user, metadata: { albumId, count: order.length } }); }
   catch (e) { console.warn('[admin] audit track.reorder falhou:', e.message); }
   return sendJson(res, 200, { ok: true });
+
+
 }
 
 async function handleUpdateLyrics(req, res, session) {
@@ -1191,7 +1442,7 @@ async function handleDownloadAlbum(req, res, session) {
   const results = [];
   const queue = rows.slice();
   const CONCURRENCY = 3;
-  
+
   async function worker() {
     while (queue.length) {
       const t = queue.shift();
@@ -1208,6 +1459,7 @@ async function handleDownloadAlbum(req, res, session) {
       } catch { results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Falha ao gerar link' }); }
     }
   }
+
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   const byId = new Map(results.map(r => [r.id, r]));
@@ -1287,7 +1539,8 @@ async function handleGetSales(req, res) {
       : await orderBase.orderBy(desc(orders.createdAt)).limit(500);
 
     // Agregações sem depender das listas limitadas a 500 linhas.
-    const aggregateResult = await db.execute(drizzleSql`      SELECT
+    const aggregateResult = await db.execute(drizzleSql`
+      SELECT
         (SELECT COUNT(*) FROM subscriptions s
           WHERE (${cutoff}::timestamptz IS NULL OR s.created_at >= ${cutoff}::timestamptz))::int AS subscriptions_total,
         (SELECT COUNT(*) FROM subscriptions s
@@ -1414,4 +1667,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-                         }
+}
