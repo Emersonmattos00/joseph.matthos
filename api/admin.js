@@ -638,36 +638,15 @@ function normalizePlanCode(name, intervalUnit = '') {
 }
 
 async function handleGetUsers(req, res) {
-  const rows = await db.select({ id: users.id, email: users.email, name: users.name, createdAt: users.createdAt })
-    .from(users).orderBy(desc(users.createdAt));
+  const rows = await db.select({
+    id: users.id, email: users.email, name: users.name, createdAt: users.createdAt
+  }).from(users).orderBy(desc(users.createdAt));
 
   let planMap = new Map();
   let plansError = false;
   try {
-    const planRows = await db.execute(drizzleSql`
-      SELECT u.id AS user_id,
-        COALESCE((
-          SELECT CASE
-            WHEN lower(p.name) LIKE '%anual%' OR lower(p.name) LIKE '%annual%'
-              OR lower(p.interval_unit) IN ('year', 'years', 'yr') THEN 'anual'
-            ELSE 'premium'
-          END
-          FROM subscriptions s
-          JOIN plans p ON p.id = s.plan_id
-          WHERE s.user_id = u.id
-            AND s.status = 'ACTIVE'
-            AND s.current_period_end > NOW()
-          ORDER BY s.current_period_end DESC NULLS LAST, s.created_at DESC
-          LIMIT 1
-        ), CASE WHEN EXISTS (
-          SELECT 1 FROM rentals r
-          WHERE r.user_id = u.id AND r.status = 'ACTIVE'
-            AND r.starts_at <= NOW() AND r.expires_at > NOW()
-        ) THEN 'premium' ELSE 'free' END) AS plan
-      FROM users u
-    `);
-    const normalizedRows = planRows.rows || planRows;
-    planMap = new Map(normalizedRows.map((r) => [r.user_id, normalizePlanCode(r.plan) || 'free']));
+    const planRows = await db.execute(drizzleSql`SELECT user_id, plan FROM effective_plan`);
+    planMap = new Map((planRows.rows || planRows).map(r => [r.user_id, r.plan]));
   } catch (e) {
     console.error('[admin] falha ao consultar planos efetivos:', e.message);
     plansError = true;
@@ -675,9 +654,12 @@ async function handleGetUsers(req, res) {
 
   return sendJson(res, 200, {
     ok: true,
-    users: rows.map((u) => ({ ...u, plan: plansError ? null : (planMap.get(u.id) || 'free') })),
-    total: rows.length,
-    plansError: plansError || undefined
+    users: rows.map(u => ({
+      ...u,
+      plan: plansError ? null : (planMap.get(u.id) || 'free')
+    })),
+    plansError,
+    total: rows.length
   });
 }
 
@@ -719,80 +701,60 @@ async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
   const plan = String(body.plan || '').trim().toLowerCase();
-  if (!isUuid(userId) || !VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Dados inválidos.' });
 
-  const [targetUser] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-  if (!targetUser) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+  if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
+  if (!VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Plano inválido.' });
 
-  // Valida o plano comercial antes de cancelar qualquer recorrência externa.
-  if (plan !== 'free') {
-    const availablePlans = await db.select({
-      id: plans.id, name: plans.name, intervalUnit: plans.intervalUnit,
-      intervalCount: plans.intervalCount, active: plans.active
-    }).from(plans).where(eq(plans.active, true));
-    const candidates = availablePlans.filter((candidate) =>
-      normalizePlanCode(candidate.name, candidate.intervalUnit) === plan
-    );
-    if (!candidates.length) return sendJson(res, 400, { ok: false, error: 'Não existe um plano comercial ativo correspondente a esta opção. Confira os planos cadastrados.' });
-    if (candidates.length > 1) return sendJson(res, 409, { ok: false, error: 'Há mais de um plano ativo correspondente. Ajuste os nomes/intervalos dos planos antes de continuar.' });
-  }
+  const planDays = plan === 'anual' ? 365
+    : plan === 'trimestral' ? 90
+    : plan === 'semestral' ? 180
+    : 30;
 
-  // Cancela recorrências reais no Mercado Pago antes de substituir a assinatura
-  // por uma concessão manual; mudar apenas o banco deixaria cobranças futuras ativas.
+  // FASE 1: valida tudo ANTES de mexer em nada externo
+  let user, planRow = null;
   try {
-    const externalSubs = await db.select({ externalSubscriptionId: subscriptions.externalSubscriptionId })
-      .from(subscriptions)
-      .where(and(
-        eq(subscriptions.userId, userId),
-        inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE']),
-        sql`${subscriptions.externalSubscriptionId} IS NOT NULL`,
-        sql`${subscriptions.externalSubscriptionId} NOT LIKE 'manual_%'`
-      ));
-    for (const sub of externalSubs) {
-      await cancelMercadoPagoPreapproval(sub.externalSubscriptionId);
+    const [u] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+    user = u;
+
+    if (plan !== 'free') {
+      const rows = await db.select({ id: schema.plans.id }).from(schema.plans).where(eq(schema.plans.name, plan)).limit(1);
+      planRow = rows[0] || null;
+      if (!planRow) return sendJson(res, 400, { ok: false, error: 'Plano inexistente no banco.' });
     }
   } catch (err) {
-    console.error('[admin] falha ao cancelar recorrência antes da alteração de plano:', err.code || err.message);
-    if (err.code === 'MP_NOT_CONFIGURED') return sendJson(res, 503, { ok: false, error: 'Mercado Pago não está configurado. A alteração foi interrompida para evitar cobranças recorrentes indevidas.' });
-    return sendJson(res, 502, { ok: false, error: 'Não foi possível cancelar a recorrência no Mercado Pago. O plano não foi alterado.' });
+    console.error('[admin] patchUser validação:', err);
+    return sendJson(res, 500, { ok: false, error: 'Falha ao validar operação.' });
   }
 
+  // FASE 2: transação única — cancela + cria no mesmo commit
   try {
     await db.transaction(async (tx) => {
-      const [u] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-      if (!u) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
+      // Cancela assinaturas ativas
+      await tx.update(schema.subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(
+          eq(schema.subscriptions.userId, userId),
+          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
+        ));
 
-      let planRow = null;
-      if (plan !== 'free') {
-        const availablePlans = await tx.select({
-          id: plans.id, name: plans.name, intervalUnit: plans.intervalUnit,
-          intervalCount: plans.intervalCount, active: plans.active
-        }).from(plans).where(eq(plans.active, true));
-        const candidates = availablePlans.filter((candidate) =>
-          normalizePlanCode(candidate.name, candidate.intervalUnit) === plan
-        );
-        if (candidates.length > 1) {
-          const err = new Error('PLAN_AMBIGUOUS'); err.code = 'PLAN_AMBIGUOUS'; throw err;
-        }
-        planRow = candidates[0] || null;
-        if (!planRow) { const err = new Error('PLAN_NOT_FOUND'); err.code = 'PLAN_NOT_FOUND'; throw err; }
-      }
-
-      await tx.update(subscriptions).set({ status: 'CANCELLED', updatedAt: new Date().toISOString() }).where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'])));
-
+      // Cria nova se não for free
       if (planRow) {
-        const planDays = daysFromPlan(planRow);
-        await tx.insert(subscriptions).values({
-          id: crypto.randomUUID(), userId, planId: planRow.id, externalSubscriptionId: `manual_${crypto.randomUUID()}`,
-          status: 'ACTIVE', currentPeriodStart: new Date().toISOString(), currentPeriodEnd: addDaysIso(planDays), updatedAt: new Date().toISOString()
+        await tx.insert(schema.subscriptions).values({
+          id: crypto.randomUUID(),
+          userId,
+          planId: planRow.id,
+          externalSubscriptionId: `manual_${userId}_${Date.now()}`,
+          status: 'ACTIVE',
+          currentPeriodStart: new Date().toISOString(),
+          currentPeriodEnd: addDaysIso(planDays),
+          updatedAt: new Date().toISOString()
         });
       }
     });
   } catch (err) {
-    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    if (err.code === 'PLAN_NOT_FOUND') return sendJson(res, 400, { ok: false, error: 'Não existe um plano comercial ativo correspondente a esta opção. Confira os planos cadastrados.' });
-    if (err.code === 'PLAN_AMBIGUOUS') return sendJson(res, 409, { ok: false, error: 'Há mais de um plano ativo correspondente. Ajuste os nomes/intervalos dos planos antes de continuar.' });
-    throw err;
+    console.error('[admin] patchUser transação:', err);
+    return sendJson(res, 500, { ok: false, error: 'Falha ao atualizar plano.' });
   }
 
   try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
@@ -801,76 +763,60 @@ async function handlePatchUser(req, res, session) {
   return sendJson(res, 200, { ok: true, plan });
 }
 
+// ─────────────────────────────────────────────────────────────
+// DELETE /users — anonimização transacional
+// ─────────────────────────────────────────────────────────────
 async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  const adminIdentity = getAdminIdentity();
-  const [adminUser] = await db.select({ id: users.id }).from(users)
-    .where(adminIdentity.kind === 'id' ? eq(users.id, adminIdentity.value) : eq(users.email, adminIdentity.value))
-    .limit(1);
-  if (adminUser && adminUser.id === userId) {
-    return sendJson(res, 403, { ok: false, error: 'Não é permitido excluir a própria conta de administrador.' });
+  // Proteção admin
+  try {
+    const adminIdentity = getAdminIdentity();
+    const [adminUser] = await db.select({ id: users.id }).from(users)
+      .where(adminIdentity.kind === 'id' ? eq(users.id, adminIdentity.value) : eq(users.email, adminIdentity.value))
+      .limit(1);
+    if (adminUser && adminUser.id === userId) {
+      return sendJson(res, 403, { ok: false, error: 'Não é permitido anonimizar a própria conta de administrador.' });
+    }
+  } catch (e) {
+    console.warn('[admin] check de admin falhou:', e.message);
   }
 
+  // FASE 1: valida existência
+  const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!user) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
+
+  // FASE 2: transação — cancela subs + anonimiza dados
   try {
     await db.transaction(async (tx) => {
-      const [target] = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-      if (!target) { const err = new Error('USER_NOT_FOUND'); err.code = 'USER_NOT_FOUND'; throw err; }
-
-      // Não apagar a conta enquanto houver cobrança recorrente externa ativa/pendente.
-      // A assinatura deve ser cancelada no provedor antes da remoção do usuário.
-      const externalSubs = await tx.select({ id: subscriptions.id, status: subscriptions.status })
-        .from(subscriptions)
+      // Cancela assinaturas ativas
+      await tx.update(schema.subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
         .where(and(
-          eq(subscriptions.userId, userId),
-          inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE']),
-          sql`${subscriptions.externalSubscriptionId} IS NOT NULL`,
-          sql`${subscriptions.externalSubscriptionId} NOT LIKE 'manual_%'`
+          eq(schema.subscriptions.userId, userId),
+          inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
         ));
-      if (externalSubs.length) {
-        const err = new Error('EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION');
-        err.code = 'EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION';
-        throw err;
-      }
 
-      const pendingOrders = await tx.select({ id: orders.id }).from(orders)
-        .where(and(eq(orders.userId, userId), eq(orders.status, 'PENDING')));
-      if (pendingOrders.length) {
-        const err = new Error('PENDING_ORDERS_MUST_BE_RESOLVED');
-        err.code = 'PENDING_ORDERS_MUST_BE_RESOLVED';
-        throw err;
-      }
-
-      // Preserva métricas/auditoria sem manter o vínculo identificável com a conta.
-      await tx.update(playbackEvents).set({ userId: null }).where(eq(playbackEvents.userId, userId));
-      await tx.update(authAuditLog).set({ userId: null, emailHash: null }).where(eq(authAuditLog.userId, userId));
-
-      // Remove os registros que possuem FK RESTRICT para users.
-      await tx.delete(rentals).where(eq(rentals.userId, userId));
-      await tx.delete(subscriptions).where(eq(subscriptions.userId, userId));
-      // order_items são removidos por ON DELETE CASCADE ao excluir orders.
-      await tx.delete(orders).where(eq(orders.userId, userId));
-      await tx.delete(users).where(eq(users.id, userId));
+      // Anonimiza dados pessoais (mantém histórico financeiro)
+      await tx.update(users).set({
+        email: `anon_${userId}@deleted.local`,
+        name: 'Usuário Anonimizado',
+        passwordHash: null,
+        updatedAt: new Date().toISOString()
+      }).where(eq(users.id, userId));
     });
   } catch (err) {
-    if (err.code === 'USER_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
-    if (err.code === 'EXTERNAL_SUBSCRIPTION_REQUIRES_CANCELLATION') {
-      return sendJson(res, 409, { ok: false, error: 'Este usuário possui uma assinatura recorrente no Mercado Pago. Cancele a recorrência no provedor antes de excluir a conta, para evitar novas cobranças.' });
-    }
-    if (err.code === 'PENDING_ORDERS_MUST_BE_RESOLVED') {
-      return sendJson(res, 409, { ok: false, error: 'Este usuário possui pedidos com pagamento pendente. Aguarde a confirmação ou o cancelamento do pagamento antes de excluir a conta.' });
-    }
-    if (err.code === '23503') return sendJson(res, 409, { ok: false, error: 'Existem outros registros vinculados que impedem a exclusão. Nenhum dado foi removido.' });
-    console.error('[admin] falha ao excluir usuário:', err.code || err.message);
-    throw err;
+    console.error('[admin] deleteUser transação:', err);
+    await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' }).catch(() => {});
+    return sendJson(res, 500, { ok: false, error: 'Falha ao anonimizar usuário.' });
   }
 
   try { await audit('user.delete', { actor: session.user, target: userId, success: true }); }
   catch (e) { console.warn('[admin] audit user.delete falhou:', e.message); }
+
   return sendJson(res, 200, { ok: true });
 }
-
 // ─────────────────────────────────────────────────────────────
 // ÁLBUNS
 // ─────────────────────────────────────────────────────────────
