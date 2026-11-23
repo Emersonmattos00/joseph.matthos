@@ -1,15 +1,19 @@
 'use strict';
 
 /* ============================================================
-   api/_cache.js — Redis / Upstash (v1.1)
+   api/_cache.js — Redis / Upstash (v1.2 — Auditoria corrigida)
    ------------------------------------------------------------
-   Correções da auditoria de usuários:
-   1. invalidateUserCache() centralizado
-   2. Expõe versão da chave para auditoria
-   3. Trata falha de Redis sem mascarar erro de plano
+   Correções da auditoria v1.1:
+   1. invalidateUserCache() retorna false quando falha parcial
+   2. Integra invalidação de plano (invalidatePlanCache)
+   3. hashIp() usa HMAC com segredo
+   4. normalizeIdentifier() valida UUID
+   5. Expõe redisConfigured (não disponibilidade)
+   6. Padroniza variáveis de ambiente (KV_* e UPSTASH_*)
+   7. Valida estrutura do cache lido
    ============================================================ */
 
-const { createHash } = require('node:crypto');
+const { createHash, createHmac } = require('node:crypto');
 const { isIP } = require('node:net');
 
 // ─────────────────────────────────────────────────────────────
@@ -23,12 +27,15 @@ const RATE_LIMIT_WINDOW = '60 s';
 const DEFAULT_CACHE_TTL = 300;
 const MAX_CACHE_TTL = 3600;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 let redis = null;
 let streamRatelimit = null;
 let redisConfigured = false;
 
-const url = process.env.UPSTASH_REDIS_REST_URL;
-const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+// P2.6: padroniza variáveis (KV_* como fallback)
+const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
 // ─────────────────────────────────────────────────────────────
 // VALIDAÇÃO DA CONFIGURAÇÃO
@@ -75,7 +82,7 @@ if (validateRedisConfig()) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// VALIDAÇÃO DE IDENTIFICADORES
+// VALIDAÇÃO DE IDENTIFICADORES (P2.4)
 // ─────────────────────────────────────────────────────────────
 function normalizeIdentifier(value) {
   if (typeof value !== 'string') return null;
@@ -84,14 +91,40 @@ function normalizeIdentifier(value) {
   return normalized;
 }
 
+// P2.4: valida UUID antes de montar chave de cache
+function normalizeUuid(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!UUID_RE.test(normalized)) return null;
+  return normalized;
+}
+
 // ─────────────────────────────────────────────────────────────
-// IDENTIFICAÇÃO PRIVADA DO IP (hash SHA-256)
+// HASH DE IP (P2.3: HMAC com segredo)
 // ─────────────────────────────────────────────────────────────
+function getHashSecret() {
+  const s = String(process.env.RATE_LIMIT_HASH_SECRET || '').trim();
+  if (s.length >= 32) return s;
+  const j = String(process.env.JWT_SECRET || '').trim();
+  if (j.length >= 32) return `cache:${j}`;
+  return null;
+}
+
 function hashIp(ip) {
   if (typeof ip !== 'string') return null;
   const normalized = ip.trim();
   if (!isIP(normalized)) return null;
-  return createHash('sha256').update(normalized).digest('hex');
+
+  const secret = getHashSecret();
+  if (!secret) {
+    if (IS_PRODUCTION) {
+      console.error('[cache] RATE_LIMIT_HASH_SECRET/JWT_SECRET ausente — hash inseguro bloqueado.');
+      return null;
+    }
+    console.warn('[cache] Hash de IP sem segredo (dev).');
+    return createHash('sha256').update(normalized).digest('hex');
+  }
+  return createHmac('sha256', secret).update(normalized).digest('hex');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -146,13 +179,13 @@ async function getAccessVersion(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CONSULTAR CACHE
+// CONSULTAR CACHE (P2.7: valida estrutura)
 // ─────────────────────────────────────────────────────────────
 async function getCachedAccess(userId, trackId) {
   if (!redisConfigured || !redis) return null;
 
-  const safeUserId = normalizeIdentifier(userId);
-  const safeTrackId = normalizeIdentifier(trackId);
+  const safeUserId = normalizeUuid(userId);
+  const safeTrackId = normalizeUuid(trackId);
   if (!safeUserId || !safeTrackId) return null;
 
   try {
@@ -160,7 +193,18 @@ async function getCachedAccess(userId, trackId) {
     if (!Number.isSafeInteger(version) || version < 0) return null;
 
     const key = accessCacheKey(safeUserId, version, safeTrackId);
-    return await redis.get(key);
+    const raw = await redis.get(key);
+    if (raw === null || raw === undefined) return null;
+
+    // P2.7: valida estrutura do cache
+    let parsed = raw;
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); } catch { return null; }
+    }
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.allowed !== 'boolean') return null;
+
+    return parsed;
   } catch (error) {
     console.error('[cache] getCachedAccess:', error.message);
     return null;
@@ -173,22 +217,22 @@ async function getCachedAccess(userId, trackId) {
 async function setCachedAccess(userId, trackId, access, ttlSeconds = DEFAULT_CACHE_TTL) {
   if (!redisConfigured || !redis) return false;
 
-  const safeUserId = normalizeIdentifier(userId);
-  const safeTrackId = normalizeIdentifier(trackId);
+  const safeUserId = normalizeUuid(userId);
+  const safeTrackId = normalizeUuid(trackId);
   if (!safeUserId || !safeTrackId) return false;
 
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1 || ttlSeconds > MAX_CACHE_TTL) {
     throw new RangeError('TTL do cache deve estar entre 1 e 3600 segundos.');
   }
 
-  if (access === undefined || access === null) return false;
+  if (!access || typeof access !== 'object' || typeof access.allowed !== 'boolean') return false;
 
   try {
     const version = await getAccessVersion(safeUserId);
     if (!Number.isSafeInteger(version) || version < 0) return false;
 
     const key = accessCacheKey(safeUserId, version, safeTrackId);
-    await redis.set(key, access, { ex: ttlSeconds });
+    await redis.set(key, JSON.stringify(access), { ex: ttlSeconds });
     return true;
   } catch (error) {
     console.error('[cache] setCachedAccess:', error.message);
@@ -197,12 +241,12 @@ async function setCachedAccess(userId, trackId, access, ttlSeconds = DEFAULT_CAC
 }
 
 // ─────────────────────────────────────────────────────────────
-// INVALIDAÇÃO DE PERMISSÕES (barata)
+// INVALIDAÇÃO DE PERMISSÕES
 // ─────────────────────────────────────────────────────────────
 async function invalidateAccessCache(userId) {
   if (!redisConfigured || !redis) return false;
 
-  const safeUserId = normalizeIdentifier(userId);
+  const safeUserId = normalizeUuid(userId);
   if (!safeUserId) return false;
 
   try {
@@ -215,23 +259,32 @@ async function invalidateAccessCache(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// INVALIDAÇÃO DE USUÁRIO (integra com admin.js)
+// INVALIDAÇÃO DE USUÁRIO (P1.1 + P1.2)
 // ─────────────────────────────────────────────────────────────
 async function invalidateUserCache(userId) {
-  if (!redisConfigured || !redis) return false;
-
-  const safeUserId = normalizeIdentifier(userId);
+  const safeUserId = normalizeUuid(userId);
   if (!safeUserId) return false;
+
+  if (!redisConfigured || !redis) {
+    // Sem Redis configurado, não há nada a invalidar
+    return false;
+  }
 
   try {
     const results = await Promise.allSettled([
       redis.incr(accessVersionKey(safeUserId)),
-      redis.del(`users:list`)
+      redis.del(`users:list`),
+      redis.del(`plan:${safeUserId}`)
     ]);
+
     const failed = results.filter(r => r.status === 'rejected');
     if (failed.length) {
-      console.warn('[cache] invalidateUserCache parcial:', failed.map(f => f.reason?.message).join('; '));
+      const msg = failed.map(f => f.reason?.message || 'erro').join('; ');
+      console.error('[cache] invalidateUserCache falhou parcialmente:', msg);
+      // P1.1: retorna false quando qualquer operação obrigatória falha
+      return false;
     }
+
     return true;
   } catch (error) {
     console.error('[cache] invalidateUserCache:', error.message);
@@ -240,7 +293,7 @@ async function invalidateUserCache(userId) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SAÚDE DO CACHE
+// SAÚDE DO CACHE (P2.5)
 // ─────────────────────────────────────────────────────────────
 async function getCacheHealth() {
   if (!redisConfigured) return { ok: false, reason: 'not_configured' };
@@ -259,6 +312,12 @@ module.exports = {
   redis,
   streamRatelimit,
 
+  // P2.5: nome reflete o que realmente é (config vs disponibilidade)
+  get redisConfigured() {
+    return redisConfigured;
+  },
+
+  // Mantido por compatibilidade — use getCacheHealth() para disponibilidade real
   get redisAvailable() {
     return redisConfigured;
   },
