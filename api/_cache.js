@@ -1,12 +1,12 @@
 'use strict';
 
 /* ============================================================
-   api/_cache.js — Redis / Upstash
+   api/_cache.js — Redis / Upstash (v1.1)
    ------------------------------------------------------------
-   - Rate limit de streaming por IP (hash SHA-256)
-   - Cache de permissões com versionamento (invalidação barata)
-   - Fail-closed em produção quando Redis falha
-   - Diferenciação clara: limite vs indisponibilidade
+   Correções da auditoria de usuários:
+   1. invalidateUserCache() centralizado
+   2. Expõe versão da chave para auditoria
+   3. Trata falha de Redis sem mascarar erro de plano
    ============================================================ */
 
 const { createHash } = require('node:crypto');
@@ -206,13 +206,49 @@ async function invalidateAccessCache(userId) {
   if (!safeUserId) return false;
 
   try {
-    // Ao incrementar a versão, todas as chaves antigas (que incluem a versão no nome)
-    // passam a ser ignoradas automaticamente. Não é necessário apagar chaves.
     await redis.incr(accessVersionKey(safeUserId));
     return true;
   } catch (error) {
     console.error('[cache] invalidateAccessCache:', error.message);
     return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// INVALIDAÇÃO DE USUÁRIO (integra com admin.js)
+// ─────────────────────────────────────────────────────────────
+async function invalidateUserCache(userId) {
+  if (!redisConfigured || !redis) return false;
+
+  const safeUserId = normalizeIdentifier(userId);
+  if (!safeUserId) return false;
+
+  try {
+    const results = await Promise.allSettled([
+      redis.incr(accessVersionKey(safeUserId)),
+      redis.del(`users:list`)
+    ]);
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length) {
+      console.warn('[cache] invalidateUserCache parcial:', failed.map(f => f.reason?.message).join('; '));
+    }
+    return true;
+  } catch (error) {
+    console.error('[cache] invalidateUserCache:', error.message);
+    return false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// SAÚDE DO CACHE
+// ─────────────────────────────────────────────────────────────
+async function getCacheHealth() {
+  if (!redisConfigured) return { ok: false, reason: 'not_configured' };
+  try {
+    const pong = await redis.ping();
+    return { ok: pong === 'PONG' || pong === true };
+  } catch (error) {
+    return { ok: false, reason: error.message };
   }
 }
 
@@ -230,5 +266,7 @@ module.exports = {
   checkStreamRateLimit,
   getCachedAccess,
   setCachedAccess,
-  invalidateAccessCache
+  invalidateAccessCache,
+  invalidateUserCache,
+  getCacheHealth
 };
