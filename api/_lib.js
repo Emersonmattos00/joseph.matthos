@@ -1,3 +1,4 @@
+
 'use strict';
 
 /* ============================================================
@@ -164,7 +165,9 @@ const AUTH_COOKIE_NAMES = new Set([AUTH_COOKIE, REFRESH_COOKIE]);
 
 // P2.3: rejeita cabeçalho inteiro se ultrapassar limites
 function parseCookies(header) {
-  const out = {};
+  // Objeto sem protótipo: nomes de cookies controlados pelo cliente não
+  // podem sobrescrever propriedades herdadas como __proto__/constructor.
+  const out = Object.create(null);
   if (!header) return out;
   const raw = String(header);
   if (raw.length > MAX_COOKIE_HEADER_LEN) {
@@ -243,9 +246,8 @@ function buildCookie(name, value, maxAge, opts = {}) {
     'SameSite=' + sameSite,
   ];
 
-  if (IS_PROD) {
-    parts.push('Secure');
-  } else if (!ALLOW_INSECURE_COOKIE) {
+  // SameSite=None exige Secure nos navegadores, inclusive em desenvolvimento.
+  if (IS_PROD || !ALLOW_INSECURE_COOKIE || sameSite === 'None') {
     parts.push('Secure');
   }
 
