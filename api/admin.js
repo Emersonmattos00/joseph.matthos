@@ -154,7 +154,7 @@ module.exports = async function handler(req, res) {
       case 'upload-confirm': if (method === 'POST') return handleUploadConfirm(req, res, session); break;
       case 'reconcile-uploads': if (method === 'POST') return handleReconcileUploads(req, res, session); break;
       case 'users':
-        if (method === 'GET') return handleGetUsers(req, res);
+        if (method === 'GET') return (req, res);
         if (method === 'PATCH') return handlePatchUser(req, res, session);
         if (method === 'DELETE') return handleDeleteUser(req, res, session);
         break;
@@ -637,6 +637,9 @@ function normalizePlanCode(name, intervalUnit = '') {
   return null;
 }
 
+// ─────────────────────────────────────────────────────────────
+// GET /users — com plansError explícito
+// ─────────────────────────────────────────────────────────────
 async function handleGetUsers(req, res) {
   const rows = await db.select({
     id: users.id, email: users.email, name: users.name, createdAt: users.createdAt
@@ -663,40 +666,9 @@ async function handleGetUsers(req, res) {
   });
 }
 
-async function cancelMercadoPagoPreapproval(preapprovalId) {
-  const token = String(process.env.MP_ACCESS_TOKEN || '').trim();
-  if (!token) {
-    const err = new Error('MP_ACCESS_TOKEN ausente; não é seguro alterar a assinatura recorrente.');
-    err.code = 'MP_NOT_CONFIGURED';
-    throw err;
-  }
-  const response = await fetch(`https://api.mercadopago.com/preapproval/${encodeURIComponent(preapprovalId)}`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json'
-    },
-    body: JSON.stringify({ status: 'cancelled' }),
-    signal: AbortSignal.timeout(12_000)
-  });
-  if (!response.ok) {
-    const err = new Error(`Mercado Pago recusou o cancelamento da recorrência (HTTP ${response.status}).`);
-    err.code = 'MP_CANCELLATION_FAILED';
-    throw err;
-  }
-}
-
-function daysFromPlan(planRow) {
-  const unit = String(planRow.intervalUnit || '').toLowerCase();
-  const count = Number(planRow.intervalCount) || 1;
-  if (unit === 'day' || unit === 'days') return count;
-  if (unit === 'week' || unit === 'weeks') return count * 7;
-  if (unit === 'month' || unit === 'months') return count * 30;
-  if (unit === 'year' || unit === 'years') return count * 365;
-  return 30;
-}
-
+// ─────────────────────────────────────────────────────────────
+// PATCH /users — valida ANTES de cancelar externo
+// ─────────────────────────────────────────────────────────────
 async function handlePatchUser(req, res, session) {
   const body = parseBody(req);
   const userId = String(body.userId || '').trim();
@@ -705,12 +677,7 @@ async function handlePatchUser(req, res, session) {
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
   if (!VALID_PLANS.has(plan)) return sendJson(res, 400, { ok: false, error: 'Plano inválido.' });
 
-  const planDays = plan === 'anual' ? 365
-    : plan === 'trimestral' ? 90
-    : plan === 'semestral' ? 180
-    : 30;
-
-  // FASE 1: valida tudo ANTES de mexer em nada externo
+  // P0.1: valida usuário e plano ANTES de qualquer operação externa
   let user, planRow = null;
   try {
     const [u] = await db.select({ id: users.id, email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
@@ -727,10 +694,14 @@ async function handlePatchUser(req, res, session) {
     return sendJson(res, 500, { ok: false, error: 'Falha ao validar operação.' });
   }
 
-  // FASE 2: transação única — cancela + cria no mesmo commit
+  const planDays = plan === 'anual' ? 365
+    : plan === 'trimestral' ? 90
+    : plan === 'semestral' ? 180
+    : 30;
+
+  // P0.1: transação única — cancelamento e criação no mesmo commit
   try {
     await db.transaction(async (tx) => {
-      // Cancela assinaturas ativas
       await tx.update(schema.subscriptions)
         .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
         .where(and(
@@ -738,7 +709,6 @@ async function handlePatchUser(req, res, session) {
           inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
         ));
 
-      // Cria nova se não for free
       if (planRow) {
         await tx.insert(schema.subscriptions).values({
           id: crypto.randomUUID(),
@@ -759,6 +729,14 @@ async function handlePatchUser(req, res, session) {
 
   try { await audit('user.plan.change', { actor: session.user, target: userId, metadata: { plan } }); }
   catch (e) { console.warn('[admin] audit user.plan.change falhou:', e.message); }
+
+  // Invalida cache de permissão do usuário
+  try {
+    const { invalidateUserCache } = require('./_cache');
+    await invalidateUserCache(userId);
+  } catch (e) {
+    console.warn('[admin] invalidateUserCache falhou:', e.message);
+  }
 
   return sendJson(res, 200, { ok: true, plan });
 }
@@ -783,14 +761,13 @@ async function handleDeleteUser(req, res, session) {
     console.warn('[admin] check de admin falhou:', e.message);
   }
 
-  // FASE 1: valida existência
+  // P0.2: valida existência antes de qualquer operação
   const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
   if (!user) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
 
-  // FASE 2: transação — cancela subs + anonimiza dados
   try {
     await db.transaction(async (tx) => {
-      // Cancela assinaturas ativas
+      // Cancela assinaturas
       await tx.update(schema.subscriptions)
         .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
         .where(and(
@@ -798,7 +775,7 @@ async function handleDeleteUser(req, res, session) {
           inArray(schema.subscriptions.status, ['ACTIVE', 'PENDING'])
         ));
 
-      // Anonimiza dados pessoais (mantém histórico financeiro)
+      // Anonimiza dados pessoais
       await tx.update(users).set({
         email: `anon_${userId}@deleted.local`,
         name: 'Usuário Anonimizado',
@@ -808,12 +785,20 @@ async function handleDeleteUser(req, res, session) {
     });
   } catch (err) {
     console.error('[admin] deleteUser transação:', err);
-    await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' }).catch(() => {});
+    try { await audit('user.delete', { actor: session.user, target: userId, success: false, reason: err.code || 'db_error' }); }
+    catch {}
     return sendJson(res, 500, { ok: false, error: 'Falha ao anonimizar usuário.' });
   }
 
   try { await audit('user.delete', { actor: session.user, target: userId, success: true }); }
   catch (e) { console.warn('[admin] audit user.delete falhou:', e.message); }
+
+  try {
+    const { invalidateUserCache } = require('./_cache');
+    await invalidateUserCache(userId);
+  } catch (e) {
+    console.warn('[admin] invalidateUserCache falhou:', e.message);
+  }
 
   return sendJson(res, 200, { ok: true });
 }
