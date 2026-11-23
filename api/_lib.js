@@ -1,13 +1,15 @@
 'use strict';
 
 /* ============================================================
-   api/_lib.js — Módulos internos consolidados (v11)
+   api/_lib.js — Módulos internos consolidados (v12 — Auditoria)
    ------------------------------------------------------------
-   - getAuthUser valida sv (session_version) e sid (sessão ativa)
-   - hashEmail normaliza trim + lowercase
-   - checkOrigin rejeita métodos mutantes sem Origin/Referer
-     (não confia em SameSite como substituto universal)
-   - ALLOW_INSECURE_COOKIE só tem efeito fora de produção
+   Correções da auditoria v11:
+   1. getAuthUser() com JOIN único (P2.2)
+   2. parseCookies() rejeita cabeçalho com excesso de cookies (P2.3)
+   3. sanitizeMetadata() amplia lista de campos sensíveis (P2.5)
+   4. AUDIT_HASH_SECRET validado antecipadamente (P2.6)
+   5. invalidatePlanCache() integrado ao _cache (P2.7)
+   6. Variáveis Redis padronizadas (P2.6 cross-module)
    ============================================================ */
 
 const crypto = require('crypto');
@@ -28,7 +30,6 @@ const ACCESS_TTL = '15m';
 const CLOCK_TOLERANCE_SEC = 5;
 
 // ─── Cookies ────────────────────────────────────────────────
-// ALLOW_INSECURE_COOKIE só é considerado fora de produção.
 const ALLOW_INSECURE_COOKIE =
   !IS_PROD && process.env.ALLOW_INSECURE_COOKIE === 'true';
 
@@ -50,13 +51,20 @@ const VALID_PLANS = new Set(['free', 'premium', 'anual']);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// P2.5: lista ampliada de campos sensíveis
 const AUDIT_BLOCKED_FIELDS = new Set([
-  'password', 'pass', 'senha', 'password_hash', 'current_password', 'new_password',
-  'token', 'access_token', 'refresh_token', 'jwt',
-  'secret', 'client_secret', 'private_key',
+  'password', 'pass', 'passwd', 'pwd', 'senha',
+  'password_hash', 'passwordhash', 'current_password', 'new_password',
+  'token', 'access_token', 'accesstoken', 'refresh_token', 'refreshtoken',
+  'jwt', 'jwttoken', 'bearer',
+  'secret', 'client_secret', 'clientsecret', 'client_secret_key',
+  'secretkey', 'private_key', 'privatekey',
   'authorization', 'cookie',
   'apikey', 'api_key', 'api-key',
-  'passwordhash', 'refreshtoken', 'accesstoken', 'jwttoken',
+  'credential', 'credentials',
+  'session_token', 'sessiontoken', 'session_id', 'sessionid',
+  'otp', 'totp', 'mfa_code', 'recovery_code',
+  'card_number', 'cvv', 'cvc', 'credit_card',
 ]);
 
 const AUDIT_MAX_METADATA_KEYS = 30;
@@ -118,6 +126,14 @@ if (IS_PROD && ALLOWED_ORIGINS.size === 0) {
   console.error('[_lib] ALLOWED_ORIGINS não configurado em produção — CSRF bloqueará tudo.');
 }
 
+// P2.6: valida AUDIT_HASH_SECRET na inicialização
+if (IS_PROD) {
+  const auditSecret = String(process.env.AUDIT_HASH_SECRET || '').trim();
+  if (auditSecret.length < 32) {
+    console.error('[_lib] AUDIT_HASH_SECRET ausente ou curto em produção — auditorias de email falharão.');
+  }
+}
+
 // ─── HTTP helpers ──────────────────────────────────────────
 function sendJson(res, status, body) {
   if (res.headersSent) return;
@@ -146,30 +162,38 @@ const MAX_COOKIE_HEADER_LEN = 16 * 1024;
 const MAX_COOKIE_COUNT = 32;
 const AUTH_COOKIE_NAMES = new Set([AUTH_COOKIE, REFRESH_COOKIE]);
 
+// P2.3: rejeita cabeçalho inteiro se ultrapassar limites
 function parseCookies(header) {
   const out = {};
   if (!header) return out;
   const raw = String(header);
-  if (raw.length > MAX_COOKIE_HEADER_LEN) return out;
-  let count = 0;
+  if (raw.length > MAX_COOKIE_HEADER_LEN) {
+    console.warn('[_lib] Cabeçalho de cookies excede limite de tamanho.');
+    return out;
+  }
+
+  const items = raw.split(';');
+  if (items.length > MAX_COOKIE_COUNT) {
+    console.warn('[_lib] Cabeçalho com excesso de cookies:', items.length);
+    return out;
+  }
+
   let authDuplicate = false;
-  raw.split(';').forEach((item) => {
-    if (count >= MAX_COOKIE_COUNT) return;
+  for (const item of items) {
     const i = item.indexOf('=');
-    if (i < 0) return;
+    if (i < 0) continue;
     const k = item.slice(0, i).trim();
     const v = item.slice(i + 1).trim();
-    if (!k) return;
+    if (!k) continue;
 
     if (AUTH_COOKIE_NAMES.has(k) && Object.prototype.hasOwnProperty.call(out, k)) {
       console.warn('[_lib] cookie de autenticação duplicado:', k);
       authDuplicate = true;
-      return;
+      continue;
     }
-    count++;
     try { out[k] = decodeURIComponent(v); }
     catch { out[k] = v; }
-  });
+  }
 
   if (authDuplicate) {
     delete out[AUTH_COOKIE];
@@ -182,8 +206,6 @@ function clientIp(req) {
   if (!req || typeof req !== 'object') return '';
   const headers = req.headers || {};
 
-  // Cabeçalhos de proxy só são confiáveis se a infraestrutura os define.
-  // Documentar a topologia; não aceitar tráfego direto que possa forjá-los.
   const trustedProxyHeader = headers['x-real-ip'] || headers['x-vercel-forwarded-for'];
   if (trustedProxyHeader) {
     const candidate = String(trustedProxyHeader).split(',')[0].trim();
@@ -221,7 +243,6 @@ function buildCookie(name, value, maxAge, opts = {}) {
     'SameSite=' + sameSite,
   ];
 
-  // Em produção o Secure é sempre aplicado. A exceção só existe em dev.
   if (IS_PROD) {
     parts.push('Secure');
   } else if (!ALLOW_INSECURE_COOKIE) {
@@ -281,7 +302,7 @@ function getRefreshToken(req) {
   return parseCookies(req?.headers?.cookie || req?.headers?.Cookie)[REFRESH_COOKIE] || '';
 }
 
-// ─── getAuthUser com validação de sv + sid ─────────────────
+// ─── getAuthUser com JOIN único (P2.2) ────────────────────
 async function getAuthUser(req) {
   const accessToken = getAccessToken(req);
   if (!accessToken) return null;
@@ -337,34 +358,33 @@ async function getAuthUser(req) {
     const { users, refreshTokens } = require('../src/schema.js');
     const { eq, and, isNull, gt } = require('drizzle-orm');
 
-    const [dbUser] = await db.select({
+    // P2.2: JOIN único — valida usuário + sessão em uma consulta
+    const nowIso = new Date().toISOString();
+    const [row] = await db.select({
       id: users.id,
       email: users.email,
       role: users.role,
       sessionVersion: users.sessionVersion,
-    }).from(users).where(eq(users.id, payload.id)).limit(1);
-
-    if (!dbUser) return null;
-    if (!Number.isSafeInteger(Number(dbUser.sessionVersion))) return null;
-    if (Number(dbUser.sessionVersion) !== payload.sv) return null;
-
-    const nowIso = new Date().toISOString();
-    const [activeSession] = await db.select({ id: refreshTokens.id })
-      .from(refreshTokens)
-      .where(and(
-        eq(refreshTokens.userId, payload.id),
+      sessionId: refreshTokens.sessionId,
+    }).from(users)
+      .innerJoin(refreshTokens, and(
+        eq(refreshTokens.userId, users.id),
         eq(refreshTokens.sessionId, payload.sid),
         isNull(refreshTokens.revokedAt),
         gt(refreshTokens.expiresAt, nowIso)
       ))
+      .where(eq(users.id, payload.id))
       .limit(1);
 
-    if (!activeSession) return null;
+    if (!row) return null;
+    if (!Number.isSafeInteger(Number(row.sessionVersion))) return null;
+    if (Number(row.sessionVersion) !== payload.sv) return null;
+    if (row.sessionId !== payload.sid) return null;
 
     return {
-      id: dbUser.id,
-      email: dbUser.email,
-      role: dbUser.role,
+      id: row.id,
+      email: row.email,
+      role: row.role,
     };
   } catch (err) {
     const code = String(err.code || '');
@@ -390,6 +410,7 @@ let _redisInitFailed = false;
 function getRedis() {
   if (_redis) return _redis;
   if (_redisInitFailed) return null;
+  // P2.6: padroniza variáveis (KV_* como fallback)
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
   if (!url || !token) {
@@ -731,9 +752,6 @@ async function invalidatePlanCache(userId) {
 }
 
 // ─── CSRF ─────────────────────────────────────────────────
-// Métodos mutantes exigem Origin ou Referer válido. A ausência de ambos
-// não é tratada como same-origin. Para clientes não-navegador, use um
-// token CSRF ou Authorization: Bearer validado no handler.
 function checkOrigin(req) {
   if (!ALLOWED_ORIGINS.size) {
     console.warn('[_lib] ALLOWED_ORIGINS não configurado. Bloqueando requisições mutantes.');
@@ -772,7 +790,7 @@ function validatedOrigin(req) {
 // ─── HMAC ─────────────────────────────────────────────────
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const MAX_HMAC_TOKEN_LEN = 4096;
-const MAX_HMAC_AGE_MS = 24 * 3600 * 1000; // teto operacional
+const MAX_HMAC_AGE_MS = 24 * 3600 * 1000;
 
 function signHmac(payload, secret) {
   if (typeof secret !== 'string' || secret.length < 16) {
