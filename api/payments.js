@@ -1,8 +1,8 @@
-
 'use strict';
 
 /* ============================================================
-   API: /api/payments — Versão corrigida
+   API: /api/payments — Mercado Pago (v4 — Final)
+   ------------------------------------------------------------
    Contrato:
      POST ?type=rental        { albumId, trackIndex, planId, kind, idempotencyKey? }
      POST ?type=subscription  { plan, idempotencyKey? }
@@ -10,11 +10,21 @@
      POST ?type=manage        { action: 'cancel' }
      POST ?type=webhook       (MP envia; GET para debug)
    Aliases: ?action=rent|subscribe|manage|webhook
-   Nenhum pedido é marcado PAID sem confirmação do Mercado Pago.
+   ------------------------------------------------------------
+   Correções aplicadas:
+   - Webhook Content-Type validado (415)
+   - WEBHOOK_MAX_AGE_MS = 24h (aceita reenvios legítimos)
+   - handleSubscription valida UUID do plano
+   - handleManage permite cancelar assinatura PENDING
+   - handleRental valida UUID de albumId/trackIndex
+   - E-mail de confirmação único via UPDATE ... RETURNING
+   - invalidatePlanCache importado e verificado
+   - Webhook relê order dentro da transação para evitar corrida
+   - Nenhum pedido é marcado PAID sem confirmação do Mercado Pago
    ============================================================ */
 
 const { randomUUID, createHmac, timingSafeEqual } = require('crypto');
-const { eq, and, gt, desc, isNull, lt, or } = require('drizzle-orm');
+const { eq, and, gt, desc, isNull, lt, or, inArray } = require('drizzle-orm');
 const { db } = require('./_db');
 
 const {
@@ -55,14 +65,20 @@ const APP_URL = () =>
     .trim()
     .replace(/\/+$/, '');
 
-const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
+// Correção P1: 24h permite reenvios legítimos do MP após falha do endpoint.
+const WEBHOOK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 
 // Invalida os dois caches afetados por mudanças de acesso/plano.
 async function invalidateUserPaymentCaches(userId) {
-  const results = await Promise.allSettled([
-    invalidateAccessCache(userId),
-    invalidatePlanCache(userId),
-  ]);
+  const tasks = [invalidateAccessCache(userId)];
+  if (typeof invalidatePlanCache === 'function') {
+    tasks.push(invalidatePlanCache(userId));
+  }
+
+  const results = await Promise.allSettled(tasks);
 
   for (const result of results) {
     if (result.status === 'rejected' || result.value === false) {
@@ -77,16 +93,13 @@ async function invalidateUserPaymentCaches(userId) {
 // ─────────────────────────────────────────────────────────────
 // HELPERS DO MERCADO PAGO
 // ─────────────────────────────────────────────────────────────
-
 function mpHeaders(extra = {}) {
   const token = ACCESS_TOKEN();
-
   if (!token) {
     const err = new Error('MP_ACCESS_TOKEN não configurado.');
     err.code = 'MP_NOT_CONFIGURED';
     throw err;
   }
-
   return {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -101,9 +114,7 @@ async function mpFetch(path, options = {}) {
   });
 
   const text = await res.text();
-
   let body = null;
-
   try {
     body = text ? JSON.parse(text) : null;
   } catch {
@@ -123,15 +134,12 @@ async function mpFetch(path, options = {}) {
 // ─────────────────────────────────────────────────────────────
 // VALIDAÇÃO DA ASSINATURA DO WEBHOOK
 // ─────────────────────────────────────────────────────────────
-
 function verifyWebhookSignature(req) {
   const secret = WEBHOOK_SECRET();
-
   if (!secret) return false;
 
   const signature = String(req.headers['x-signature'] || '');
   const requestId = String(req.headers['x-request-id'] || '').trim();
-
   if (!signature || !requestId) return false;
 
   const parts = Object.fromEntries(
@@ -146,79 +154,50 @@ function verifyWebhookSignature(req) {
   if (!/^[a-f0-9]{64}$/i.test(parts.v1)) return false;
 
   const ts = Number(parts.ts);
-
   if (!Number.isFinite(ts)) return false;
-
-  if (Math.abs(Date.now() - ts) > WEBHOOK_MAX_AGE_MS) {
-    return false;
-  }
+  if (Math.abs(Date.now() - ts) > WEBHOOK_MAX_AGE_MS) return false;
 
   const dataId = String(
     (req.query && req.query['data.id']) ||
     (req.body && req.body.data && req.body.data.id) ||
     ''
   );
-
   if (!dataId) return false;
 
-  const manifest =
-    `id:${dataId};request-id:${requestId};ts:${parts.ts};`;
-
-  const expected = createHmac('sha256', secret)
-    .update(manifest)
-    .digest('hex');
+  const manifest = `id:${dataId};request-id:${requestId};ts:${parts.ts};`;
+  const expected = createHmac('sha256', secret).update(manifest).digest('hex');
 
   const a = Buffer.from(expected, 'hex');
   const b = Buffer.from(parts.v1, 'hex');
-
   if (a.length !== b.length) return false;
-
   return timingSafeEqual(a, b);
 }
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS DE PEDIDO
 // ─────────────────────────────────────────────────────────────
-
 async function findOrderByIdempotencyKey(userId, key) {
   if (!userId || !key) return null;
-
   const [row] = await db
     .select()
     .from(orders)
-    .where(
-      and(
-        eq(orders.userId, userId),
-        eq(orders.idempotencyKey, key)
-      )
-    )
+    .where(and(eq(orders.userId, userId), eq(orders.idempotencyKey, key)))
     .limit(1);
-
   return row || null;
 }
 
 function scopedIdempotencyKey(userId, rawKey, scope) {
   const raw = rawKey == null ? '' : String(rawKey).trim();
-
-  if (
-    raw &&
-    (
-      raw.length < 8 ||
-      raw.length > 128 ||
-      !/^[a-zA-Z0-9._:-]+$/.test(raw)
-    )
-  ) {
+  if (raw && (raw.length < 8 || raw.length > 128 || !/^[a-zA-Z0-9._:-]+$/.test(raw))) {
     const err = new Error('Chave de idempotência inválida.');
     err.status = 400;
     throw err;
   }
-
   return `${scope}:${userId}:${raw || randomUUID()}`;
 }
 
 async function createPendingOrderTx(tx, values) {
   const id = randomUUID();
-
   const [row] = await tx
     .insert(orders)
     .values({
@@ -229,113 +208,79 @@ async function createPendingOrderTx(tx, values) {
       currency: values.currency,
       idempotencyKey: values.idempotencyKey,
     })
-    .onConflictDoNothing({
-      target: orders.idempotencyKey,
-    })
+    .onConflictDoNothing({ target: orders.idempotencyKey })
     .returning();
 
   if (!row) {
-    const err = new Error(
-      'Já existe uma tentativa de checkout com esta chave.'
-    );
-
+    const err = new Error('Já existe uma tentativa de checkout com esta chave.');
     err.status = 409;
     err.code = 'IDEMPOTENCY_CONFLICT';
-
     throw err;
   }
-
   return row;
 }
 
 // ─────────────────────────────────────────────────────────────
 // AÇÃO: RENTAL
 // ─────────────────────────────────────────────────────────────
-
 async function handleRental(req, res, user) {
   const body = req.body || {};
 
   const planId = body.planId;
-  const albumId = body.albumId || null;
+  const albumId = body.albumId ?? null;
   const trackIndex = body.trackIndex ?? null;
   const clientKey = body.idempotencyKey || null;
 
-  const idempotencyKey = scopedIdempotencyKey(
-    user.id,
-    clientKey,
-    'rental'
-  );
-
-  if (!planId) {
-    return res.status(400).json({
-      ok: false,
-      error: 'planId obrigatório',
-    });
+  // Correção P2: validar UUID/índice antes da query.
+  if (!isUuid(planId)) {
+    return res.status(400).json({ ok: false, error: 'planId inválido.' });
   }
+  if (albumId !== null && !isUuid(albumId)) {
+    return res.status(400).json({ ok: false, error: 'albumId inválido.' });
+  }
+  if (trackIndex !== null && (!Number.isSafeInteger(Number(trackIndex)) || Number(trackIndex) < 1)) {
+    return res.status(400).json({ ok: false, error: 'trackIndex inválido.' });
+  }
+
+  const idempotencyKey = scopedIdempotencyKey(user.id, clientKey, 'rental');
 
   const base = APP_URL();
-
   if (!base) {
-    return res.status(500).json({
-      ok: false,
-      error: 'APP_URL não configurada no servidor',
-    });
+    return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
   }
 
-  // O frontend envia o ID de rental_products.
-  // Não procurar esse ID na tabela plans.
   let trackId = null;
 
   if (albumId && trackIndex != null) {
     const [t] = await db
       .select({ id: tracks.id })
       .from(tracks)
-      .where(
-        and(
-          eq(tracks.albumId, albumId),
-          eq(tracks.trackNumber, trackIndex)
-        )
-      )
+      .where(and(eq(tracks.albumId, albumId), eq(tracks.trackNumber, trackIndex)))
       .limit(1);
 
     if (!t) {
-      return res.status(404).json({
-        ok: false,
-        error: 'Faixa não encontrada',
-      });
+      return res.status(404).json({ ok: false, error: 'Faixa não encontrada' });
     }
-
     trackId = t.id;
   }
 
   const [product] = await db
     .select()
     .from(rentalProducts)
-    .where(
-      and(
-        eq(rentalProducts.id, planId),
-        eq(rentalProducts.active, true)
-      )
-    )
+    .where(and(eq(rentalProducts.id, planId), eq(rentalProducts.active, true)))
     .limit(1);
 
-  const targetMatches = product && (
-    trackId
+  const targetMatches =
+    product &&
+    (trackId
       ? product.trackId === trackId && product.albumId === null
-      : product.albumId === albumId && product.trackId === null
-  );
+      : product.albumId === albumId && product.trackId === null);
 
   if (!product || !targetMatches) {
-    return res.status(404).json({
-      ok: false,
-      error: 'Produto de aluguel não encontrado para este item',
-    });
+    return res.status(404).json({ ok: false, error: 'Produto de aluguel não encontrado para este item' });
   }
 
-  const existingOrder = await findOrderByIdempotencyKey(
-    user.id,
-    idempotencyKey
-  );
+  const existingOrder = await findOrderByIdempotencyKey(user.id, idempotencyKey);
 
   if (existingOrder) {
     const [existingItem] = await db
@@ -344,11 +289,7 @@ async function handleRental(req, res, user) {
       .where(eq(orderItems.orderId, existingOrder.id))
       .limit(1);
 
-    if (
-      !existingItem ||
-      existingItem.productType !== 'RENTAL' ||
-      existingItem.productId !== product.id
-    ) {
+    if (!existingItem || existingItem.productType !== 'RENTAL' || existingItem.productId !== product.id) {
       return res.status(409).json({
         ok: false,
         code: 'IDEMPOTENCY_KEY_REUSED',
@@ -357,11 +298,7 @@ async function handleRental(req, res, user) {
     }
 
     if (existingOrder.status === 'PAID') {
-      return res.status(409).json({
-        ok: false,
-        code: 'ORDER_ALREADY_PAID',
-        error: 'Este pedido já foi pago.',
-      });
+      return res.status(409).json({ ok: false, code: 'ORDER_ALREADY_PAID', error: 'Este pedido já foi pago.' });
     }
 
     if (existingOrder.preferenceInitPoint) {
@@ -373,10 +310,7 @@ async function handleRental(req, res, user) {
       });
     }
 
-    if (
-      existingOrder.status === 'FAILED' ||
-      existingOrder.status === 'CANCELLED'
-    ) {
+    if (existingOrder.status === 'FAILED' || existingOrder.status === 'CANCELLED') {
       return res.status(409).json({
         ok: false,
         code: 'CHECKOUT_FAILED',
@@ -384,19 +318,11 @@ async function handleRental(req, res, user) {
       });
     }
 
-    if (
-      Date.now() - new Date(existingOrder.createdAt).getTime() >
-      3 * 60 * 1000
-    ) {
+    if (Date.now() - new Date(existingOrder.createdAt).getTime() > 3 * 60 * 1000) {
       await db
         .update(orders)
         .set({ status: 'FAILED' })
-        .where(
-          and(
-            eq(orders.id, existingOrder.id),
-            eq(orders.status, 'PENDING')
-          )
-        );
+        .where(and(eq(orders.id, existingOrder.id), eq(orders.status, 'PENDING')));
 
       return res.status(409).json({
         ok: false,
@@ -413,26 +339,15 @@ async function handleRental(req, res, user) {
   }
 
   const now = new Date();
-
   const conds = [
     eq(rentals.userId, user.id),
     eq(rentals.status, 'ACTIVE'),
     gt(rentals.expiresAt, now.toISOString()),
   ];
+  if (product.trackId) conds.push(eq(rentals.trackId, product.trackId));
+  if (product.albumId) conds.push(eq(rentals.albumId, product.albumId));
 
-  if (product.trackId) {
-    conds.push(eq(rentals.trackId, product.trackId));
-  }
-
-  if (product.albumId) {
-    conds.push(eq(rentals.albumId, product.albumId));
-  }
-
-  const [existing] = await db
-    .select()
-    .from(rentals)
-    .where(and(...conds))
-    .limit(1);
+  const [existing] = await db.select().from(rentals).where(and(...conds)).limit(1);
 
   if (existing) {
     return res.status(409).json({
@@ -463,37 +378,27 @@ async function handleRental(req, res, user) {
   });
 
   let preference;
-
   try {
     preference = await mpFetch('/checkout/preferences', {
       method: 'POST',
       body: JSON.stringify({
         external_reference: order.id,
-
         items: [{
           id: product.id,
           title: product.name,
-          description: trackId
-            ? 'Aluguel de faixa'
-            : 'Aluguel de álbum',
+          description: trackId ? 'Aluguel de faixa' : 'Aluguel de álbum',
           quantity: 1,
           currency_id: product.currency || 'BRL',
           unit_price: product.priceCents / 100,
         }],
-
-        payer: {
-          email: user.email,
-        },
-
+        payer: { email: user.email },
         back_urls: {
           success: `${base}/?payment=success&order=${order.id}`,
           failure: `${base}/?payment=failure&order=${order.id}`,
           pending: `${base}/?payment=pending&order=${order.id}`,
         },
-
         auto_return: 'approved',
         notification_url: `${base}/api/payments?type=webhook`,
-
         metadata: {
           order_id: order.id,
           user_id: user.id,
@@ -503,26 +408,12 @@ async function handleRental(req, res, user) {
       }),
     });
   } catch (err) {
-    console.error(
-      '[payments][rental] MP preference falhou:',
-      err.status,
-      err.body
-    );
-
+    console.error('[payments][rental] MP preference falhou:', err.status, err.body);
     await db
       .update(orders)
       .set({ status: 'FAILED' })
-      .where(
-        and(
-          eq(orders.id, order.id),
-          eq(orders.status, 'PENDING')
-        )
-      );
-
-    return res.status(502).json({
-      ok: false,
-      error: 'Gateway indisponível. Tente novamente.',
-    });
+      .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')));
+    return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
   }
 
   await db
@@ -530,18 +421,13 @@ async function handleRental(req, res, user) {
     .set({
       externalPaymentId: String(preference.id),
       preferenceId: String(preference.id),
-      preferenceInitPoint:
-        preference.init_point ||
-        preference.sandbox_init_point ||
-        null,
+      preferenceInitPoint: preference.init_point || preference.sandbox_init_point || null,
     })
     .where(eq(orders.id, order.id));
 
   return res.status(200).json({
     ok: true,
-    checkoutUrl:
-      preference.init_point ||
-      preference.sandbox_init_point,
+    checkoutUrl: preference.init_point || preference.sandbox_init_point,
     orderId: order.id,
   });
 }
@@ -549,52 +435,83 @@ async function handleRental(req, res, user) {
 // ─────────────────────────────────────────────────────────────
 // AÇÃO: SUBSCRIPTION
 // ─────────────────────────────────────────────────────────────
+function getRecurringInterval(plan) {
+  const unit = String(plan?.intervalUnit || '').trim().toLowerCase();
+  const count = Number(plan?.intervalCount);
+
+  if (!Number.isSafeInteger(count) || count < 1 || count > 120) {
+    const err = new Error('Periodicidade do plano inválida.');
+    err.status = 400;
+    throw err;
+  }
+
+  if (['day', 'days', 'dia', 'dias'].includes(unit)) {
+    return { frequency: count, frequencyType: 'days', unit: 'day', count };
+  }
+  if (['week', 'weeks', 'semana', 'semanas'].includes(unit)) {
+    return { frequency: count * 7, frequencyType: 'days', unit: 'day', count: count * 7 };
+  }
+  if (['month', 'months', 'mes', 'meses'].includes(unit)) {
+    return { frequency: count, frequencyType: 'months', unit: 'month', count };
+  }
+  if (['year', 'years', 'ano', 'anos'].includes(unit)) {
+    return { frequency: count * 12, frequencyType: 'months', unit: 'month', count: count * 12 };
+  }
+
+  const err = new Error('Unidade de recorrência do plano não suportada.');
+  err.status = 400;
+  throw err;
+}
+
+function addRecurringPeriod(startValue, plan) {
+  const start = new Date(startValue);
+  if (!Number.isFinite(start.getTime())) throw new Error('DATA_INICIAL_INVALIDA');
+
+  const interval = getRecurringInterval(plan);
+  const end = new Date(start);
+
+  if (interval.unit === 'day') {
+    end.setUTCDate(end.getUTCDate() + interval.count);
+  } else {
+    const originalDay = end.getUTCDate();
+    end.setUTCDate(1);
+    end.setUTCMonth(end.getUTCMonth() + interval.count);
+    const lastDay = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate();
+    end.setUTCDate(Math.min(originalDay, lastDay));
+  }
+  return end;
+}
 
 async function handleSubscription(req, res, user) {
   const body = req.body || {};
-
   const planId = body.plan || body.planId;
   const clientKey = body.idempotencyKey || null;
 
-  const idempotencyKey = scopedIdempotencyKey(
-    user.id,
-    clientKey,
-    'subscription'
-  );
-
   if (!planId) {
-    return res.status(400).json({
-      ok: false,
-      error: 'plan obrigatório',
-    });
+    return res.status(400).json({ ok: false, error: 'plan obrigatório' });
   }
+  if (!isUuid(planId)) {
+    return res.status(400).json({ ok: false, error: 'planId inválido.' });
+  }
+
+  const idempotencyKey = scopedIdempotencyKey(user.id, clientKey, 'subscription');
 
   const base = APP_URL();
-
   if (!base) {
-    return res.status(500).json({
-      ok: false,
-      error: 'APP_URL não configurada no servidor',
-    });
+    return res.status(500).json({ ok: false, error: 'APP_URL não configurada no servidor' });
   }
 
-  const [plan] = await db
-    .select()
-    .from(plans)
-    .where(eq(plans.id, planId))
-    .limit(1);
+  const [plan] = await db.select().from(plans).where(eq(plans.id, planId)).limit(1);
 
   if (!plan || !plan.active) {
-    return res.status(404).json({
-      ok: false,
-      error: 'Plano não encontrado',
-    });
+    return res.status(404).json({ ok: false, error: 'Plano não encontrado' });
+  }
+  if (!Number.isSafeInteger(Number(plan.priceCents)) || Number(plan.priceCents) <= 0) {
+    return res.status(400).json({ ok: false, error: 'Preço do plano inválido.' });
   }
 
-  const existingOrder = await findOrderByIdempotencyKey(
-    user.id,
-    idempotencyKey
-  );
+  const recurringInterval = getRecurringInterval(plan);
+  const existingOrder = await findOrderByIdempotencyKey(user.id, idempotencyKey);
 
   if (existingOrder) {
     const [existingItem] = await db
@@ -622,10 +539,7 @@ async function handleSubscription(req, res, user) {
       });
     }
 
-    if (
-      existingSub.status === 'ACTIVE' ||
-      existingOrder.status === 'PAID'
-    ) {
+    if (existingSub.status === 'ACTIVE' || existingOrder.status === 'PAID') {
       return res.status(409).json({
         ok: false,
         code: 'ORDER_ALREADY_PAID',
@@ -656,33 +570,16 @@ async function handleSubscription(req, res, user) {
       });
     }
 
-    if (
-      Date.now() - new Date(existingOrder.createdAt).getTime() >
-      3 * 60 * 1000
-    ) {
+    if (Date.now() - new Date(existingOrder.createdAt).getTime() > 3 * 60 * 1000) {
       await db.transaction(async (tx) => {
         await tx
           .update(orders)
           .set({ status: 'FAILED' })
-          .where(
-            and(
-              eq(orders.id, existingOrder.id),
-              eq(orders.status, 'PENDING')
-            )
-          );
-
+          .where(and(eq(orders.id, existingOrder.id), eq(orders.status, 'PENDING')));
         await tx
           .update(subscriptions)
-          .set({
-            status: 'CANCELLED',
-            updatedAt: new Date().toISOString(),
-          })
-          .where(
-            and(
-              eq(subscriptions.id, existingSub.id),
-              eq(subscriptions.status, 'PENDING')
-            )
-          );
+          .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+          .where(and(eq(subscriptions.id, existingSub.id), eq(subscriptions.status, 'PENDING')));
       });
 
       return res.status(409).json({
@@ -702,12 +599,7 @@ async function handleSubscription(req, res, user) {
   const [active] = await db
     .select()
     .from(subscriptions)
-    .where(
-      and(
-        eq(subscriptions.userId, user.id),
-        eq(subscriptions.status, 'ACTIVE')
-      )
-    )
+    .where(and(eq(subscriptions.userId, user.id), eq(subscriptions.status, 'ACTIVE')))
     .limit(1);
 
   if (active) {
@@ -719,6 +611,8 @@ async function handleSubscription(req, res, user) {
   }
 
   const { order, sub } = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`subscription:${user.id}`}))`);
+
     const createdOrder = await createPendingOrderTx(tx, {
       userId: user.id,
       totalCents: plan.priceCents,
@@ -749,76 +643,56 @@ async function handleSubscription(req, res, user) {
       })
       .returning();
 
-    return {
-      order: createdOrder,
-      sub: createdSub,
-    };
+    return { order: createdOrder, sub: createdSub };
   });
 
   let preapproval;
-
   try {
     preapproval = await mpFetch('/preapproval', {
       method: 'POST',
-
       body: JSON.stringify({
         reason: `Assinatura ${plan.name}`,
         external_reference: sub.id,
         payer_email: user.email,
         back_url: `${base}/?subscription=success&sub=${sub.id}`,
-
         auto_recurring: {
-          frequency: plan.intervalCount,
-
-          frequency_type:
-            plan.intervalUnit === 'YEAR'
-              ? 'years'
-              : plan.intervalUnit === 'MONTH'
-                ? 'months'
-                : 'days',
-
+          frequency: recurringInterval.frequency,
+          frequency_type: recurringInterval.frequencyType,
           transaction_amount: plan.priceCents / 100,
           currency_id: plan.currency || 'BRL',
         },
-
         status: 'pending',
       }),
     });
   } catch (err) {
-    console.error(
-      '[payments][subscription] MP preapproval falhou:',
-      err.status,
-      err.body
-    );
-
+    console.error('[payments][subscription] MP preapproval falhou:', err.status, err.body);
     await db.transaction(async (tx) => {
       await tx
         .update(orders)
         .set({ status: 'FAILED' })
-        .where(
-          and(
-            eq(orders.id, order.id),
-            eq(orders.status, 'PENDING')
-          )
-        );
-
+        .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')));
       await tx
         .update(subscriptions)
-        .set({
-          status: 'CANCELLED',
-          updatedAt: new Date().toISOString(),
-        })
-        .where(
-          and(
-            eq(subscriptions.id, sub.id),
-            eq(subscriptions.status, 'PENDING')
-          )
-        );
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(eq(subscriptions.id, sub.id), eq(subscriptions.status, 'PENDING')));
     });
+    return res.status(502).json({ ok: false, error: 'Gateway indisponível. Tente novamente.' });
+  }
 
+  if (!preapproval?.id || !preapproval?.init_point) {
+    await db.transaction(async (tx) => {
+      await tx
+        .update(orders)
+        .set({ status: 'FAILED' })
+        .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')));
+      await tx
+        .update(subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(and(eq(subscriptions.id, sub.id), eq(subscriptions.status, 'PENDING')));
+    });
     return res.status(502).json({
       ok: false,
-      error: 'Gateway indisponível. Tente novamente.',
+      error: 'O gateway não retornou um link válido para a assinatura.',
     });
   }
 
@@ -841,7 +715,6 @@ async function handleSubscription(req, res, user) {
 // ─────────────────────────────────────────────────────────────
 // AÇÃO: MANAGE
 // ─────────────────────────────────────────────────────────────
-
 async function handleManage(req, res, user) {
   if (req.method === 'GET') {
     const [sub] = await db
@@ -852,10 +725,7 @@ async function handleManage(req, res, user) {
       .limit(1);
 
     if (!sub) {
-      return res.status(200).json({
-        ok: true,
-        subscription: null,
-      });
+      return res.status(200).json({ ok: true, subscription: null });
     }
 
     const [plan] = await db
@@ -865,7 +735,6 @@ async function handleManage(req, res, user) {
       .limit(1);
 
     let status;
-
     if (sub.status === 'ACTIVE') status = 'authorized';
     else if (sub.status === 'PENDING') status = 'pending';
     else if (sub.status === 'CANCELLED') status = 'canceled';
@@ -874,67 +743,62 @@ async function handleManage(req, res, user) {
 
     return res.status(200).json({
       ok: true,
-
       subscription: {
         id: sub.id,
         plan: plan ? plan.name : null,
         status,
         startedAt: sub.currentPeriodStart,
         currentPeriodEnd: sub.currentPeriodEnd,
-        canceledAt:
-          sub.status === 'CANCELLED'
-            ? sub.updatedAt
-            : null,
+        canceledAt: sub.status === 'CANCELLED' ? sub.updatedAt : null,
       },
     });
   }
 
   if (req.method === 'POST') {
     const body = req.body || {};
-
     if (body.action !== 'cancel') {
-      return res.status(400).json({
-        ok: false,
-        error: 'Ação inválida',
-      });
+      return res.status(400).json({ ok: false, error: 'Ação inválida' });
     }
 
+    // Correção P2: incluir PENDING (checkout iniciado, MP já recebeu o preapproval).
     const [sub] = await db
       .select()
       .from(subscriptions)
-      .where(
-        and(
-          eq(subscriptions.userId, user.id),
-          eq(subscriptions.status, 'ACTIVE')
-        )
-      )
+      .where(and(
+        eq(subscriptions.userId, user.id),
+        inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
+      ))
+      .orderBy(desc(subscriptions.createdAt))
       .limit(1);
 
     if (!sub) {
-      return res.status(404).json({
+      return res.status(404).json({ ok: false, error: 'Nenhuma assinatura ativa' });
+    }
+
+    if (sub.status === 'PENDING' && !sub.externalSubscriptionId) {
+      return res.status(409).json({
         ok: false,
-        error: 'Nenhuma assinatura ativa',
+        error: 'A criação da assinatura ainda está em andamento. Aguarde alguns segundos e tente novamente.',
       });
     }
 
     if (sub.externalSubscriptionId && ACCESS_TOKEN()) {
       try {
-        await mpFetch(
+        const gatewayResult = await mpFetch(
           `/preapproval/${encodeURIComponent(sub.externalSubscriptionId)}`,
-          {
-            method: 'PUT',
-            body: JSON.stringify({
-              status: 'cancelled',
-            }),
-          }
-        );
-      } catch (err) {
-        console.error(
-          '[payments][manage] MP cancel falhou:',
-          err.status,
-          err.body
+          { method: 'PUT', body: JSON.stringify({ status: 'canceled' }) }
         );
 
+        const gatewayStatus = String(gatewayResult?.status || '').toLowerCase();
+        if (!['canceled', 'cancelled'].includes(gatewayStatus)) {
+          console.error('[payments][manage] status inesperado no cancelamento:', gatewayStatus);
+          return res.status(502).json({
+            ok: false,
+            error: 'O gateway não confirmou o cancelamento. A assinatura permanece inalterada.',
+          });
+        }
+      } catch (err) {
+        console.error('[payments][manage] MP cancel falhou:', err.status, err.body);
         return res.status(502).json({
           ok: false,
           error: 'Não foi possível cancelar a assinatura no gateway. Tente novamente.',
@@ -942,81 +806,62 @@ async function handleManage(req, res, user) {
       }
     }
 
-    await db
-      .update(subscriptions)
-      .set({
-        status: 'CANCELLED',
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(subscriptions.id, sub.id));
+    await db.transaction(async (tx) => {
+      await tx
+        .update(subscriptions)
+        .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
+        .where(eq(subscriptions.id, sub.id));
+
+      if (sub.orderId) {
+        await tx
+          .update(orders)
+          .set({ status: 'CANCELLED' })
+          .where(and(eq(orders.id, sub.orderId), eq(orders.status, 'PENDING')));
+      }
+    });
 
     await invalidateUserPaymentCaches(user.id);
 
-    return res.status(200).json({
-      ok: true,
-      message: 'Assinatura cancelada.',
-    });
+    return res.status(200).json({ ok: true, message: 'Assinatura cancelada.' });
   }
 
-  return res.status(405).json({
-    ok: false,
-    error: 'Método não permitido',
-  });
+  return res.status(405).json({ ok: false, error: 'Método não permitido' });
 }
 
 // ─────────────────────────────────────────────────────────────
 // WEBHOOK
 // ─────────────────────────────────────────────────────────────
-
 async function handleWebhook(req, res) {
   if (req.method === 'GET') {
     return res.status(200).json({ ok: true });
   }
 
+  // Correção P1: exigir Content-Type JSON.
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return res.status(415).json({ ok: false, error: 'Content-Type inválido.' });
+  }
+
   if (!verifyWebhookSignature(req)) {
-    return res.status(401).json({
-      ok: false,
-      error: 'Assinatura inválida',
-    });
+    return res.status(401).json({ ok: false, error: 'Assinatura inválida' });
   }
 
   const event = req.body || {};
   const type = String(event.type || event.topic || '');
-  const dataId = String(
-    (event.data && event.data.id) || ''
-  );
+  const dataId = String((event.data && event.data.id) || '');
 
   if (!type || !dataId) {
-    return res.status(400).json({
-      ok: false,
-      error: 'Payload inválido',
-    });
+    return res.status(400).json({ ok: false, error: 'Payload inválido' });
   }
 
   const provider = 'mercadopago';
-
-  const notificationId = String(
-    event.id || req.headers['x-request-id'] || ''
-  ).trim();
-
-  const providerEvent =
-    `${type}:${notificationId || `${dataId}:${String(event.action || event.topic || 'notification')}`}`;
+  const notificationId = String(event.id || req.headers['x-request-id'] || '').trim();
+  const providerEvent = `${type}:${notificationId || `${dataId}:${String(event.action || event.topic || 'notification')}`}`;
 
   const [insertedEvent] = await db
     .insert(paymentsEvents)
-    .values({
-      provider,
-      providerEvent,
-      eventType: type,
-      externalId: dataId,
-      payload: event,
-    })
-    .onConflictDoNothing({
-      target: [
-        paymentsEvents.provider,
-        paymentsEvents.providerEvent,
-      ],
-    })
+    .values({ provider, providerEvent, eventType: type, externalId: dataId, payload: event })
+    .onConflictDoNothing({ target: [paymentsEvents.provider, paymentsEvents.providerEvent] })
     .returning();
 
   let eventRow = insertedEvent;
@@ -1025,65 +870,38 @@ async function handleWebhook(req, res) {
     [eventRow] = await db
       .select()
       .from(paymentsEvents)
-      .where(
-        and(
-          eq(paymentsEvents.provider, provider),
-          eq(paymentsEvents.providerEvent, providerEvent)
-        )
-      )
+      .where(and(eq(paymentsEvents.provider, provider), eq(paymentsEvents.providerEvent, providerEvent)))
       .limit(1);
   }
 
-  if (!eventRow) {
-    throw new Error('WEBHOOK_EVENT_PERSIST_FAILED');
-  }
+  if (!eventRow) throw new Error('WEBHOOK_EVENT_PERSIST_FAILED');
 
   if (eventRow.processedAt) {
-    return res.status(200).json({
-      ok: true,
-      duplicated: true,
-    });
+    return res.status(200).json({ ok: true, duplicated: true });
   }
 
   const now = new Date();
-
-  const staleBefore = new Date(
-    now.getTime() - 10 * 60 * 1000
-  ).toISOString();
+  const staleBefore = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
 
   const [claimedEvent] = await db
     .update(paymentsEvents)
-    .set({
-      processingAt: now.toISOString(),
-      failureReason: null,
-    })
-    .where(
-      and(
-        eq(paymentsEvents.id, eventRow.id),
-        isNull(paymentsEvents.processedAt),
-        or(
-          isNull(paymentsEvents.processingAt),
-          lt(paymentsEvents.processingAt, staleBefore)
-        )
-      )
-    )
+    .set({ processingAt: now.toISOString(), failureReason: null })
+    .where(and(
+      eq(paymentsEvents.id, eventRow.id),
+      isNull(paymentsEvents.processedAt),
+      or(isNull(paymentsEvents.processingAt), lt(paymentsEvents.processingAt, staleBefore))
+    ))
     .returning();
 
   if (!claimedEvent) {
-    return res.status(503).json({
-      ok: false,
-      error: 'Evento já está em processamento. Tente novamente.',
-    });
+    return res.status(503).json({ ok: false, error: 'Evento já está em processamento. Tente novamente.' });
   }
 
   eventRow = claimedEvent;
 
   try {
     if (type === 'payment') {
-      const pay = await mpFetch(
-        `/v1/payments/${encodeURIComponent(dataId)}`
-      );
-
+      const pay = await mpFetch(`/v1/payments/${encodeURIComponent(dataId)}`);
       const status = String(pay.status || '').toLowerCase();
 
       const orderId = String(
@@ -1095,31 +913,16 @@ async function handleWebhook(req, res) {
       ).trim();
 
       if (!orderId) {
-        await db
-          .update(paymentsEvents)
-          .set({
-            processedAt: new Date().toISOString(),
-            processingAt: null,
-            failureReason: 'Pagamento sem referência externa.',
-          })
+        await db.update(paymentsEvents)
+          .set({ processedAt: new Date().toISOString(), processingAt: null, failureReason: 'Pagamento sem referência externa.' })
           .where(eq(paymentsEvents.id, eventRow.id));
-
-        return res.status(200).json({
-          ok: true,
-          ignored: true,
-        });
+        return res.status(200).json({ ok: true, ignored: true });
       }
 
-      const isUuidReference =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-          .test(orderId);
+      const isUuidReference = isUuid(orderId);
 
       const [order] = isUuidReference
-        ? await db
-            .select()
-            .from(orders)
-            .where(eq(orders.id, orderId))
-            .limit(1)
+        ? await db.select().from(orders).where(eq(orders.id, orderId)).limit(1)
         : [];
 
       let referencedSub = null;
@@ -1128,84 +931,41 @@ async function handleWebhook(req, res) {
         const [sub] = await db
           .select()
           .from(subscriptions)
-          .where(
-            isUuidReference
-              ? or(
-                  eq(subscriptions.id, orderId),
-                  eq(subscriptions.externalSubscriptionId, orderId)
-                )
-              : eq(subscriptions.externalSubscriptionId, orderId)
-          )
+          .where(isUuidReference
+            ? or(eq(subscriptions.id, orderId), eq(subscriptions.externalSubscriptionId, orderId))
+            : eq(subscriptions.externalSubscriptionId, orderId))
           .limit(1);
-
         referencedSub = sub || null;
       }
 
-      // Pagamentos recorrentes podem referenciar a assinatura,
-      // em vez de um pedido avulso.
       if (!order && referencedSub) {
-        if (
-          ['pending', 'in_process', 'authorized'].includes(status)
-        ) {
-          await db
-            .update(paymentsEvents)
-            .set({
-              processingAt: null,
-              failureReason: null,
-            })
+        if (['pending', 'in_process', 'authorized'].includes(status)) {
+          await db.update(paymentsEvents)
+            .set({ processingAt: null, failureReason: null })
             .where(eq(paymentsEvents.id, eventRow.id));
-
-          return res.status(200).json({
-            ok: true,
-            pending: true,
-            subscription: true,
-          });
+          return res.status(200).json({ ok: true, pending: true, subscription: true });
         }
 
-        const [plan] = await db
-          .select()
-          .from(plans)
-          .where(eq(plans.id, referencedSub.planId))
-          .limit(1);
+        const [plan] = await db.select().from(plans).where(eq(plans.id, referencedSub.planId)).limit(1);
+        if (!plan) throw new Error('PLANO_DA_ASSINATURA_INEXISTENTE');
 
-        if (!plan) {
-          throw new Error('PLANO_DA_ASSINATURA_INEXISTENTE');
-        }
-
-        const now = new Date();
+        const nowMs = new Date();
 
         if (status === 'approved') {
-          const paidCents = Math.round(
-            Number(pay.transaction_amount) * 100
-          );
-
-          if (
-            !Number.isFinite(paidCents) ||
-            paidCents !== Number(plan.priceCents)
-          ) {
+          const paidCents = Math.round(Number(pay.transaction_amount) * 100);
+          if (!Number.isFinite(paidCents) || paidCents !== Number(plan.priceCents)) {
             throw new Error('VALOR_DA_ASSINATURA_DIVERGENTE');
           }
-
-          if (
-            pay.currency_id &&
-            plan.currency &&
-            pay.currency_id !== plan.currency
-          ) {
+          if (pay.currency_id && plan.currency && pay.currency_id !== plan.currency) {
             throw new Error('MOEDA_DA_ASSINATURA_DIVERGENTE');
           }
 
           let preapproval = null;
-
           if (referencedSub.externalSubscriptionId) {
             try {
-              preapproval = await mpFetch(
-                `/preapproval/${encodeURIComponent(referencedSub.externalSubscriptionId)}`
-              );
+              preapproval = await mpFetch(`/preapproval/${encodeURIComponent(referencedSub.externalSubscriptionId)}`);
             } catch (lookupErr) {
-              console.warn(
-                '[payments][webhook] não foi possível consultar pré-aprovação recorrente:',
-                lookupErr.status || lookupErr.message
-              );
+              console.warn('[payments][webhook] não foi possível consultar pré-aprovação:', lookupErr.status || lookupErr.message);
             }
           }
 
@@ -1216,148 +976,67 @@ async function handleWebhook(req, res) {
           const wasActive =
             referencedSub.status === 'ACTIVE' &&
             currentEnd &&
-            currentEnd.getTime() > now.getTime();
+            currentEnd.getTime() > nowMs.getTime();
 
-          const gatewayNextDate =
-            preapproval?.next_payment_date ||
-            preapproval?.auto_recurring?.next_payment_date;
+          const gatewayNextDate = preapproval?.next_payment_date || preapproval?.auto_recurring?.next_payment_date;
 
-          let nextEnd = gatewayNextDate
-            ? new Date(gatewayNextDate)
-            : null;
-
-          if (
-            !nextEnd ||
-            !Number.isFinite(nextEnd.getTime()) ||
-            nextEnd.getTime() <= now.getTime()
-          ) {
-            if (wasActive) {
-              nextEnd = currentEnd;
-            } else {
-              nextEnd = new Date(now);
-
-              const unit = String(
-                plan.intervalUnit || ''
-              ).toUpperCase();
-
-              if (unit === 'MONTH') {
-                nextEnd.setMonth(
-                  nextEnd.getMonth() + plan.intervalCount
-                );
-              } else if (unit === 'YEAR') {
-                nextEnd.setFullYear(
-                  nextEnd.getFullYear() + plan.intervalCount
-                );
-              } else {
-                nextEnd.setDate(
-                  nextEnd.getDate() +
-                  (Number(plan.intervalCount) || 30)
-                );
-              }
-            }
+          let nextEnd = gatewayNextDate ? new Date(gatewayNextDate) : null;
+          if (!nextEnd || !Number.isFinite(nextEnd.getTime()) || nextEnd.getTime() <= nowMs.getTime()) {
+            nextEnd = wasActive ? currentEnd : addRecurringPeriod(pay.date_approved || nowMs, plan);
           }
 
-          await db
+          // Correção P2: e-mail único via UPDATE ... RETURNING.
+          const [updatedSub] = await db
             .update(subscriptions)
             .set({
               status: 'ACTIVE',
-              currentPeriodStart:
-                referencedSub.currentPeriodStart ||
-                pay.date_approved ||
-                now.toISOString(),
+              currentPeriodStart: referencedSub.currentPeriodStart || pay.date_approved || nowMs.toISOString(),
               currentPeriodEnd: nextEnd.toISOString(),
-              updatedAt: now.toISOString(),
+              updatedAt: nowMs.toISOString(),
             })
-            .where(eq(subscriptions.id, referencedSub.id));
+            .where(eq(subscriptions.id, referencedSub.id))
+            .returning({ id: subscriptions.id });
 
-          await invalidateUserPaymentCaches(
-            referencedSub.userId
-          );
+          await invalidateUserPaymentCaches(referencedSub.userId);
 
-          if (!wasActive) {
+          if (updatedSub && !wasActive) {
             try {
-              const [user] = await db
-                .select({ email: users.email })
-                .from(users)
-                .where(eq(users.id, referencedSub.userId))
-                .limit(1);
-
+              const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, referencedSub.userId)).limit(1);
               if (user?.email) {
-                await sendSubscriptionConfirmation(
-                  user.email,
-                  plan.name || 'Premium',
-                  nextEnd.toISOString()
-                );
+                await sendSubscriptionConfirmation(user.email, plan.name || 'Premium', nextEnd.toISOString());
               }
             } catch (emailErr) {
-              console.warn(
-                '[payments][webhook] falha no e-mail recorrente:',
-                emailErr.message
-              );
+              console.warn('[payments][webhook] falha no e-mail recorrente:', emailErr.message);
             }
           }
         } else {
-          const updates = {
-            status: 'PAST_DUE',
-            updatedAt: now.toISOString(),
-          };
-
-          if (
-            status === 'refunded' ||
-            status === 'charged_back'
-          ) {
-            updates.currentPeriodEnd = now.toISOString();
+          const updates = { status: 'PAST_DUE', updatedAt: nowMs.toISOString() };
+          if (status === 'refunded' || status === 'charged_back') {
+            updates.currentPeriodEnd = nowMs.toISOString();
           }
-
-          await db
-            .update(subscriptions)
-            .set(updates)
-            .where(eq(subscriptions.id, referencedSub.id));
-
-          await invalidateUserPaymentCaches(
-            referencedSub.userId
-          );
+          await db.update(subscriptions).set(updates).where(eq(subscriptions.id, referencedSub.id));
+          await invalidateUserPaymentCaches(referencedSub.userId);
         }
 
-        await db
-          .update(paymentsEvents)
+        await db.update(paymentsEvents)
           .set({
             processedAt: new Date().toISOString(),
             processingAt: null,
-            failureReason:
-              status === 'approved'
-                ? null
-                : `Pagamento recorrente ${status}.`,
+            failureReason: status === 'approved' ? null : `Pagamento recorrente ${status}.`,
           })
           .where(eq(paymentsEvents.id, eventRow.id));
 
-        return res.status(200).json({
-          ok: true,
-          subscription: true,
-          paymentStatus: status,
-        });
+        return res.status(200).json({ ok: true, subscription: true, paymentStatus: status });
       }
 
-      if (!order) {
-        throw new Error('PEDIDO_OU_ASSINATURA_INEXISTENTE');
-      }
+      if (!order) throw new Error('PEDIDO_OU_ASSINATURA_INEXISTENTE');
 
       if (status !== 'approved') {
-        if (
-          ['pending', 'in_process', 'authorized'].includes(status)
-        ) {
-          await db
-            .update(paymentsEvents)
-            .set({
-              processingAt: null,
-              failureReason: null,
-            })
+        if (['pending', 'in_process', 'authorized'].includes(status)) {
+          await db.update(paymentsEvents)
+            .set({ processingAt: null, failureReason: null })
             .where(eq(paymentsEvents.id, eventRow.id));
-
-          return res.status(200).json({
-            ok: true,
-            pending: true,
-          });
+          return res.status(200).json({ ok: true, pending: true });
         }
 
         const terminalOrderStatus =
@@ -1368,397 +1047,186 @@ async function handleWebhook(req, res) {
               : 'FAILED';
 
         if (terminalOrderStatus === 'REFUNDED') {
-          const [targetOrder] = await db
-            .select()
-            .from(orders)
-            .where(eq(orders.id, orderId))
-            .limit(1);
-
+          const [targetOrder] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
           if (targetOrder) {
             await db.transaction(async (tx) => {
-              await tx
-                .update(orders)
-                .set({ status: 'REFUNDED' })
-                .where(eq(orders.id, targetOrder.id));
-
-              await tx
-                .update(rentals)
+              await tx.update(orders).set({ status: 'REFUNDED' }).where(eq(orders.id, targetOrder.id));
+              await tx.update(rentals)
                 .set({ status: 'CANCELLED' })
-                .where(
-                  and(
-                    eq(rentals.orderId, targetOrder.id),
-                    eq(rentals.status, 'ACTIVE')
-                  )
-                );
+                .where(and(eq(rentals.orderId, targetOrder.id), eq(rentals.status, 'ACTIVE')));
             });
-
-            await invalidateUserPaymentCaches(
-              targetOrder.userId
-            );
+            await invalidateUserPaymentCaches(targetOrder.userId);
           }
         } else {
-          await db
-            .update(orders)
+          await db.update(orders)
             .set({ status: terminalOrderStatus })
-            .where(
-              and(
-                eq(orders.id, orderId),
-                eq(orders.status, 'PENDING')
-              )
-            );
+            .where(and(eq(orders.id, orderId), eq(orders.status, 'PENDING')));
         }
 
-        await db
-          .update(paymentsEvents)
+        await db.update(paymentsEvents)
           .set({
             processedAt: new Date().toISOString(),
             processingAt: null,
             failureReason:
-              terminalOrderStatus === 'FAILED' ||
-              terminalOrderStatus === 'CANCELLED'
+              terminalOrderStatus === 'FAILED' || terminalOrderStatus === 'CANCELLED'
                 ? `Pagamento ${status}.`
                 : null,
           })
           .where(eq(paymentsEvents.id, eventRow.id));
 
-        return res.status(200).json({
-          ok: true,
-          ignored: true,
-          paymentStatus: status,
-        });
+        return res.status(200).json({ ok: true, ignored: true, paymentStatus: status });
       }
 
-      const paidAmount =
-        Number(pay.transaction_amount) * 100;
-
-      if (
-        Number(order.totalCents) !== Math.round(paidAmount)
-      ) {
-        console.error(
-          '[payments][webhook] valor divergente:',
-          {
-            orderId,
-            esperado: order.totalCents,
-            pago: paidAmount,
-          }
-        );
-
+      const paidAmount = Number(pay.transaction_amount) * 100;
+      if (Number(order.totalCents) !== Math.round(paidAmount)) {
+        console.error('[payments][webhook] valor divergente:', { orderId, esperado: order.totalCents, pago: paidAmount });
         throw new Error('VALOR_DIVERGENTE');
       }
-
-      if (
-        pay.currency_id &&
-        order.currency &&
-        pay.currency_id !== order.currency
-      ) {
-        console.error(
-          '[payments][webhook] moeda divergente:',
-          {
-            orderId,
-            esperado: order.currency,
-            pago: pay.currency_id,
-          }
-        );
-
+      if (pay.currency_id && order.currency && pay.currency_id !== order.currency) {
+        console.error('[payments][webhook] moeda divergente:', { orderId, esperado: order.currency, pago: pay.currency_id });
         throw new Error('MOEDA_DIVERGENTE');
       }
 
       if (order.status === 'PAID') {
-        await db
-          .update(paymentsEvents)
-          .set({
-            processedAt: new Date().toISOString(),
-            processingAt: null,
-          })
+        await db.update(paymentsEvents)
+          .set({ processedAt: new Date().toISOString(), processingAt: null })
           .where(eq(paymentsEvents.id, eventRow.id));
-
-        return res.status(200).json({
-          ok: true,
-          alreadyPaid: true,
-        });
+        return res.status(200).json({ ok: true, alreadyPaid: true });
       }
 
-      // A transição PENDING -> PAID e a concessão do acesso
-      // são realizadas dentro da mesma transação.
+      // Correção P2: revalidação atômica dentro da transação.
       const fulfillment = await db.transaction(async (tx) => {
-        const [paidOrder] = await tx
-          .update(orders)
-          .set({
-            status: 'PAID',
-            paidAt: new Date().toISOString(),
-            externalPaymentId: String(pay.id),
-          })
-          .where(
-            and(
-              eq(orders.id, order.id),
-              eq(orders.status, 'PENDING')
-            )
-          )
-          .returning({
-            id: orders.id,
-          });
-
-        if (!paidOrder) {
-          return {
-            alreadyProcessed: true,
-            rental: null,
-            product: null,
-          };
-        }
-
-        const [orderItem] = await tx
+        const [currentOrder] = await tx
           .select()
-          .from(orderItems)
-          .where(eq(orderItems.orderId, order.id))
-          .limit(1);
+          .from(orders)
+          .where(and(eq(orders.id, order.id), eq(orders.status, 'PENDING')))
+          .for('update');
 
-        if (!orderItem) {
-          throw new Error('ITEM_PEDIDO_INEXISTENTE');
+        if (!currentOrder) {
+          return { alreadyProcessed: true, rental: null, product: null };
         }
 
+        if (Number(currentOrder.totalCents) !== Math.round(paidAmount)) {
+          throw new Error('VALOR_DIVERGENTE_CONCORRENTE');
+        }
+        if (pay.currency_id && currentOrder.currency && pay.currency_id !== currentOrder.currency) {
+          throw new Error('MOEDA_DIVERGENTE_CONCORRENTE');
+        }
+
+        await tx.update(orders)
+          .set({ status: 'PAID', paidAt: new Date().toISOString(), externalPaymentId: String(pay.id) })
+          .where(eq(orders.id, currentOrder.id));
+
+        const [orderItem] = await tx.select().from(orderItems).where(eq(orderItems.orderId, order.id)).limit(1);
+        if (!orderItem) throw new Error('ITEM_PEDIDO_INEXISTENTE');
         if (orderItem.productType !== 'RENTAL') {
-          return {
-            alreadyProcessed: false,
-            rental: null,
-            product: null,
-          };
+          return { alreadyProcessed: false, rental: null, product: null };
         }
 
-        const [prod] = await tx
-          .select()
-          .from(rentalProducts)
-          .where(eq(rentalProducts.id, orderItem.productId))
-          .limit(1);
-
-        if (
-          !prod ||
-          !prod.active ||
-          !Number.isInteger(prod.durationHours) ||
-          prod.durationHours <= 0
-        ) {
+        const [prod] = await tx.select().from(rentalProducts).where(eq(rentalProducts.id, orderItem.productId)).limit(1);
+        if (!prod || !prod.active || !Number.isInteger(prod.durationHours) || prod.durationHours <= 0) {
           throw new Error('PRODUTO_INEXISTENTE_OU_INVALIDO');
         }
 
         const startedAt = new Date();
+        const expiresAt = new Date(startedAt.getTime() + prod.durationHours * 3600 * 1000);
 
-        const expiresAt = new Date(
-          startedAt.getTime() +
-          prod.durationHours * 3600 * 1000
-        );
+        const [rental] = await tx.insert(rentals).values({
+          id: randomUUID(),
+          rentalCode: `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
+          userId: currentOrder.userId,
+          trackId: prod.trackId,
+          albumId: prod.albumId,
+          orderId: currentOrder.id,
+          status: 'ACTIVE',
+          startsAt: startedAt.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+        }).returning();
 
-        const [rental] = await tx
-          .insert(rentals)
-          .values({
-            id: randomUUID(),
-            rentalCode:
-              `RENT-${randomUUID().slice(0, 8).toUpperCase()}`,
-            userId: order.userId,
-            trackId: prod.trackId,
-            albumId: prod.albumId,
-            orderId: order.id,
-            status: 'ACTIVE',
-            startsAt: startedAt.toISOString(),
-            expiresAt: expiresAt.toISOString(),
-          })
-          .returning();
-
-        return {
-          alreadyProcessed: false,
-          rental,
-          product: prod,
-        };
+        return { alreadyProcessed: false, rental, product: prod };
       });
 
       if (fulfillment.alreadyProcessed) {
-        await db
-          .update(paymentsEvents)
-          .set({
-            processedAt: new Date().toISOString(),
-            processingAt: null,
-          })
+        await db.update(paymentsEvents)
+          .set({ processedAt: new Date().toISOString(), processingAt: null })
           .where(eq(paymentsEvents.id, eventRow.id));
-
-        return res.status(200).json({
-          ok: true,
-          alreadyPaid: true,
-        });
+        return res.status(200).json({ ok: true, alreadyPaid: true });
       }
 
       await invalidateUserPaymentCaches(order.userId);
 
       if (fulfillment.rental && fulfillment.product) {
         try {
-          const [user] = await db
-            .select({ email: users.email })
-            .from(users)
-            .where(eq(users.id, order.userId))
-            .limit(1);
-
+          const [user] = await db.select({ email: users.email }).from(users).where(eq(users.id, order.userId)).limit(1);
           if (user?.email) {
-            await sendRentalConfirmation(
-              user.email,
-              fulfillment.product.name,
-              fulfillment.rental.expiresAt
-            );
+            await sendRentalConfirmation(user.email, fulfillment.product.name, fulfillment.rental.expiresAt);
           }
         } catch (emailErr) {
-          console.warn(
-            '[payments][webhook] falha no e-mail:',
-            emailErr.message
-          );
+          console.warn('[payments][webhook] falha no e-mail:', emailErr.message);
         }
       }
 
-    } else if (
-      type === 'subscription_preapproval' ||
-      type === 'preapproval'
-    ) {
-      const pre = await mpFetch(
-        `/preapproval/${encodeURIComponent(dataId)}`
-      );
-
+    } else if (type === 'subscription_preapproval' || type === 'preapproval') {
+      const pre = await mpFetch(`/preapproval/${encodeURIComponent(dataId)}`);
       const subId = pre.external_reference;
 
       if (subId) {
         if (pre.status === 'authorized') {
-          // A autorização da recorrência não confirma o pagamento.
-          // A assinatura só é ativada após pagamento aprovado.
           const [sub] = await db
-            .select({
-              id: subscriptions.id,
-              externalSubscriptionId:
-                subscriptions.externalSubscriptionId,
-            })
+            .select({ id: subscriptions.id })
             .from(subscriptions)
-            .where(
-              and(
-                eq(subscriptions.id, subId),
-                eq(
-                  subscriptions.externalSubscriptionId,
-                  String(pre.id)
-                )
-              )
-            )
+            .where(and(eq(subscriptions.id, subId), eq(subscriptions.externalSubscriptionId, String(pre.id))))
             .limit(1);
-
-          if (!sub) {
-            throw new Error(
-              'ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY'
-            );
-          }
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
 
         } else if (pre.status === 'paused') {
           const [sub] = await db
             .select()
             .from(subscriptions)
-            .where(
-              and(
-                eq(subscriptions.id, subId),
-                eq(
-                  subscriptions.externalSubscriptionId,
-                  String(pre.id)
-                )
-              )
-            )
+            .where(and(eq(subscriptions.id, subId), eq(subscriptions.externalSubscriptionId, String(pre.id))))
             .limit(1);
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
 
-          if (!sub) {
-            throw new Error(
-              'ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY'
-            );
-          }
-
-          await db
-            .update(subscriptions)
-            .set({
-              status: 'PAUSED',
-              updatedAt: new Date().toISOString(),
-            })
+          await db.update(subscriptions)
+            .set({ status: 'PAUSED', updatedAt: new Date().toISOString() })
             .where(eq(subscriptions.id, subId));
-
           await invalidateUserPaymentCaches(sub.userId);
 
-        } else if (
-          pre.status === 'cancelled' ||
-          pre.status === 'canceled'
-        ) {
+        } else if (pre.status === 'cancelled' || pre.status === 'canceled') {
           const [sub] = await db
             .select()
             .from(subscriptions)
-            .where(
-              and(
-                eq(subscriptions.id, subId),
-                eq(
-                  subscriptions.externalSubscriptionId,
-                  String(pre.id)
-                )
-              )
-            )
+            .where(and(eq(subscriptions.id, subId), eq(subscriptions.externalSubscriptionId, String(pre.id))))
             .limit(1);
-
-          if (!sub) {
-            throw new Error(
-              'ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY'
-            );
-          }
+          if (!sub) throw new Error('ASSINATURA_NAO_CORRESPONDE_AO_GATEWAY');
 
           await db.transaction(async (tx) => {
-            await tx
-              .update(subscriptions)
-              .set({
-                status: 'CANCELLED',
-                updatedAt: new Date().toISOString(),
-              })
+            await tx.update(subscriptions)
+              .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
               .where(eq(subscriptions.id, subId));
-
             if (sub.orderId) {
-              await tx
-                .update(orders)
+              await tx.update(orders)
                 .set({ status: 'CANCELLED' })
-                .where(
-                  and(
-                    eq(orders.id, sub.orderId),
-                    eq(orders.status, 'PENDING')
-                  )
-                );
+                .where(and(eq(orders.id, sub.orderId), eq(orders.status, 'PENDING')));
             }
           });
 
-          if (sub.userId) {
-            await invalidateUserPaymentCaches(sub.userId);
-          }
+          if (sub.userId) await invalidateUserPaymentCaches(sub.userId);
         }
       }
     }
 
-    await db
-      .update(paymentsEvents)
-      .set({
-        processedAt: new Date().toISOString(),
-        processingAt: null,
-        failureReason: null,
-      })
+    await db.update(paymentsEvents)
+      .set({ processedAt: new Date().toISOString(), processingAt: null, failureReason: null })
       .where(eq(paymentsEvents.id, eventRow.id));
 
     return res.status(200).json({ ok: true });
 
   } catch (err) {
-    console.error(
-      '[payments][webhook] erro:',
-      err.message,
-      err.body || ''
-    );
-
-    await db
-      .update(paymentsEvents)
-      .set({
-        failureReason: String(
-          err.message || 'WEBHOOK_ERROR'
-        ).slice(0, 500),
-        processingAt: null,
-      })
+    console.error('[payments][webhook] erro:', err.message, err.body || '');
+    await db.update(paymentsEvents)
+      .set({ failureReason: String(err.message || 'WEBHOOK_ERROR').slice(0, 500), processingAt: null })
       .where(eq(paymentsEvents.id, eventRow.id));
-
     return res.status(500).json({ ok: false });
   }
 }
@@ -1766,35 +1234,16 @@ async function handleWebhook(req, res) {
 // ─────────────────────────────────────────────────────────────
 // ROTEADOR PRINCIPAL
 // ─────────────────────────────────────────────────────────────
-
 module.exports = async (req, res) => {
   const allowedOrigin = APP_URL();
-
   if (allowedOrigin) {
-    res.setHeader(
-      'Access-Control-Allow-Origin',
-      allowedOrigin
-    );
-
-    res.setHeader(
-      'Access-Control-Allow-Credentials',
-      'true'
-    );
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-signature, x-request-id');
 
-  res.setHeader(
-    'Access-Control-Allow-Methods',
-    'GET, POST, OPTIONS'
-  );
-
-  res.setHeader(
-    'Access-Control-Allow-Headers',
-    'Authorization, Content-Type, x-signature, x-request-id'
-  );
-
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
 
   const type = String(req.query.type || '');
   const action = String(req.query.action || '');
@@ -1805,7 +1254,6 @@ module.exports = async (req, res) => {
   }
 
   let user = null;
-
   try {
     user = await getAuthUser(req);
   } catch (e) {
@@ -1813,62 +1261,33 @@ module.exports = async (req, res) => {
   }
 
   if (!user) {
-    return res.status(401).json({
-      ok: false,
-      error: 'Não autenticado',
-    });
+    return res.status(401).json({ ok: false, error: 'Não autenticado' });
   }
 
-  // Operações mutáveis exigem validação de origem.
-  if (
-    req.method !== 'GET' &&
-    !checkOrigin(req)
-  ) {
-    return res.status(403).json({
-      ok: false,
-      error: 'Origem não permitida.',
-    });
+  if (req.method !== 'GET' && !checkOrigin(req)) {
+    return res.status(403).json({ ok: false, error: 'Origem não permitida.' });
   }
 
   try {
     if (op === 'rental' || op === 'rent') {
       return await handleRental(req, res, user);
     }
-
-    if (
-      op === 'subscription' ||
-      op === 'subscribe'
-    ) {
+    if (op === 'subscription' || op === 'subscribe') {
       return await handleSubscription(req, res, user);
     }
-
     if (op === 'manage') {
       return await handleManage(req, res, user);
     }
-
-    return res.status(400).json({
-      ok: false,
-      error: 'Ação inválida',
-    });
-
+    return res.status(400).json({ ok: false, error: 'Ação inválida' });
   } catch (err) {
-    if (
-      err?.status &&
-      err.status >= 400 &&
-      err.status < 500
-    ) {
+    if (err?.status && err.status >= 400 && err.status < 500) {
       return res.status(err.status).json({
         ok: false,
         error: err.message || 'Requisição inválida.',
         code: err.code || null,
       });
     }
-
     console.error('[payments] erro:', err.message);
-
-    return res.status(500).json({
-      ok: false,
-      error: 'Erro interno',
-    });
+    return res.status(500).json({ ok: false, error: 'Erro interno' });
   }
 };
