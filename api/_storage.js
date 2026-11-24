@@ -254,29 +254,52 @@ function buildPathForKind(kind, filename) {
 // ─────────────────────────────────────────────────────────────
 const QUARANTINE_SEGMENTS = 3;
 
+
 function inferKindFromKey(key) {
   validateObjectKey(key);
+
   const k = String(key);
+  const first = k.split('/')[0];
 
   if (k.startsWith(QUARANTINE_PREFIX + '/')) {
     const segments = k.split('/');
+
     if (segments.length !== QUARANTINE_SEGMENTS) {
       const err = new Error('Caminho de quarentena com estrutura inválida.');
       err.code = 'INVALID_KEY_PREFIX';
       throw err;
     }
+
     const kind = segments[1];
-    if (kind === 'audio-full' || kind === 'audio-preview' || kind === 'image') return kind;
+
+    if (
+      kind === 'audio-full' ||
+      kind === 'audio-preview' ||
+      kind === 'image'
+    ) {
+      return kind;
+    }
+
     const err = new Error('Caminho de quarentena com kind inválido.');
     err.code = 'INVALID_KEY_PREFIX';
     throw err;
   }
 
   const config = getStorageConfig();
-  const first = k.split('/')[0];
-  for (const [kind, prefix] of Object.entries(config.prefixes)) {
-    if (first === prefix) return kind;
+
+  // Prefixo legado: mantém compatibilidade com objetos
+  // já armazenados no bucket privado usando "premium/".
+  if (first === 'premium') {
+    return 'audio-full';
   }
+
+  // Prefixos canônicos configurados.
+  for (const [kind, prefix] of Object.entries(config.prefixes)) {
+    if (first === prefix) {
+      return kind;
+    }
+  }
+
   const err = new Error('Prefixo de objeto não reconhecido.');
   err.code = 'INVALID_KEY_PREFIX';
   throw err;
