@@ -1,17 +1,13 @@
-
 'use strict';
 
 /* ============================================================
-   API: /api/auth — Autenticação (v16)
+   API: /api/auth — Autenticação (v17)
    ------------------------------------------------------------
-   Correções:
-   - Signup informa updatedAt, obrigatório no schema.
-   - Refresh tokens não tentam gravar colunas inexistentes
-     (ip e userAgent) na tabela refresh_tokens.
-   - Rotação de refresh token revalida o estado dentro
-     da transação, após adquirir o lock do usuário.
-   - Mantém compatibilidade com sessionVersion, sessionId
-     e replacedAt definidos em src/schema.js.
+   Correções v17:
+   - handleRefresh: bloqueia usuário anonimizado (@deleted.local)
+   - handleRefresh: rate limit por usuário além do IP
+   - handleLogoutAll: exige confirmação de senha
+   - audit?.() permanece fire-and-forget (aceita perda ocasional)
    ============================================================ */
 
 const crypto = require('node:crypto');
@@ -84,6 +80,12 @@ const RL_REFRESH = {
   windowMs: 15 * 60 * 1000,
 };
 
+// Correção v17: rate limit específico para refresh por usuário.
+const RL_REFRESH_USER = {
+  max: 20,
+  windowMs: 15 * 60 * 1000,
+};
+
 if (!JWT_ISSUER || !JWT_AUDIENCE) {
   throw new Error('[auth] JWT_ISSUER/JWT_AUDIENCE ausentes em _lib.js.');
 }
@@ -93,13 +95,11 @@ const AUDIENCE = JWT_AUDIENCE;
 
 const DUMMY_PASSWORD_HASH = (() => {
   const salt = crypto.randomBytes(SCRYPT_SALT_BYTES);
-
   const derived = crypto.scryptSync(
     crypto.randomBytes(32).toString('hex'),
     salt,
     SCRYPT_KEYLEN
   );
-
   return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
 })();
 
@@ -123,29 +123,24 @@ const NETWORK_ERR_CODES = new Set([
 
 function isDbUnavailable(err) {
   let current = err;
-
   for (let depth = 0; current && depth < 5; depth++) {
     const code = String(current.code || '');
-
-    if (NETWORK_ERR_CODES.has(code)) {
-      return true;
-    }
-
-    if (/^08[0-9A-Z]{3}$/i.test(code)) {
-      return true;
-    }
-
+    if (NETWORK_ERR_CODES.has(code)) return true;
+    if (/^08[0-9A-Z]{3}$/i.test(code)) return true;
     if (
       current.name === 'NeonDbError' &&
       /connect|network|timeout/i.test(current.message || '')
     ) {
       return true;
     }
-
     current = current.cause;
   }
-
   return false;
+}
+
+function isAnonymizedUser(user) {
+  if (!user || typeof user.email !== 'string') return false;
+  return user.email.endsWith('@deleted.local');
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -154,13 +149,11 @@ function isDbUnavailable(err) {
 
 function getJwtSecret() {
   const secret = String(process.env.JWT_SECRET || '').trim();
-
   if (!secret || secret.length < 32) {
     const err = new Error('JWT_SECRET ausente ou curto demais.');
     err.code = 'JWT_SECRET_INVALID';
     throw err;
   }
-
   return secret;
 }
 
@@ -170,21 +163,17 @@ function assertJwtConfig() {
 
 function getSessionVersion(user) {
   const raw = user?.sessionVersion;
-
   if (raw === null || raw === undefined) {
     const err = new Error('sessionVersion ausente.');
     err.code = 'SESSION_VERSION_INVALID';
     throw err;
   }
-
   const value = Number(raw);
-
   if (!Number.isSafeInteger(value) || value < 0) {
     const err = new Error('sessionVersion inválido.');
     err.code = 'SESSION_VERSION_INVALID';
     throw err;
   }
-
   return value;
 }
 
@@ -192,7 +181,6 @@ function signAccessToken(user, sessionId) {
   if (typeof sessionId !== 'string' || !UUID_RE.test(sessionId)) {
     throw new Error('sessionId inválido (não é UUID).');
   }
-
   return jwt.sign(
     {
       id: String(user.id),
@@ -212,10 +200,7 @@ function signAccessToken(user, sessionId) {
 }
 
 function hashRefreshToken(raw) {
-  return crypto
-    .createHash('sha256')
-    .update(raw)
-    .digest('hex');
+  return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
 function generateRefreshToken() {
@@ -228,19 +213,12 @@ function isValidRefreshTokenFormat(raw) {
 
 function parseBody(req) {
   let body = req.body;
-
   if (typeof body === 'string') {
-    try {
-      body = JSON.parse(body);
-    } catch {
-      return null;
-    }
+    try { body = JSON.parse(body); } catch { return null; }
   }
-
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return null;
   }
-
   return body;
 }
 
@@ -251,41 +229,25 @@ function parseAction(req) {
 function sendJson(res, status, payload) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Pragma', 'no-cache');
-
   return res.status(status).json(payload);
 }
 
 async function revokeRefreshSafe(userId, rawRefreshToken) {
-  if (!userId || !rawRefreshToken) {
-    return false;
-  }
-
+  if (!userId || !rawRefreshToken) return false;
   try {
     const tokenHash = hashRefreshToken(rawRefreshToken);
-
     const result = await db
       .update(refreshTokens)
-      .set({
-        revokedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(refreshTokens.userId, userId),
-          eq(refreshTokens.tokenHash, tokenHash),
-          isNull(refreshTokens.revokedAt)
-        )
-      )
-      .returning({
-        id: refreshTokens.id,
-      });
-
+      .set({ revokedAt: new Date().toISOString() })
+      .where(and(
+        eq(refreshTokens.userId, userId),
+        eq(refreshTokens.tokenHash, tokenHash),
+        isNull(refreshTokens.revokedAt)
+      ))
+      .returning({ id: refreshTokens.id });
     return result.length === 1;
   } catch (err) {
-    console.error(
-      '[auth] revokeRefreshSafe falhou:',
-      err.message
-    );
-
+    console.error('[auth] revokeRefreshSafe falhou:', err.message);
     return false;
   }
 }
@@ -295,11 +257,7 @@ function safeSetAuthCookies(res, session, operation) {
     setAuthCookies(res, session);
     return true;
   } catch (err) {
-    console.error(
-      `[auth][${operation}] setAuthCookies falhou:`,
-      err.message
-    );
-
+    console.error(`[auth][${operation}] setAuthCookies falhou:`, err.message);
     return false;
   }
 }
@@ -318,20 +276,10 @@ function isValidEmail(value) {
 }
 
 function isValidName(value) {
-  if (typeof value !== 'string') {
-    return false;
-  }
-
+  if (typeof value !== 'string') return false;
   const normalized = value.trim();
-
-  if (!normalized || normalized.length > MAX_NAME_LEN) {
-    return false;
-  }
-
-  if (/[\u0000-\u001F\u007F]/.test(normalized)) {
-    return false;
-  }
-
+  if (!normalized || normalized.length > MAX_NAME_LEN) return false;
+  if (/[\u0000-\u001F\u007F]/.test(normalized)) return false;
   return true;
 }
 
@@ -350,82 +298,33 @@ function isValidPassword(value) {
 function scryptAsync(password, salt, keylen) {
   return new Promise((resolve, reject) => {
     crypto.scrypt(password, salt, keylen, (err, derived) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(derived);
-      }
+      if (err) reject(err);
+      else resolve(derived);
     });
   });
 }
 
 async function hashPassword(password) {
   const salt = crypto.randomBytes(SCRYPT_SALT_BYTES);
-
-  const derived = await scryptAsync(
-    password,
-    salt,
-    SCRYPT_KEYLEN
-  );
-
+  const derived = await scryptAsync(password, salt, SCRYPT_KEYLEN);
   return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
 }
 
 async function verifyPassword(password, stored) {
-  if (
-    typeof password !== 'string' ||
-    !isValidPassword(password)
-  ) {
-    return false;
-  }
-
-  if (typeof stored !== 'string') {
-    return false;
-  }
-
+  if (typeof password !== 'string' || !isValidPassword(password)) return false;
+  if (typeof stored !== 'string') return false;
   const parts = stored.split('$');
-
-  if (parts.length !== 3) {
-    return false;
-  }
-
-  if (parts[0] !== 'scrypt') {
-    return false;
-  }
-
-  if (parts[1].length !== SCRYPT_SALT_HEX_LEN) {
-    return false;
-  }
-
-  if (parts[2].length !== SCRYPT_HASH_HEX_LEN) {
-    return false;
-  }
-
-  if (!/^[0-9a-f]+$/i.test(parts[1])) {
-    return false;
-  }
-
-  if (!/^[0-9a-f]+$/i.test(parts[2])) {
-    return false;
-  }
-
+  if (parts.length !== 3) return false;
+  if (parts[0] !== 'scrypt') return false;
+  if (parts[1].length !== SCRYPT_SALT_HEX_LEN) return false;
+  if (parts[2].length !== SCRYPT_HASH_HEX_LEN) return false;
+  if (!/^[0-9a-f]+$/i.test(parts[1])) return false;
+  if (!/^[0-9a-f]+$/i.test(parts[2])) return false;
   const salt = Buffer.from(parts[1], 'hex');
   const expected = Buffer.from(parts[2], 'hex');
-
-  if (salt.length !== SCRYPT_SALT_BYTES) {
-    return false;
-  }
-
-  if (expected.length !== SCRYPT_KEYLEN) {
-    return false;
-  }
-
-  const derived = await scryptAsync(
-    password,
-    salt,
-    SCRYPT_KEYLEN
-  );
-
+  if (salt.length !== SCRYPT_SALT_BYTES) return false;
+  if (expected.length !== SCRYPT_KEYLEN) return false;
+  const derived = await scryptAsync(password, salt, SCRYPT_KEYLEN);
   return crypto.timingSafeEqual(derived, expected);
 }
 
@@ -436,10 +335,8 @@ async function verifyPassword(password, stored) {
 async function resolvePlan(userId) {
   let plan = 'free';
   let planDegraded = false;
-
   try {
     const result = await getPlanForUserDetailed(userId);
-
     if (result?.degraded) {
       planDegraded = true;
     } else if (result && VALID_PLANS.has(result.plan)) {
@@ -448,11 +345,7 @@ async function resolvePlan(userId) {
   } catch {
     planDegraded = true;
   }
-
-  return {
-    plan,
-    planDegraded,
-  };
+  return { plan, planDegraded };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -461,8 +354,7 @@ async function resolvePlan(userId) {
 
 function rateUnavailable(results) {
   return results.some((result) => (
-    result &&
-    (
+    result && (
       result.reason === 'rate_limit_unavailable' ||
       result.reason === 'rate_limit_error' ||
       result.reason === 'internal_error'
@@ -483,46 +375,30 @@ async function applyRateLimit(res, buckets) {
   try {
     const results = await Promise.all(
       buckets.map(({ bucket, max, windowMs }) =>
-        checkAndIncrement(
-          bucket,
-          max,
-          windowMs,
-          { failClosed: true }
-        )
+        checkAndIncrement(bucket, max, windowMs, { failClosed: true })
       )
     );
-
     if (rateUnavailable(results)) {
       return sendJson(res, 503, {
         ok: false,
         error: 'Serviço temporariamente indisponível.',
       });
     }
-
     if (rateLimited(results)) {
-      const limited =
-        results.find((result) => result && result.limited === true) || {};
-
+      const limited = results.find((r) => r && r.limited === true) || {};
       const retryAfterMs =
-        typeof limited.retryAfterMs === 'number' &&
-        limited.retryAfterMs > 0
+        typeof limited.retryAfterMs === 'number' && limited.retryAfterMs > 0
           ? limited.retryAfterMs
           : null;
-
       if (retryAfterMs) {
-        res.setHeader(
-          'Retry-After',
-          String(Math.ceil(retryAfterMs / 1000))
-        );
+        res.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1000)));
       }
-
       return sendJson(res, 429, {
         ok: false,
         error: 'Muitas tentativas. Tente novamente em instantes.',
         retryAfterMs: retryAfterMs ?? undefined,
       });
     }
-
     return null;
   } catch {
     return sendJson(res, 503, {
@@ -552,46 +428,27 @@ async function createRefreshTokenLocked(tx, userId, sessionId) {
       createdAt: refreshTokens.createdAt,
     })
     .from(refreshTokens)
-    .where(
-      and(
-        eq(refreshTokens.userId, userId),
-        isNull(refreshTokens.revokedAt),
-        gt(refreshTokens.expiresAt, nowIso)
-      )
-    )
-    .orderBy(
-      asc(refreshTokens.createdAt),
-      asc(refreshTokens.id)
-    );
+    .where(and(
+      eq(refreshTokens.userId, userId),
+      isNull(refreshTokens.revokedAt),
+      gt(refreshTokens.expiresAt, nowIso)
+    ))
+    .orderBy(asc(refreshTokens.createdAt), asc(refreshTokens.id));
 
   if (sessions.length >= MAX_SESSIONS) {
-    const toRevoke = sessions.slice(
-      0,
-      sessions.length - MAX_SESSIONS + 1
-    );
-
+    const toRevoke = sessions.slice(0, sessions.length - MAX_SESSIONS + 1);
     const ids = toRevoke.map((session) => session.id);
-
     if (ids.length) {
-      await tx
-        .update(refreshTokens)
-        .set({
-          revokedAt: nowIso,
-        })
+      await tx.update(refreshTokens)
+        .set({ revokedAt: nowIso })
         .where(inArray(refreshTokens.id, ids));
     }
   }
 
   const raw = generateRefreshToken();
   const tokenHash = hashRefreshToken(raw);
+  const expiresAt = new Date(now.getTime() + REFRESH_TTL_MS).toISOString();
 
-  const expiresAt = new Date(
-    now.getTime() + REFRESH_TTL_MS
-  ).toISOString();
-
-  // Importante:
-  // A tabela refresh_tokens não possui colunas ip ou userAgent.
-  // Somente campos existentes no src/schema.js são inseridos.
   await tx.insert(refreshTokens).values({
     id: crypto.randomUUID(),
     userId,
@@ -601,10 +458,7 @@ async function createRefreshTokenLocked(tx, userId, sessionId) {
     createdAt: nowIso,
   });
 
-  return {
-    raw,
-    expiresAt,
-  };
+  return { raw, expiresAt };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -613,23 +467,15 @@ async function createRefreshTokenLocked(tx, userId, sessionId) {
 
 async function handleSignup(req, res) {
   const body = parseBody(req);
-
   if (!body) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Payload inválido.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
   }
-
   if (
     typeof body.name !== 'string' ||
     typeof body.email !== 'string' ||
     typeof body.password !== 'string'
   ) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Dados de cadastro inválidos.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Dados de cadastro inválidos.' });
   }
 
   const name = body.name.trim();
@@ -637,89 +483,48 @@ async function handleSignup(req, res) {
   const password = body.password;
 
   if (!isValidName(name)) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Nome inválido.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Nome inválido.' });
   }
-
   if (!isValidEmail(email)) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'E-mail inválido.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'E-mail inválido.' });
   }
-
   if (!isValidPassword(password)) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Senha inválida.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Senha inválida.' });
   }
 
   const ip = clientIp(req);
-
   if (!ip) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Origem não identificada.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
-
   const ipHash = hashRateLimitKey(ip);
 
-  if (
-    await applyRateLimit(res, [
-      {
-        bucket: `signup:ip:${ipHash}`,
-        ...RL_SIGNUP,
-      },
-      {
-        bucket: `signup:email:${hashRateLimitKey(email)}`,
-        ...RL_SIGNUP,
-      },
-    ])
-  ) {
-    return;
-  }
+  if (await applyRateLimit(res, [
+    { bucket: `signup:ip:${ipHash}`, ...RL_SIGNUP },
+    { bucket: `signup:email:${hashRateLimitKey(email)}`, ...RL_SIGNUP },
+  ])) return;
 
-  try {
-    assertJwtConfig();
-  } catch {
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Configuração de autenticação inválida.',
-    });
+  try { assertJwtConfig(); }
+  catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
   }
 
   let passwordHash;
-
   try {
     passwordHash = await hashPassword(password);
   } catch (err) {
-    console.error(
-      '[auth][signup] hash falhou:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][signup] hash falhou:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   let createdUserId = null;
   let accessToken = null;
   let refreshRaw = null;
-
   const sessionId = crypto.randomUUID();
 
   try {
     await db.transaction(async (tx) => {
       const [existing] = await tx
-        .select({
-          id: users.id,
-        })
+        .select({ id: users.id })
         .from(users)
         .where(eq(users.email, email))
         .limit(1);
@@ -753,135 +558,59 @@ async function handleSignup(req, res) {
         });
 
       createdUserId = insertedUser.id;
+      accessToken = signAccessToken(insertedUser, sessionId);
+      await acquireUserLock(tx, insertedUser.id);
 
-      accessToken = signAccessToken(
-        insertedUser,
-        sessionId
-      );
-
-      await acquireUserLock(
-        tx,
-        insertedUser.id
-      );
-
-      const created = await createRefreshTokenLocked(
-        tx,
-        insertedUser.id,
-        sessionId
-      );
-
+      const created = await createRefreshTokenLocked(tx, insertedUser.id, sessionId);
       refreshRaw = created.raw;
     });
   } catch (err) {
     if (err.code === 'EMAIL_TAKEN') {
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'E-mail já cadastrado.',
-      });
+      return sendJson(res, 409, { ok: false, error: 'E-mail já cadastrado.' });
     }
-
     if (err.code === '23505') {
-      const constraint = String(
-        err.constraint || err.detail || ''
-      ).toLowerCase();
-
-      if (
-        constraint.includes('email') ||
-        constraint.includes('users_email')
-      ) {
-        return sendJson(res, 409, {
-          ok: false,
-          error: 'E-mail já cadastrado.',
-        });
+      const constraint = String(err.constraint || err.detail || '').toLowerCase();
+      if (constraint.includes('email') || constraint.includes('users_email')) {
+        return sendJson(res, 409, { ok: false, error: 'E-mail já cadastrado.' });
       }
-
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'Conflito de dados.',
-      });
+      return sendJson(res, 409, { ok: false, error: 'Conflito de dados.' });
     }
-
     if (err.code === 'SESSION_VERSION_INVALID') {
-      console.error(
-        '[auth][signup] sessionVersion inválido após INSERT'
-      );
-
-      return sendJson(res, 500, {
-        ok: false,
-        error: 'Erro interno.',
-      });
+      console.error('[auth][signup] sessionVersion inválido após INSERT');
+      return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
     }
-
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][signup] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][signup] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][signup] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][signup] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   if (!createdUserId) {
-    console.error(
-      '[auth][signup] createdUserId ausente após commit'
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][signup] createdUserId ausente após commit');
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
-  const cookiesOk = safeSetAuthCookies(
-    res,
-    {
-      access_token: accessToken,
-      refresh_token: refreshRaw,
-    },
-    'signup'
-  );
+  const cookiesOk = safeSetAuthCookies(res, {
+    access_token: accessToken,
+    refresh_token: refreshRaw,
+  }, 'signup');
 
   if (!cookiesOk) {
-    const revoked = await revokeRefreshSafe(
-      createdUserId,
-      refreshRaw
-    );
-
+    const revoked = await revokeRefreshSafe(createdUserId, refreshRaw);
     if (!revoked) {
-      console.error(
-        '[auth][signup] CRÍTICO: refresh órfão não revogado'
-      );
+      console.error('[auth][signup] CRÍTICO: refresh órfão não revogado');
     }
-
     return sendJson(res, 503, {
       ok: false,
       error: 'Não foi possível iniciar sessão. Tente novamente.',
     });
   }
 
-  const { plan, planDegraded } = await resolvePlan(
-    createdUserId
-  );
+  const { plan, planDegraded } = await resolvePlan(createdUserId);
 
-  audit?.('auth.signup', {
-    userId: createdUserId,
-    ip,
-    success: true,
-  });
+  audit?.('auth.signup', { userId: createdUserId, ip, success: true });
 
   return sendJson(res, 201, {
     ok: true,
@@ -897,70 +626,37 @@ async function handleSignup(req, res) {
 
 async function handleLogin(req, res) {
   const body = parseBody(req);
-
   if (!body) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Payload inválido.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Payload inválido.' });
   }
-
   if (
     typeof body.email !== 'string' ||
     typeof body.password !== 'string'
   ) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Credenciais inválidas.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
   }
 
   const email = normalizeEmail(body.email);
   const password = body.password;
 
-  if (
-    !isValidEmail(email) ||
-    !isValidPassword(password)
-  ) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Credenciais inválidas.',
-    });
+  if (!isValidEmail(email) || !isValidPassword(password)) {
+    return sendJson(res, 400, { ok: false, error: 'Credenciais inválidas.' });
   }
 
   const ip = clientIp(req);
-
   if (!ip) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Origem não identificada.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
-
   const ipHash = hashRateLimitKey(ip);
 
-  if (
-    await applyRateLimit(res, [
-      {
-        bucket: `login:ip:${ipHash}`,
-        ...RL_LOGIN,
-      },
-      {
-        bucket: `login:email:${hashRateLimitKey(email)}`,
-        ...RL_LOGIN,
-      },
-    ])
-  ) {
-    return;
-  }
+  if (await applyRateLimit(res, [
+    { bucket: `login:ip:${ipHash}`, ...RL_LOGIN },
+    { bucket: `login:email:${hashRateLimitKey(email)}`, ...RL_LOGIN },
+  ])) return;
 
-  try {
-    assertJwtConfig();
-  } catch {
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Configuração de autenticação inválida.',
-    });
+  try { assertJwtConfig(); }
+  catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
   }
 
   let user = null;
@@ -978,30 +674,14 @@ async function handleLogin(req, res) {
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
-
     user = row || null;
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][login] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][login] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][login] consulta falhou:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][login] consulta falhou:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   let passwordOk = false;
@@ -1011,15 +691,8 @@ async function handleLogin(req, res) {
       ? await verifyPassword(password, user.passwordHash)
       : (await verifyPassword(password, DUMMY_PASSWORD_HASH), false);
   } catch (err) {
-    console.error(
-      '[auth][login] verify falhou:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][login] verify falhou:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   if (!user || !passwordOk) {
@@ -1029,11 +702,18 @@ async function handleLogin(req, res) {
       success: false,
       reason: 'invalid_credentials',
     });
+    return sendJson(res, 401, { ok: false, error: 'Credenciais inválidas.' });
+  }
 
-    return sendJson(res, 401, {
-      ok: false,
-      error: 'Credenciais inválidas.',
+  // Correção v17: usuário anonimizado não pode logar.
+  if (isAnonymizedUser(user)) {
+    audit?.('auth.login.failed', {
+      email,
+      ip,
+      success: false,
+      reason: 'user_deleted',
     });
+    return sendJson(res, 401, { ok: false, error: 'Credenciais inválidas.' });
   }
 
   const expectedPasswordHash = user.passwordHash;
@@ -1041,7 +721,6 @@ async function handleLogin(req, res) {
   let accessToken = null;
   let refreshRaw = null;
   let freshUser = null;
-
   const sessionId = crypto.randomUUID();
 
   try {
@@ -1066,43 +745,32 @@ async function handleLogin(req, res) {
         err.code = 'USER_NOT_FOUND';
         throw err;
       }
-
       if (fu.passwordHash !== expectedPasswordHash) {
         const err = new Error('PASSWORD_CHANGED');
         err.code = 'PASSWORD_CHANGED';
         throw err;
       }
+      if (isAnonymizedUser(fu)) {
+        const err = new Error('USER_DELETED');
+        err.code = 'USER_DELETED';
+        throw err;
+      }
 
       freshUser = fu;
+      accessToken = signAccessToken(fu, sessionId);
 
-      accessToken = signAccessToken(
-        fu,
-        sessionId
-      );
-
-      const created = await createRefreshTokenLocked(
-        tx,
-        fu.id,
-        sessionId
-      );
-
+      const created = await createRefreshTokenLocked(tx, fu.id, sessionId);
       refreshRaw = created.raw;
     });
   } catch (err) {
     if (err.code === 'SESSION_VERSION_INVALID') {
-      console.error(
-        '[auth][login] sessionVersion inválido no banco'
-      );
-
-      return sendJson(res, 500, {
-        ok: false,
-        error: 'Erro interno.',
-      });
+      console.error('[auth][login] sessionVersion inválido no banco');
+      return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
     }
-
     if (
       err.code === 'USER_NOT_FOUND' ||
-      err.code === 'PASSWORD_CHANGED'
+      err.code === 'PASSWORD_CHANGED' ||
+      err.code === 'USER_DELETED'
     ) {
       audit?.('auth.login.failed', {
         email,
@@ -1110,72 +778,35 @@ async function handleLogin(req, res) {
         success: false,
         reason: err.code.toLowerCase(),
       });
-
-      return sendJson(res, 401, {
-        ok: false,
-        error: 'Credenciais inválidas.',
-      });
+      return sendJson(res, 401, { ok: false, error: 'Credenciais inválidas.' });
     }
-
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][login] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][login] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][login] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][login] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
-  const cookiesOk = safeSetAuthCookies(
-    res,
-    {
-      access_token: accessToken,
-      refresh_token: refreshRaw,
-    },
-    'login'
-  );
+  const cookiesOk = safeSetAuthCookies(res, {
+    access_token: accessToken,
+    refresh_token: refreshRaw,
+  }, 'login');
 
   if (!cookiesOk) {
-    const revoked = await revokeRefreshSafe(
-      user.id,
-      refreshRaw
-    );
-
+    const revoked = await revokeRefreshSafe(user.id, refreshRaw);
     if (!revoked) {
-      console.error(
-        '[auth][login] CRÍTICO: refresh órfão não revogado'
-      );
+      console.error('[auth][login] CRÍTICO: refresh órfão não revogado');
     }
-
     return sendJson(res, 503, {
       ok: false,
       error: 'Não foi possível iniciar sessão. Tente novamente.',
     });
   }
 
-  const { plan, planDegraded } = await resolvePlan(
-    user.id
-  );
+  const { plan, planDegraded } = await resolvePlan(user.id);
 
-  audit?.('auth.login.success', {
-    userId: user.id,
-    ip,
-    success: true,
-  });
+  audit?.('auth.login.success', { userId: user.id, ip, success: true });
 
   return sendJson(res, 200, {
     ok: true,
@@ -1200,46 +831,25 @@ async function handleRefresh(req, res) {
 
   if (!isValidRefreshTokenFormat(raw)) {
     clearAuthCookies(res);
-
-    return sendJson(res, 401, {
-      ok: false,
-      error: 'Sessão inválida.',
-    });
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
   }
 
   const ip = clientIp(req);
-
   if (!ip) {
-    return sendJson(res, 400, {
-      ok: false,
-      error: 'Origem não identificada.',
-    });
+    return sendJson(res, 400, { ok: false, error: 'Origem não identificada.' });
   }
-
   const ipHash = hashRateLimitKey(ip);
 
-  if (
-    await applyRateLimit(res, [
-      {
-        bucket: `refresh:ip:${ipHash}`,
-        ...RL_REFRESH,
-      },
-    ])
-  ) {
-    return;
-  }
+  if (await applyRateLimit(res, [
+    { bucket: `refresh:ip:${ipHash}`, ...RL_REFRESH },
+  ])) return;
 
-  try {
-    assertJwtConfig();
-  } catch {
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Configuração de autenticação inválida.',
-    });
+  try { assertJwtConfig(); }
+  catch {
+    return sendJson(res, 500, { ok: false, error: 'Configuração de autenticação inválida.' });
   }
 
   const tokenHash = hashRefreshToken(raw);
-
   let row = null;
 
   try {
@@ -1255,60 +865,30 @@ async function handleRefresh(req, res) {
       .from(refreshTokens)
       .where(eq(refreshTokens.tokenHash, tokenHash))
       .limit(1);
-
     row = result || null;
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][refresh] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][refresh] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][refresh] consulta falhou:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][refresh] consulta falhou:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   if (!row) {
     clearAuthCookies(res);
-
-    audit?.('auth.refresh.rejected', {
-      reason: 'not_found',
-      ip,
-      success: false,
-    });
-
-    return sendJson(res, 401, {
-      ok: false,
-      error: 'Sessão inválida.',
-      reason: 'not_found',
-    });
+    audit?.('auth.refresh.rejected', { reason: 'not_found', ip, success: false });
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.', reason: 'not_found' });
   }
 
   if (row.revokedAt) {
-    const reason = row.replacedAt
-      ? 'REFRESH_RACE'
-      : 'REFRESH_REVOKED';
-
+    const reason = row.replacedAt ? 'REFRESH_RACE' : 'REFRESH_REVOKED';
     audit?.('auth.refresh.rejected', {
       reason,
       userId: row.userId,
       ip,
       success: false,
     });
-
     return sendJson(res, 401, {
       ok: false,
       error: reason === 'REFRESH_RACE'
@@ -1322,14 +902,12 @@ async function handleRefresh(req, res) {
 
   if (!Number.isFinite(preExp) || preExp <= Date.now()) {
     clearAuthCookies(res);
-
     audit?.('auth.refresh.rejected', {
       reason: 'REFRESH_EXPIRED',
       userId: row.userId,
       ip,
       success: false,
     });
-
     return sendJson(res, 401, {
       ok: false,
       error: 'Sessão expirada.',
@@ -1337,13 +915,19 @@ async function handleRefresh(req, res) {
     });
   }
 
+  // Correção v17: rate limit por usuário além do IP.
+  if (await applyRateLimit(res, [
+    {
+      bucket: `refresh:user:${hashRateLimitKey(row.userId)}`,
+      ...RL_REFRESH_USER,
+    },
+  ])) return;
+
   let newRaw = null;
   let accessToken = null;
 
   try {
     await db.transaction(async (tx) => {
-      // O lock deve ser adquirido antes de decidir
-      // se o token pertence ao formato legado.
       await acquireUserLock(tx, row.userId);
 
       const [freshUser] = await tx
@@ -1364,8 +948,13 @@ async function handleRefresh(req, res) {
         throw err;
       }
 
-      // Reconsulta o token dentro da transação.
-      // Isso impede que duas requisições renovem o mesmo token.
+      // Correção v17: bloqueia refresh de usuário anonimizado.
+      if (isAnonymizedUser(freshUser)) {
+        const err = new Error('USER_DELETED');
+        err.code = 'USER_DELETED';
+        throw err;
+      }
+
       const [fresh] = await tx
         .select({
           id: refreshTokens.id,
@@ -1384,7 +973,6 @@ async function handleRefresh(req, res) {
       }
 
       const exp = Date.parse(fresh.expiresAt);
-
       if (!Number.isFinite(exp) || exp <= Date.now()) {
         const err = new Error('REFRESH_EXPIRED');
         err.code = 'REFRESH_EXPIRED';
@@ -1395,20 +983,14 @@ async function handleRefresh(req, res) {
       const finalSessionId = fresh.sessionId || crypto.randomUUID();
 
       if (stillLegacy) {
-        // Revoga somente outros tokens legados do mesmo usuário.
-        await tx
-          .update(refreshTokens)
-          .set({
-            revokedAt: new Date().toISOString(),
-          })
-          .where(
-            and(
-              eq(refreshTokens.userId, freshUser.id),
-              isNull(refreshTokens.sessionId),
-              isNull(refreshTokens.revokedAt),
-              ne(refreshTokens.id, row.id)
-            )
-          );
+        await tx.update(refreshTokens)
+          .set({ revokedAt: new Date().toISOString() })
+          .where(and(
+            eq(refreshTokens.userId, freshUser.id),
+            isNull(refreshTokens.sessionId),
+            isNull(refreshTokens.revokedAt),
+            ne(refreshTokens.id, row.id)
+          ));
       }
 
       const nowIso = new Date().toISOString();
@@ -1420,15 +1002,11 @@ async function handleRefresh(req, res) {
           replacedAt: nowIso,
           sessionId: finalSessionId,
         })
-        .where(
-          and(
-            eq(refreshTokens.id, row.id),
-            isNull(refreshTokens.revokedAt)
-          )
-        )
-        .returning({
-          id: refreshTokens.id,
-        });
+        .where(and(
+          eq(refreshTokens.id, row.id),
+          isNull(refreshTokens.revokedAt)
+        ))
+        .returning({ id: refreshTokens.id });
 
       if (!revokeResult.length) {
         const err = new Error('REFRESH_RACE');
@@ -1436,17 +1014,9 @@ async function handleRefresh(req, res) {
         throw err;
       }
 
-      accessToken = signAccessToken(
-        freshUser,
-        finalSessionId
-      );
+      accessToken = signAccessToken(freshUser, finalSessionId);
 
-      const created = await createRefreshTokenLocked(
-        tx,
-        freshUser.id,
-        finalSessionId
-      );
-
+      const created = await createRefreshTokenLocked(tx, freshUser.id, finalSessionId);
       newRaw = created.raw;
     });
   } catch (err) {
@@ -1457,117 +1027,75 @@ async function handleRefresh(req, res) {
         ip,
         success: false,
       });
-
       return sendJson(res, 401, {
         ok: false,
         error: 'Sessão renovada em outra aba.',
         reason: 'REFRESH_RACE',
       });
     }
-
     if (err.code === 'REFRESH_EXPIRED') {
       clearAuthCookies(res);
-
       audit?.('auth.refresh.rejected', {
         reason: 'REFRESH_EXPIRED',
         userId: row.userId,
         ip,
         success: false,
       });
-
       return sendJson(res, 401, {
         ok: false,
         error: 'Sessão expirada.',
         reason: 'REFRESH_EXPIRED',
       });
     }
-
-    if (err.code === 'USER_NOT_FOUND') {
+    if (err.code === 'USER_NOT_FOUND' || err.code === 'USER_DELETED') {
       clearAuthCookies(res);
-
+      audit?.('auth.refresh.rejected', {
+        reason: err.code.toLowerCase(),
+        userId: row.userId,
+        ip,
+        success: false,
+      });
       return sendJson(res, 401, {
         ok: false,
         error: 'Sessão inválida.',
       });
     }
-
     if (err.code === 'SESSION_VERSION_INVALID') {
-      console.error(
-        '[auth][refresh] sessionVersion inválido no banco'
-      );
-
-      return sendJson(res, 500, {
-        ok: false,
-        error: 'Erro interno.',
-      });
+      console.error('[auth][refresh] sessionVersion inválido no banco');
+      return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
     }
-
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][refresh] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][refresh] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][refresh] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][refresh] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
-  const cookiesOk = safeSetAuthCookies(
-    res,
-    {
-      access_token: accessToken,
-      refresh_token: newRaw,
-    },
-    'refresh'
-  );
+  const cookiesOk = safeSetAuthCookies(res, {
+    access_token: accessToken,
+    refresh_token: newRaw,
+  }, 'refresh');
 
   if (!cookiesOk) {
-    const revoked = await revokeRefreshSafe(
-      row.userId,
-      newRaw
-    );
-
+    const revoked = await revokeRefreshSafe(row.userId, newRaw);
     if (!revoked) {
-      console.error(
-        '[auth][refresh] CRÍTICO: novo refresh órfão não revogado'
-      );
+      console.error('[auth][refresh] CRÍTICO: novo refresh órfão não revogado');
     }
-
     return sendJson(res, 503, {
       ok: false,
       error: 'Falha ao renovar sessão. Faça login novamente.',
     });
   }
 
-  const { plan, planDegraded } = await resolvePlan(
-    row.userId
-  );
+  const { plan, planDegraded } = await resolvePlan(row.userId);
 
-  audit?.('auth.refresh.success', {
-    userId: row.userId,
-    ip,
-    success: true,
-  });
+  audit?.('auth.refresh.success', { userId: row.userId, ip, success: true });
 
   return sendJson(res, 200, {
     ok: true,
     accessToken,
-    user: {
-      id: row.userId,
-    },
+    user: { id: row.userId },
     plan,
     planDegraded,
   });
@@ -1582,56 +1110,31 @@ async function handleLogout(req, res) {
 
   if (!isValidRefreshTokenFormat(raw)) {
     clearAuthCookies(res);
-
-    return sendJson(res, 200, {
-      ok: true,
-    });
+    return sendJson(res, 200, { ok: true });
   }
 
   const tokenHash = hashRefreshToken(raw);
-
   let userId = null;
 
   try {
     const [row] = await db
-      .select({
-        userId: refreshTokens.userId,
-      })
+      .select({ userId: refreshTokens.userId })
       .from(refreshTokens)
       .where(eq(refreshTokens.tokenHash, tokenHash))
       .limit(1);
-
     userId = row?.userId || null;
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][logout] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][logout] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][logout] lookup falhou:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Logout não confirmado pelo servidor.',
-    });
+    console.error('[auth][logout] lookup falhou:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Logout não confirmado pelo servidor.' });
   }
 
   if (!userId) {
     clearAuthCookies(res);
-
-    return sendJson(res, 200, {
-      ok: true,
-    });
+    return sendJson(res, 200, { ok: true });
   }
 
   try {
@@ -1649,76 +1152,41 @@ async function handleLogout(req, res) {
         .where(eq(refreshTokens.tokenHash, tokenHash))
         .limit(1);
 
-      if (!freshRow) {
-        return;
-      }
+      if (!freshRow) return;
 
       const sessionId = freshRow.sessionId;
       const nowIso = new Date().toISOString();
 
       if (sessionId) {
-        await tx
-          .update(refreshTokens)
-          .set({
-            revokedAt: nowIso,
-          })
-          .where(
-            and(
-              eq(refreshTokens.userId, userId),
-              eq(refreshTokens.sessionId, sessionId),
-              isNull(refreshTokens.revokedAt)
-            )
-          );
+        await tx.update(refreshTokens)
+          .set({ revokedAt: nowIso })
+          .where(and(
+            eq(refreshTokens.userId, userId),
+            eq(refreshTokens.sessionId, sessionId),
+            isNull(refreshTokens.revokedAt)
+          ));
       } else {
-        await tx
-          .update(refreshTokens)
-          .set({
-            revokedAt: nowIso,
-          })
-          .where(
-            and(
-              eq(refreshTokens.userId, userId),
-              eq(refreshTokens.tokenHash, tokenHash),
-              isNull(refreshTokens.revokedAt)
-            )
-          );
+        await tx.update(refreshTokens)
+          .set({ revokedAt: nowIso })
+          .where(and(
+            eq(refreshTokens.userId, userId),
+            eq(refreshTokens.tokenHash, tokenHash),
+            isNull(refreshTokens.revokedAt)
+          ));
       }
     });
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][logout] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][logout] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][logout] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Logout não confirmado pelo servidor.',
-    });
+    console.error('[auth][logout] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Logout não confirmado pelo servidor.' });
   }
 
-  audit?.('auth.logout', {
-    userId,
-    ip: clientIp(req),
-    success: true,
-  });
-
+  audit?.('auth.logout', { userId, ip: clientIp(req), success: true });
   clearAuthCookies(res);
-
-  return sendJson(res, 200, {
-    ok: true,
-  });
+  return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1730,60 +1198,29 @@ async function handleLogoutAll(req, res, authUser) {
     await db.transaction(async (tx) => {
       await acquireUserLock(tx, authUser.id);
 
-      await tx
-        .update(refreshTokens)
-        .set({
-          revokedAt: new Date().toISOString(),
-        })
-        .where(
-          and(
-            eq(refreshTokens.userId, authUser.id),
-            isNull(refreshTokens.revokedAt)
-          )
-        );
+      await tx.update(refreshTokens)
+        .set({ revokedAt: new Date().toISOString() })
+        .where(and(
+          eq(refreshTokens.userId, authUser.id),
+          isNull(refreshTokens.revokedAt)
+        ));
 
-      await tx
-        .update(users)
-        .set({
-          sessionVersion: sql`${users.sessionVersion} + 1`,
-        })
+      await tx.update(users)
+        .set({ sessionVersion: sql`${users.sessionVersion} + 1` })
         .where(eq(users.id, authUser.id));
     });
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][logout-all] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço temporariamente indisponível.',
-      });
+      console.error('[auth][logout-all] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço temporariamente indisponível.' });
     }
-
-    console.error(
-      '[auth][logout-all] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][logout-all] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   clearAuthCookies(res);
-
-  audit?.('auth.logout-all', {
-    userId: authUser.id,
-    ip: clientIp(req),
-    success: true,
-  });
-
-  return sendJson(res, 200, {
-    ok: true,
-  });
+  audit?.('auth.logout-all', { userId: authUser.id, ip: clientIp(req), success: true });
+  return sendJson(res, 200, { ok: true });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1806,38 +1243,24 @@ async function handleMe(req, res, authUser) {
       .limit(1);
   } catch (err) {
     if (isDbUnavailable(err)) {
-      console.error(
-        '[auth][me] DB indisponível:',
-        err.code
-      );
-
-      return sendJson(res, 503, {
-        ok: false,
-        error: 'Serviço indisponível.',
-      });
+      console.error('[auth][me] DB indisponível:', err.code);
+      return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
     }
-
-    console.error(
-      '[auth][me] erro:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth][me] erro:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 
   if (!user) {
-    return sendJson(res, 401, {
-      ok: false,
-      error: 'Não autenticado.',
-    });
+    return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
   }
 
-  const { plan, planDegraded } = await resolvePlan(
-    user.id
-  );
+  // Correção v17: não devolve dados de usuário anonimizado.
+  if (isAnonymizedUser(user)) {
+    clearAuthCookies(res);
+    return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+  }
+
+  const { plan, planDegraded } = await resolvePlan(user.id);
 
   return sendJson(res, 200, {
     ok: true,
@@ -1870,33 +1293,19 @@ const KNOWN_ACTIONS = new Set([
 
 module.exports = async (req, res) => {
   const action = parseAction(req);
-
   const originOk = checkOrigin(req);
   const origin = validatedOrigin(req);
 
   if (req.method === 'OPTIONS') {
-    if (!originOk) {
-      return res.status(403).end();
-    }
-
+    if (!originOk) return res.status(403).end();
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Vary', 'Origin');
     }
-
-    res.setHeader(
-      'Access-Control-Allow-Methods',
-      'GET, POST, OPTIONS'
-    );
-
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Authorization, Content-Type'
-    );
-
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     res.setHeader('Access-Control-Max-Age', '600');
-
     return res.status(204).end();
   }
 
@@ -1911,10 +1320,7 @@ module.exports = async (req, res) => {
     MUTATING_ACTIONS.has(action) &&
     !originOk
   ) {
-    return sendJson(res, 403, {
-      ok: false,
-      error: 'Origem não permitida.',
-    });
+    return sendJson(res, 403, { ok: false, error: 'Origem não permitida.' });
   }
 
   try {
@@ -1934,92 +1340,89 @@ module.exports = async (req, res) => {
       return await handleLogout(req, res);
     }
 
+    // Correção v17: logout-all exige confirmação de senha.
     if (action === 'logout-all') {
       if (req.method !== 'POST') {
-        return sendJson(res, 405, {
+        return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
+      }
+
+      const body = parseBody(req);
+      if (!body || typeof body.password !== 'string' || !body.password) {
+        return sendJson(res, 400, {
           ok: false,
-          error: 'Método não permitido.',
+          error: 'Confirmação de senha obrigatória.',
         });
       }
 
       let authUser = null;
-
       try {
         authUser = await getAuthUser(req);
       } catch {
-        return sendJson(res, 503, {
-          ok: false,
-          error: 'Serviço indisponível.',
-        });
+        return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
       }
 
       if (!authUser) {
-        return sendJson(res, 401, {
-          ok: false,
-          error: 'Não autenticado.',
-        });
+        return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
       }
 
-      return await handleLogoutAll(
-        req,
-        res,
-        authUser
-      );
+      let passwordHash = null;
+      try {
+        const [u] = await db
+          .select({ passwordHash: users.passwordHash, email: users.email })
+          .from(users)
+          .where(eq(users.id, authUser.id))
+          .limit(1);
+        if (!u || isAnonymizedUser(u)) {
+          return sendJson(res, 401, { ok: false, error: 'Sessão inválida.' });
+        }
+        passwordHash = u.passwordHash;
+      } catch (err) {
+        if (isDbUnavailable(err)) {
+          return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
+        }
+        return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
+      }
+
+      let passOk = false;
+      try {
+        passOk = await verifyPassword(body.password, passwordHash);
+      } catch {
+        passOk = false;
+      }
+
+      if (!passOk) {
+        return sendJson(res, 403, { ok: false, error: 'Senha incorreta.' });
+      }
+
+      return await handleLogoutAll(req, res, authUser);
     }
 
     if (action === 'me') {
       if (req.method !== 'GET') {
-        return sendJson(res, 405, {
-          ok: false,
-          error: 'Método não permitido.',
-        });
+        return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
       }
 
       let authUser = null;
-
       try {
         authUser = await getAuthUser(req);
       } catch {
-        return sendJson(res, 503, {
-          ok: false,
-          error: 'Serviço indisponível.',
-        });
+        return sendJson(res, 503, { ok: false, error: 'Serviço indisponível.' });
       }
 
       if (!authUser) {
-        return sendJson(res, 401, {
-          ok: false,
-          error: 'Não autenticado.',
-        });
+        return sendJson(res, 401, { ok: false, error: 'Não autenticado.' });
       }
 
-      return await handleMe(
-        req,
-        res,
-        authUser
-      );
+      return await handleMe(req, res, authUser);
     }
 
     if (KNOWN_ACTIONS.has(action)) {
-      return sendJson(res, 405, {
-        ok: false,
-        error: 'Método não permitido.',
-      });
+      return sendJson(res, 405, { ok: false, error: 'Método não permitido.' });
     }
 
-    return sendJson(res, 404, {
-      ok: false,
-      error: 'Ação não encontrada.',
-    });
+    return sendJson(res, 404, { ok: false, error: 'Ação não encontrada.' });
   } catch (err) {
-    console.error(
-      '[auth] erro não tratado:',
-      err.code || err.message
-    );
-
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'Erro interno.',
-    });
+    console.error('[auth] erro não tratado:', err.code || err.message);
+    return sendJson(res, 500, { ok: false, error: 'Erro interno.' });
   }
 };
