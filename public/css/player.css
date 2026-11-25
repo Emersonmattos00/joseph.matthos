@@ -195,7 +195,7 @@ body.player-page [role="slider"]:focus-visible {
 .player-cover-wrap {
   width: 100%;
   max-width: min(380px, 80vw);
-  max-height: 45dvh; /* Impede que a capa ocupe a tela toda no mobile */
+  max-height: 60dvh; /* Impede que a capa ocupe a tela toda no mobile */
   aspect-ratio: 1 / 1;
   border-radius: 12px;
   overflow: hidden;
