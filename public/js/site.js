@@ -321,8 +321,9 @@ async function loadUser() {
     }
     const json = await r.json();
     if (json.ok && json.user) {
-      SITE.user = json.user;
-      SITE.rentals = Array.isArray(json.rentals) ? json.rentals : [];
+      // F-01: o plano vem no topo da resposta do backend
+      SITE.user = { ...json.user, plan: json.plan, planDegraded: json.planDegraded };
+      SITE.rentals = Array.isArray(json.rentals) ? json.rentals : []; // F-02: backend passa a devolver
     } else {
       SITE.user = null;
       SITE.rentals = [];
@@ -1861,21 +1862,16 @@ async function renewSignedUrl() {
   const savedTime = audio?.currentTime || 0;
   const savedVolume = audio?.volume ?? lastVolume;
   try {
-    const r = await fetch(`/api/stream?trackId=${encodeURIComponent(trackId)}`, { credentials: 'same-origin', cache: 'no-store' });
-    const json = await r.json();
-    if (!r.ok || !json?.audioUrl) throw new Error(json?.error || 'URL não renovada');
-    currentStream.url = json.audioUrl;
-    currentStream.expiresIn = 300;
-    currentStream.loadedAt = Date.now();
-    audio.src = json.audioUrl;
+    // F-04: /api/stream responde 302 → bytes de áudio; renova reatribuindo o src
+    // (o elemento de mídia segue o redirect nativamente e envia os cookies)
+    audio.src = `/api/stream?trackId=${encodeURIComponent(trackId)}`;
     audio.volume = savedVolume;
     audio.load();
-    const restore = () => {
+    audio.addEventListener('loadedmetadata', () => {
       try { if (Number.isFinite(audio.duration) && savedTime < audio.duration) audio.currentTime = savedTime; }
       catch (err) { console.debug('[player] falha ao restaurar posição:', err); }
       if (wasPlaying) audio.play().catch(() => {});
-    };
-    audio.addEventListener('loadedmetadata', restore, { once: true });
+    }, { once: true });
     scheduleRenewal();
     console.log('[player] URL renovada');
   } catch (err) { console.warn('[player] renovação falhou:', err?.message); }
