@@ -1,4 +1,3 @@
-
 'use strict';
 
 /* ============================================================
@@ -209,7 +208,11 @@ function clientIp(req) {
   if (!req || typeof req !== 'object') return '';
   const headers = req.headers || {};
 
-  const trustedProxyHeader = headers['x-real-ip'] || headers['x-vercel-forwarded-for'];
+  // S-04: x-real-ip só é confiável quando a plataforma garante a origem
+  // (Vercel sobrescreve; Render não — exigir opt-in TRUST_X_REAL_IP=true)
+  const trustedProxyHeader = process.env.TRUST_X_REAL_IP === 'true'
+    ? (headers['x-real-ip'] || headers['x-vercel-forwarded-for'])
+    : headers['x-vercel-forwarded-for'];
   if (trustedProxyHeader) {
     const candidate = String(trustedProxyHeader).split(',')[0].trim();
     if (isIP(candidate)) return candidate.slice(0, 128);
