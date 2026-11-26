@@ -700,7 +700,7 @@ header.amz-header {
 }
 .discography-track-card .track-index {
   font-size: 0.85rem;
-  color: rgba(212, 175, 55, 0.55);
+  color: rgba(212, 175, 55, 0.78); /* C-07: contraste AA (~5.5:1) */
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -740,7 +740,7 @@ header.amz-header {
 .discography-track-card.playing .track-title { font-weight: 700; color: #f0d98f; }
 .discography-track-card .track-duration {
   font-size: 0.78rem;
-  color: rgba(212, 175, 55, 0.65);
+  color: rgba(212, 175, 55, 0.78); /* C-07 */
 }
 .discography-track-card .track-right {
   display: flex;
@@ -1252,7 +1252,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   text-transform: uppercase;
   color: var(--accent);
 }
-.player-queue-count { font-size: 0.72rem; color: rgba(212, 175, 55, 0.6); }
+.player-queue-count { font-size: 0.72rem; color: rgba(212, 175, 55, 0.78); } /* C-07 */
 .player-queue-list {
   display: flex;
   flex-direction: column;
@@ -1276,7 +1276,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
 }
 .queue-track:hover { background: rgba(212, 175, 55, 0.08); }
 .queue-track.playing { background: rgba(212, 175, 55, 0.14); }
-.queue-track-index { font-size: 0.8rem; color: rgba(212, 175, 55, 0.5); text-align: center; }
+.queue-track-index { font-size: 0.8rem; color: rgba(212, 175, 55, 0.78); text-align: center; } /* C-07 */
 .queue-track-cover {
   width: 40px;
   height: 40px;
@@ -1297,7 +1297,7 @@ footer .footer-nav span { color: var(--border); user-select: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.queue-track-duration { font-size: 0.72rem; color: rgba(212, 175, 55, 0.55); }
+.queue-track-duration { font-size: 0.72rem; color: rgba(212, 175, 55, 0.78); } /* C-07 */
 
 .lyrics-col {
   display: flex;
@@ -3027,7 +3027,7 @@ section[aria-labelledby="destaqueTitle"] {
     position: relative !important;
     z-index: 1 !important;
     display: grid !important;
-    grid-template-columns: 550px 400px 1fr !important; /* Capa 550px | Controles 400px | Lista (resto) */
+    grid-template-columns: minmax(0, 550px) minmax(0, 400px) minmax(260px, 1fr) !important; /* C-08: elásticas, lista nunca colapsa */
     gap: 2rem !important;
     padding: 2rem 0 !important; /* Sem padding lateral */
     max-width: 100vw !important;
@@ -3465,3 +3465,21 @@ section[aria-labelledby="destaqueTitle"] {
 .recent-users-wrapper td {
   white-space: nowrap;
                                 }
+
+
+/* ═══ Correções da auditoria de CSS/JS (26/11/2026) ═══ */
+
+/* C-01: restaurar o avatar responsivo anulado por #artistAvatar (350px
+   !important na L2981) — em telas ≤768px o avatar volta a 120px */
+@media (max-width: 768px) {
+  #artistAvatar {
+    width: 120px !important;
+    height: 120px !important;
+  }
+}
+
+/* C-07: foco visível global para navegação por teclado */
+:where(a, button, [tabindex], input, select, textarea):focus-visible {
+  outline: 2px solid var(--amz-cyan);
+  outline-offset: 2px;
+}
