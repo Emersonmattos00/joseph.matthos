@@ -1598,9 +1598,10 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
       button.textContent = 'Enviando…';
       if (statusEl) statusEl.innerHTML = '<span class="audio-chip">⬆ 0%</span>';
 
+      // A-01: o backend exige trackId OU (albumId + trackIndex) no upload-confirm
       const result = await uploadFn(file, (pct) => {
         if (statusEl) statusEl.innerHTML = `<span class="audio-chip">⬆ ${pct}%</span>`;
-      });
+      }, { trackId: track.id });
 
       if (!result?.path) throw new Error('Upload não retornou path.');
 
