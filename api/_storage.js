@@ -1,55 +1,72 @@
-'use strict';
+from pathlib import Path
+code = r"""'use strict';
 
 /* ============================================================
-   api/_storage.js — Cloudflare R2 via S3 API (v4 — Final)
+   api/_storage.js — Cloudflare R2 via S3 API (v5 hardened)
    ------------------------------------------------------------
-   - Separação estrita de buckets (público/privado)
-   - Fluxo de quarentena + promoção atômica com validação de ETag
-   - Bloqueio de download/reprodução de objetos em quarentena
-   - Validação rigorosa de MIME, extensão e tamanho
+   - Cloudflare R2 only (no Backblaze B2 dependency)
+   - Separate public/private buckets
+   - Quarantine ALWAYS stored in the private bucket
+   - Signed uploads only to quarantine
+   - Promotion validates size, MIME, extension and ETag
+   - Legacy premium/ key compatibility
    ============================================================ */
 
 const crypto = require('crypto');
 const {
-  GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client,
-  CopyObjectCommand, DeleteObjectCommand, ListObjectsV2Command
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  CopyObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 let client = null;
 let _configCache = null;
 
-// ─────────────────────────────────────────────────────────────
-// Matriz canônica (Fonte da Verdade)
-// ─────────────────────────────────────────────────────────────
 const ALLOWED_MEDIA = {
-  'image': {
-    exts: new Set(['jpg','jpeg','png','webp','gif','avif']),
-    mimes: new Set(['image/jpeg','image/png','image/webp','image/gif','image/avif']),
+  image: {
+    exts: new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif']),
+    mimes: new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']),
     bucket: 'public',
     maxBytes: 10 * 1024 * 1024
   },
   'audio-preview': {
-    exts: new Set(['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff']),
-    mimes: new Set(['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/wav','audio/x-wav','audio/flac','audio/aiff','audio/x-aiff']),
+    exts: new Set(['mp3', 'm4a', 'mp4', 'aac', 'ogg', 'oga', 'opus', 'webm', 'wav', 'flac', 'aif', 'aiff']),
+    mimes: new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/opus', 'audio/webm', 'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/aiff', 'audio/x-aiff']),
     bucket: 'public',
     maxBytes: 50 * 1024 * 1024
   },
   'audio-full': {
-    exts: new Set(['mp3','m4a','mp4','aac','ogg','oga','opus','webm','wav','flac','aif','aiff']),
-    mimes: new Set(['audio/mpeg','audio/mp4','audio/aac','audio/ogg','audio/opus','audio/webm','audio/flac','audio/wav','audio/x-wav','audio/aiff','audio/x-aiff']),
+    exts: new Set(['mp3', 'm4a', 'mp4', 'aac', 'ogg', 'oga', 'opus', 'webm', 'wav', 'flac', 'aif', 'aiff']),
+    mimes: new Set(['audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/opus', 'audio/webm', 'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/aiff', 'audio/x-aiff']),
     bucket: 'private',
     maxBytes: 200 * 1024 * 1024
   }
 };
 
 const EXT_TO_MIMES = {
-  mp3: ['audio/mpeg'], m4a: ['audio/mp4'], mp4: ['audio/mp4'], aac: ['audio/aac'],
-  ogg: ['audio/ogg'], oga: ['audio/ogg'], opus: ['audio/opus'], webm: ['audio/webm'],
-  wav: ['audio/wav','audio/x-wav'], flac: ['audio/flac'],
-  aif: ['audio/aiff','audio/x-aiff'], aiff: ['audio/aiff','audio/x-aiff'],
-  jpg: ['image/jpeg'], jpeg: ['image/jpeg'], png: ['image/png'],
-  webp: ['image/webp'], gif: ['image/gif'], avif: ['image/avif']
+  mp3: ['audio/mpeg'],
+  m4a: ['audio/mp4'],
+  mp4: ['audio/mp4'],
+  aac: ['audio/aac'],
+  ogg: ['audio/ogg'],
+  oga: ['audio/ogg'],
+  opus: ['audio/opus', 'audio/ogg'],
+  webm: ['audio/webm'],
+  wav: ['audio/wav', 'audio/x-wav'],
+  flac: ['audio/flac'],
+  aif: ['audio/aiff', 'audio/x-aiff'],
+  aiff: ['audio/aiff', 'audio/x-aiff'],
+  jpg: ['image/jpeg'],
+  jpeg: ['image/jpeg'],
+  png: ['image/png'],
+  webp: ['image/webp'],
+  gif: ['image/gif'],
+  avif: ['image/avif']
 };
 
 const QUARANTINE_PREFIX = '_quarantine';
@@ -57,20 +74,15 @@ const QUARANTINE_TTL_HOURS_DEFAULT = 24;
 const QUARANTINE_TTL_HOURS_MAX = 24 * 30;
 const DIRECT_UPLOAD_KINDS = new Set(['image']);
 
-// ─────────────────────────────────────────────────────────────
-// Configuração
-// ─────────────────────────────────────────────────────────────
 function validatePublicUrl(urlStr) {
   if (!urlStr) return null;
   try {
     const u = new URL(String(urlStr).trim());
-    if (u.protocol !== 'https:') throw new Error('Deve ser HTTPS');
-    if (u.username || u.password) throw new Error('Credenciais não permitidas');
-    if (u.search || u.hash) throw new Error('Query string ou hash não permitidos');
-    if (u.pathname !== '/' && u.pathname !== '') throw new Error('Path não permitido no domínio base');
-    if (u.port && u.port !== '443') throw new Error('Porta não permitida');
+    if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) return null;
+    if (u.pathname !== '/' && u.pathname !== '') return null;
+    if (u.port && u.port !== '443') return null;
     const host = u.hostname.toLowerCase();
-    if (!host || host === 'localhost') throw new Error('Host inválido');
+    if (!host || host === 'localhost' || host.endsWith('.localhost')) return null;
     return u.origin;
   } catch {
     return null;
@@ -90,16 +102,6 @@ function getStorageConfig() {
   const publicBucket = String(process.env.R2_PUBLIC_BUCKET || '').trim();
   const privateBucket = String(process.env.R2_PRIVATE_BUCKET || '').trim();
 
-  const s3Endpoint = `https://${accountId}.r2.cloudflarestorage.com`;
-  const s3Host = `${accountId}.r2.cloudflarestorage.com`;
-
-  const publicBaseUrl = validatePublicUrl(process.env.R2_PUBLIC_BASE_URL);
-  if (!publicBaseUrl) {
-    throw new Error('[storage] R2_PUBLIC_BASE_URL é obrigatório e deve ser uma URL HTTPS válida (sem path/porta/query).');
-  }
-
-  const customImageDomain = validatePublicUrl(process.env.R2_CUSTOM_IMAGE_DOMAIN) || null;
-
   if (!/^[a-f0-9]{32}$/i.test(accountId)) throw new Error('[storage] R2_ACCOUNT_ID inválido.');
   if (!accessKeyId || !secretAccessKey) throw new Error('[storage] Credenciais R2 ausentes.');
 
@@ -107,38 +109,36 @@ function getStorageConfig() {
   if (!bucketRe.test(publicBucket) || !bucketRe.test(privateBucket)) {
     throw new Error('[storage] Nomes de bucket R2 inválidos.');
   }
-  if (publicBucket === privateBucket) {
-    throw new Error('[storage] Buckets público e privado devem ser diferentes.');
+  if (publicBucket === privateBucket) throw new Error('[storage] Buckets público e privado devem ser diferentes.');
+
+  const publicBaseUrl = validatePublicUrl(process.env.R2_PUBLIC_BASE_URL);
+  if (!publicBaseUrl) {
+    throw new Error('[storage] R2_PUBLIC_BASE_URL obrigatório: URL HTTPS sem path, query, hash ou porta não padrão.');
   }
+  const customImageDomain = validatePublicUrl(process.env.R2_CUSTOM_IMAGE_DOMAIN) || null;
 
   const prefixes = {
-    'image': normalizePrefix(process.env.R2_PREFIX_IMAGE, 'images'),
+    image: normalizePrefix(process.env.R2_PREFIX_IMAGE, 'images'),
     'audio-preview': normalizePrefix(process.env.R2_PREFIX_PREVIEW, 'preview'),
     'audio-full': normalizePrefix(process.env.R2_PREFIX_AUDIO, 'audio')
   };
-
   const prefixRe = /^[a-z][a-z0-9_-]{0,62}$/;
-  const prefixVals = Object.values(prefixes);
-  for (const p of prefixVals) {
+  for (const p of Object.values(prefixes)) {
     if (!prefixRe.test(p)) throw new Error(`[storage] Prefixo "${p}" inválido.`);
   }
-  if (new Set(prefixVals).size !== prefixVals.length) {
+  if (new Set(Object.values(prefixes)).size !== Object.values(prefixes).length) {
     throw new Error('[storage] Prefixos R2 devem ser distintos.');
   }
-
-  // Prevenir colisão com o prefixo de quarentena.
-  if (prefixVals.includes(QUARANTINE_PREFIX)) {
+  if (Object.values(prefixes).includes(QUARANTINE_PREFIX)) {
     throw new Error('[storage] Prefixo definitivo não pode ser "_quarantine".');
   }
 
   _configCache = {
-    accountId, accessKeyId, secretAccessKey,
-    publicBucket, privateBucket,
-    s3Endpoint, s3Host,
-    publicBaseUrl, customImageDomain,
-    prefixes
+    accountId, accessKeyId, secretAccessKey, publicBucket, privateBucket,
+    s3Endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    s3Host: `${accountId}.r2.cloudflarestorage.com`,
+    publicBaseUrl, customImageDomain, prefixes
   };
-
   return _configCache;
 }
 
@@ -149,163 +149,90 @@ function getS3Client() {
       region: 'auto',
       endpoint: c.s3Endpoint,
       forcePathStyle: true,
-      credentials: {
-        accessKeyId: c.accessKeyId,
-        secretAccessKey: c.secretAccessKey
-      }
+      credentials: { accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey }
     });
   }
   return client;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Validação de caminhos e tipos
-// ─────────────────────────────────────────────────────────────
 function resolveKindEntry(kind) {
   if (typeof kind !== 'string') return null;
-
-  const normalized = kind.toLowerCase().trim();
-
-  if (ALLOWED_MEDIA[normalized]) {
-    return {
-      kind: normalized,
-      entry: ALLOWED_MEDIA[normalized]
-    };
-  }
-
-  return null;
+  const normalized = kind.trim().toLowerCase();
+  const entry = ALLOWED_MEDIA[normalized];
+  return entry ? { kind: normalized, entry } : null;
 }
 
 function validateObjectKey(key) {
-  if (typeof key !== 'string' || !key.trim() || key.length > 1024) {
-    throw new Error('Caminho inválido.');
-  }
-
-  if (key.startsWith('/') || key.endsWith('/') || key.includes('\\')) {
-    throw new Error('Caminho inválido.');
-  }
-
-  if (/[\x00-\x1F\x7F]/.test(key)) {
-    throw new Error('Caminho contém caracteres de controle.');
-  }
-
-  for (const seg of key.split('/')) {
-    if (!seg || seg === '.' || seg === '..') {
-      throw new Error('Segmento de caminho inválido.');
-    }
-  }
-
+  if (typeof key !== 'string' || !key.trim() || key.length > 1024) throw new Error('Caminho inválido.');
+  if (key.startsWith('/') || key.endsWith('/') || key.includes('\\')) throw new Error('Caminho inválido.');
+  if (/[\x00-\x1F\x7F]/.test(key)) throw new Error('Caminho contém caracteres de controle.');
+  if (key.split('/').some(seg => !seg || seg === '.' || seg === '..')) throw new Error('Segmento de caminho inválido.');
   return key;
 }
 
 function validateFilename(filename) {
   const name = String(filename || '').trim();
-
-  if (!name || name.length > 255) {
+  if (!name || name.length > 255 || name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
     throw new Error('Nome de arquivo inválido.');
   }
-
-  if (name.includes('/') || name.includes('\\') || name === '.' || name === '..') {
-    throw new Error('Nome de arquivo inválido.');
-  }
-
   if (/[\x00-\x1F\x7F]/.test(name) || !/^[A-Za-z0-9._-]+$/.test(name)) {
     throw new Error('Nome contém caracteres não permitidos.');
   }
-
   return name;
 }
 
 function validateMimeForKind(kind, mime) {
   const resolved = resolveKindEntry(kind);
-
-  if (!resolved) {
-    throw new Error('Tipo de mídia inválido.');
-  }
-
-  const m = String(mime || '').toLowerCase().trim();
-
-  if (!resolved.entry.mimes.has(m)) {
-    throw new Error(`Content-Type não permitido para ${resolved.kind}.`);
-  }
-
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
+  const m = String(mime || '').split(';')[0].trim().toLowerCase();
+  if (!resolved.entry.mimes.has(m)) throw new Error(`Content-Type não permitido para ${resolved.kind}.`);
   return m;
 }
 
 function validateExtForKind(kind, filenameOrKey) {
   const resolved = resolveKindEntry(kind);
-
-  if (!resolved) {
-    throw new Error('Tipo de mídia inválido.');
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
+  const name = String(filenameOrKey || '').split('/').pop() || '';
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) throw new Error('Arquivo sem extensão.');
+  const ext = name.slice(dot + 1).toLowerCase();
+  if (!/^[a-z0-9]{1,8}$/.test(ext) || !resolved.entry.exts.has(ext)) {
+    throw new Error(`Extensão ".${ext}" não permitida para ${resolved.kind}.`);
   }
-
-  const name = String(filenameOrKey || '');
-  const lastSeg = name.split('/').pop() || '';
-  const dot = lastSeg.lastIndexOf('.');
-
-  if (dot < 0) {
-    throw new Error('Arquivo sem extensão.');
-  }
-
-  const ext = lastSeg.slice(dot + 1).toLowerCase();
-
-  if (!/^[a-z0-9]{1,8}$/.test(ext)) {
-    throw new Error('Extensão inválida.');
-  }
-
-  if (!resolved.entry.exts.has(ext)) {
-    throw new Error(`Extensão ".${ext}" não permitida.`);
-  }
-
   return ext;
 }
 
 function validateMimeExtConsistency(kind, mime, filenameOrKey) {
   const ext = validateExtForKind(kind, filenameOrKey);
-  const normalizedMime = String(mime || '').toLowerCase().trim();
+  const normalizedMime = String(mime || '').split(';')[0].trim().toLowerCase();
   const allowed = EXT_TO_MIMES[ext];
-
-  if (!allowed) return;
-
-  if (!allowed.includes(normalizedMime)) {
+  if (!allowed || !allowed.includes(normalizedMime)) {
     throw new Error(`Extensão ".${ext}" incompatível com Content-Type ${normalizedMime}.`);
   }
+  return true;
 }
 
-// ─────────────────────────────────────────────────────────────
-// QUARENTENA — funções de caminho
-// ─────────────────────────────────────────────────────────────
 function isQuarantinePath(key) {
-  return String(key || '').startsWith(QUARANTINE_PREFIX + '/');
+  return typeof key === 'string' && key.startsWith(`${QUARANTINE_PREFIX}/`);
 }
 
 function buildQuarantinePath(kind, ext) {
-  const safeKind = String(kind).replace(/[^a-z0-9-]/gi, '');
-  const ts = Date.now();
-  const hex = crypto.randomBytes(16).toString('hex');
-
-  return `${QUARANTINE_PREFIX}/${safeKind}/${ts}_${hex}.${ext}`;
+  const resolved = resolveKindEntry(kind);
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
+  const safeExt = String(ext || '').toLowerCase();
+  if (!resolved.entry.exts.has(safeExt)) throw new Error('Extensão inválida para quarentena.');
+  return `${QUARANTINE_PREFIX}/${resolved.kind}/${Date.now()}_${crypto.randomBytes(16).toString('hex')}.${safeExt}`;
 }
 
 function buildDefinitivePath(kind, ext) {
   const resolved = resolveKindEntry(kind);
-
-  if (!resolved) {
-    throw new Error('Tipo de mídia inválido.');
-  }
-
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
   const safeExt = String(ext || '').toLowerCase();
-
   if (!/^[a-z0-9]{1,8}$/.test(safeExt) || !resolved.entry.exts.has(safeExt)) {
     throw new Error(`Extensão "${safeExt}" inválida para ${resolved.kind}.`);
   }
-
-  const config = getStorageConfig();
-  const prefix = config.prefixes[resolved.kind];
-  const ts = Date.now();
-  const hex = crypto.randomBytes(16).toString('hex');
-
-  return `${prefix}/${ts}_${hex}.${safeExt}`;
+  const prefix = getStorageConfig().prefixes[resolved.kind];
+  return `${prefix}/${Date.now()}_${crypto.randomBytes(16).toString('hex')}.${safeExt}`;
 }
 
 function buildPathForKind(kind, filename) {
@@ -313,243 +240,133 @@ function buildPathForKind(kind, filename) {
   return buildQuarantinePath(kind, ext);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Kind a partir de chave
-// ─────────────────────────────────────────────────────────────
-const QUARANTINE_SEGMENTS = 3;
-
 function inferKindFromKey(key) {
   validateObjectKey(key);
+  const parts = key.split('/');
+  const first = parts[0];
 
-  const k = String(key);
-
-  if (k.startsWith(QUARANTINE_PREFIX + '/')) {
-    const segments = k.split('/');
-
-    if (segments.length !== QUARANTINE_SEGMENTS) {
+  if (first === QUARANTINE_PREFIX) {
+    if (parts.length !== 3) {
       const err = new Error('Caminho de quarentena com estrutura inválida.');
       err.code = 'INVALID_KEY_PREFIX';
       throw err;
     }
-
-    const kind = segments[1];
-
-    if (kind === 'audio-full' || kind === 'audio-preview' || kind === 'image') {
-      return kind;
+    const kind = parts[1];
+    if (!ALLOWED_MEDIA[kind]) {
+      const err = new Error('Kind de quarentena inválido.');
+      err.code = 'INVALID_KEY_PREFIX';
+      throw err;
     }
-
-    const err = new Error('Caminho de quarentena com kind inválido.');
-    err.code = 'INVALID_KEY_PREFIX';
-    throw err;
+    return kind;
   }
 
-  const config = getStorageConfig();
-  const first = k.split('/')[0];
+  const c = getStorageConfig();
+  if (first === 'premium') return 'audio-full'; // legado
 
-  // Compatibilidade com objetos legados já armazenados no bucket privado.
-  // A chave original premium/... é preservada, sem alteração no banco ou no R2.
-  if (first === 'premium') {
-    return 'audio-full';
+  for (const [kind, prefix] of Object.entries(c.prefixes)) {
+    if (first === prefix) return kind;
   }
-
-  for (const [kind, prefix] of Object.entries(config.prefixes)) {
-    if (first === prefix) {
-      return kind;
-    }
-  }
-
   const err = new Error('Prefixo de objeto não reconhecido.');
   err.code = 'INVALID_KEY_PREFIX';
   throw err;
 }
 
-function resolveBucket(kind) {
-  const resolved = resolveKindEntry(kind);
+/* Quarantine is private regardless of media's final bucket. */
+function resolveBucket(kindOrKey) {
+  const value = String(kindOrKey || '');
+  if (isQuarantinePath(value)) return getStorageConfig().privateBucket;
 
+  const resolved = resolveKindEntry(value) || (value.includes('/') ? resolveKindEntry(inferKindFromKey(value)) : null);
   if (!resolved) {
-    const err = new Error('Tipo de mídia desconhecido.');
+    const err = new Error('Tipo/chave de mídia desconhecido.');
     err.code = 'INVALID_KIND';
     throw err;
   }
-
-  const config = getStorageConfig();
-
-  return resolved.entry.bucket === 'private'
-    ? config.privateBucket
-    : config.publicBucket;
+  const c = getStorageConfig();
+  return resolved.entry.bucket === 'private' ? c.privateBucket : c.publicBucket;
 }
 
 function getPrefixForKind(kind) {
   const resolved = resolveKindEntry(kind);
-
-  if (!resolved) {
-    throw new Error('Tipo de mídia inválido.');
-  }
-
+  if (!resolved) throw new Error('Tipo de mídia inválido.');
   return getStorageConfig().prefixes[resolved.kind];
 }
 
-// ─────────────────────────────────────────────────────────────
-// URLs públicas
-// ─────────────────────────────────────────────────────────────
 function encodeKey(key) {
   return String(key).split('/').map(encodeURIComponent).join('/');
 }
 
 function getPublicUrl(key) {
-  if (!key) {
-    throw new Error('Chave obrigatória.');
-  }
-
+  if (!key) throw new Error('Chave obrigatória.');
   validateObjectKey(key);
-
   if (isQuarantinePath(key)) {
-    const err = new Error('Objetos em quarentena não possuem URL pública.');
+    const err = new Error('Objeto em quarentena não possui URL pública.');
     err.code = 'NOT_PUBLIC';
     throw err;
   }
-
   const kind = inferKindFromKey(key);
-  const entry = ALLOWED_MEDIA[kind];
-
-  if (entry.bucket !== 'public') {
-    const err = new Error(
-      `Tipo "${kind}" não possui URL pública. Use getPlaybackUrl() ou createSignedDownloadUrl().`
-    );
+  if (ALLOWED_MEDIA[kind].bucket !== 'public') {
+    const err = new Error('Objeto privado não pode gerar URL pública.');
     err.code = 'NOT_PUBLIC';
     throw err;
   }
-
-  const config = getStorageConfig();
-  const imagePrefix = config.prefixes['image'];
-
-  if (config.customImageDomain && key.startsWith(imagePrefix + '/')) {
-    return `${config.customImageDomain}/${encodeKey(key)}`;
-  }
-
-  return `${config.publicBaseUrl}/${encodeKey(key)}`;
+  const c = getStorageConfig();
+  const base = c.customImageDomain && kind === 'image' ? c.customImageDomain : c.publicBaseUrl;
+  return `${base}/${encodeKey(key)}`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Upload direto (apenas DIRECT_UPLOAD_KINDS)
-// ─────────────────────────────────────────────────────────────
 async function uploadObject(key, body, contentType) {
   validateObjectKey(key);
-
   const kind = inferKindFromKey(key);
-
   if (!DIRECT_UPLOAD_KINDS.has(kind)) {
-    const err = new Error(
-      `Upload direto não permitido para "${kind}". Use quarentena + promote.`
-    );
+    const err = new Error(`Upload direto não permitido para "${kind}". Use quarentena + promoção.`);
     err.code = 'DIRECT_UPLOAD_FORBIDDEN';
     throw err;
   }
-
   const entry = ALLOWED_MEDIA[kind];
-
-  validateMimeForKind(kind, contentType);
-  validateMimeExtConsistency(kind, contentType, key);
-
-  if (!Buffer.isBuffer(body) && !(body instanceof Uint8Array)) {
-    throw new TypeError('Body deve ser Buffer ou Uint8Array.');
-  }
-
+  const mime = validateMimeForKind(kind, contentType);
+  validateMimeExtConsistency(kind, mime, key);
+  if (!Buffer.isBuffer(body) && !(body instanceof Uint8Array)) throw new TypeError('Body deve ser Buffer ou Uint8Array.');
   const size = body.byteLength;
-
-  if (!size) {
-    throw new Error('Arquivo vazio.');
-  }
-
-  if (size > entry.maxBytes) {
-    throw new Error(
-      `Arquivo excede o limite para ${kind} (máx ${Math.round(entry.maxBytes / 1024 / 1024)}MB).`
-    );
-  }
-
-  const bucket = resolveBucket(kind);
-
+  if (!size) throw new Error('Arquivo vazio.');
+  if (size > entry.maxBytes) throw new Error(`Arquivo excede o limite para ${kind}.`);
   return getS3Client().send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: body,
-    ContentType: contentType
+    Bucket: resolveBucket(kind), Key: key, Body: body, ContentType: mime
   }));
 }
 
-// ─────────────────────────────────────────────────────────────
-// URL assinada de upload (só quarentena)
-// ─────────────────────────────────────────────────────────────
 async function createSignedUploadUrl(key, contentType, sizeBytes, expiresInSec = 900) {
   validateObjectKey(key);
-
   if (!isQuarantinePath(key)) {
     const err = new Error('URL assinada deve apontar para quarentena.');
     err.code = 'INVALID_PATH';
     throw err;
   }
-
   const kind = inferKindFromKey(key);
   const entry = ALLOWED_MEDIA[kind];
-
-  validateMimeForKind(kind, contentType);
-  validateMimeExtConsistency(kind, contentType, key);
-
-  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) {
-    throw new Error('Tamanho do arquivo inválido.');
+  const mime = validateMimeForKind(kind, contentType);
+  validateMimeExtConsistency(kind, mime, key);
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > entry.maxBytes) {
+    throw new Error(`Tamanho inválido ou acima do limite para ${kind}.`);
   }
-
-  if (sizeBytes > entry.maxBytes) {
-    throw new Error(`Arquivo excede o limite para ${kind}.`);
-  }
-
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido (1–3600s).');
   }
 
-  const bucket = resolveBucket(kind);
-
   const command = new PutObjectCommand({
-    Bucket: bucket,
+    Bucket: resolveBucket(key),
     Key: key,
-    ContentType: contentType,
-    ContentLength: sizeBytes
+    ContentType: mime
   });
-
-  const uploadUrl = await getSignedUrl(
-    getS3Client(),
-    command,
-    { expiresIn: expiresInSec }
-  );
-
-  return {
-    uploadUrl,
-    path: key,
-    bucket,
-    kind,
-    maxBytes: entry.maxBytes,
-    expiresIn: expiresInSec,
-    host: getStorageConfig().s3Host
-  };
+  const uploadUrl = await getSignedUrl(getS3Client(), command, { expiresIn: expiresInSec });
+  return { uploadUrl, path: key, bucket: resolveBucket(key), kind, maxBytes: entry.maxBytes, expectedSize: sizeBytes, expiresIn: expiresInSec, host: getStorageConfig().s3Host };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Metadados
-// ─────────────────────────────────────────────────────────────
 async function getObjectMetadata(key) {
   validateObjectKey(key);
-
   const kind = inferKindFromKey(key);
-  const bucket = resolveBucket(kind);
-
   try {
-    const head = await getS3Client().send(
-      new HeadObjectCommand({
-        Bucket: bucket,
-        Key: key
-      })
-    );
-
+    const head = await getS3Client().send(new HeadObjectCommand({ Bucket: resolveBucket(key), Key: key }));
     return {
       contentLength: Number(head.ContentLength) || 0,
       contentType: head.ContentType || null,
@@ -557,14 +374,7 @@ async function getObjectMetadata(key) {
       lastModified: head.LastModified || null
     };
   } catch (err) {
-    if (
-      err?.$metadata?.httpStatusCode === 404 ||
-      err?.name === 'NotFound' ||
-      err?.name === 'NoSuchKey'
-    ) {
-      return null;
-    }
-
+    if (err?.$metadata?.httpStatusCode === 404 || err?.name === 'NotFound' || err?.name === 'NoSuchKey') return null;
     throw err;
   }
 }
@@ -573,149 +383,88 @@ async function objectExists(key) {
   return (await getObjectMetadata(key)) !== null;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Download assinado
-// ─────────────────────────────────────────────────────────────
 async function createSignedDownloadUrl(key, expiresInSec = 300, downloadFilename = null) {
   validateObjectKey(key);
-
   if (isQuarantinePath(key)) {
-    const err = new Error('Download de objeto em quarentena não é permitido.');
+    const err = new Error('Download de objeto em quarentena não permitido.');
     err.code = 'QUARANTINE_FORBIDDEN';
     throw err;
   }
-
   const kind = inferKindFromKey(key);
-  const bucket = resolveBucket(kind);
-
   if (!Number.isInteger(expiresInSec) || expiresInSec < 1 || expiresInSec > 3600) {
     throw new Error('Prazo de assinatura inválido.');
   }
-
-  const params = {
-    Bucket: bucket,
-    Key: key
-  };
-
+  const params = { Bucket: resolveBucket(key), Key: key };
   if (downloadFilename) {
-    const safe = String(downloadFilename)
-      .replace(/[\r\n"\\]/g, '_')
-      .replace(/[^\w.\- ]/g, '_')
-      .slice(0, 150) || 'download';
-
-    params.ResponseContentDisposition =
-      `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
+    const safe = String(downloadFilename).replace(/[\r\n"\\]/g, '_').replace(/[^\w.\- ]/g, '_').slice(0, 150) || 'download';
+    params.ResponseContentDisposition = `attachment; filename="${safe}"`;
   }
-
-  const url = await getSignedUrl(
-    getS3Client(),
-    new GetObjectCommand(params),
-    { expiresIn: expiresInSec }
-  );
-
-  return {
-    url,
-    kind,
-    bucket,
-    expiresIn: expiresInSec
-  };
+  const url = await getSignedUrl(getS3Client(), new GetObjectCommand(params), { expiresIn: expiresInSec });
+  return { url, kind, bucket: params.Bucket, expiresIn: expiresInSec };
 }
 
 async function getPlaybackUrl(key) {
-  if (!key) {
-    throw new Error('Chave obrigatória.');
-  }
-
+  if (!key) throw new Error('Chave obrigatória.');
   validateObjectKey(key);
-
   if (isQuarantinePath(key)) {
-    const err = new Error('Reprodução de objeto em quarentena não é permitida.');
+    const err = new Error('Reprodução de objeto em quarentena não permitida.');
     err.code = 'QUARANTINE_FORBIDDEN';
     throw err;
   }
-
   const kind = inferKindFromKey(key);
-
   if (kind !== 'audio-full') {
     const err = new Error('getPlaybackUrl aceita apenas audio-full.');
     err.code = 'INVALID_KIND';
     throw err;
   }
-
-  const { url } = await createSignedDownloadUrl(key, 300, null);
-
-  return url;
+  const meta = await getObjectMetadata(key);
+  if (!meta) {
+    const err = new Error('Arquivo de áudio não encontrado.');
+    err.code = 'OBJECT_NOT_FOUND';
+    throw err;
+  }
+  return createSignedDownloadUrl(key, 300, null).then(result => result.url);
 }
 
-// ─────────────────────────────────────────────────────────────
-// PROMOÇÃO DE QUARENTENA
-// ─────────────────────────────────────────────────────────────
 async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
+  validateObjectKey(quarantineKey);
   if (!isQuarantinePath(quarantineKey)) {
     const err = new Error('promoteFromQuarantine exige caminho de quarentena.');
     err.code = 'INVALID_PATH';
     throw err;
   }
-
   const originKind = inferKindFromKey(quarantineKey);
   const resolved = resolveKindEntry(kind);
-
   if (!resolved || resolved.kind !== originKind) {
     const err = new Error('kind informado não corresponde ao kind da quarentena.');
     err.code = 'KIND_MISMATCH';
     throw err;
   }
-
   const ext = validateExtForKind(resolved.kind, quarantineKey);
-
   let definitiveKey;
 
-  if (opts.definitiveKey !== undefined && opts.definitiveKey !== null) {
-    const candidate = String(opts.definitiveKey);
-
-    validateObjectKey(candidate);
-
-    if (isQuarantinePath(candidate)) {
-      throw new Error('definitiveKey não pode ser caminho de quarentena.');
-    }
-
-    const k = inferKindFromKey(candidate);
-
-    if (k !== resolved.kind) {
-      throw new Error('definitiveKey não corresponde ao kind informado.');
-    }
-
-    validateExtForKind(resolved.kind, candidate);
-
-    definitiveKey = candidate;
+  if (opts.definitiveKey != null) {
+    definitiveKey = String(opts.definitiveKey);
+    validateObjectKey(definitiveKey);
+    if (isQuarantinePath(definitiveKey)) throw new Error('definitiveKey não pode ser quarentena.');
+    if (inferKindFromKey(definitiveKey) !== resolved.kind) throw new Error('definitiveKey não corresponde ao kind.');
+    validateExtForKind(resolved.kind, definitiveKey);
   } else {
     definitiveKey = buildDefinitivePath(resolved.kind, ext);
   }
 
-  const expectedSize =
-    opts.expectedSize !== undefined && opts.expectedSize !== null
-      ? Number(opts.expectedSize)
-      : null;
-
-  const expectedMime = opts.expectedMime
-    ? String(opts.expectedMime).split(';')[0].trim().toLowerCase()
-    : null;
-
-  if (
-    expectedSize !== null &&
-    (!Number.isSafeInteger(expectedSize) || expectedSize <= 0)
-  ) {
-    throw new Error('expectedSize inválido.');
-  }
-
+  const expectedSize = opts.expectedSize == null ? null : Number(opts.expectedSize);
+  const expectedMime = opts.expectedMime ? String(opts.expectedMime).split(';')[0].trim().toLowerCase() : null;
+  if (expectedSize !== null && (!Number.isSafeInteger(expectedSize) || expectedSize <= 0)) throw new Error('expectedSize inválido.');
   if (expectedMime !== null) {
     validateMimeForKind(resolved.kind, expectedMime);
     validateMimeExtConsistency(resolved.kind, expectedMime, quarantineKey);
   }
 
-  const bucket = resolveBucket(resolved.kind);
-  const c = getS3Client();
-
+  const entry = ALLOWED_MEDIA[resolved.kind];
+  const sourceBucket = resolveBucket(quarantineKey); // always private
+  const destinationBucket = resolveBucket(resolved.kind);
+  const s3 = getS3Client();
   const originMeta = await getObjectMetadata(quarantineKey);
 
   if (!originMeta || originMeta.contentLength <= 0) {
@@ -723,269 +472,137 @@ async function promoteFromQuarantine(quarantineKey, kind, opts = {}) {
     err.code = 'QUARANTINE_MISSING';
     throw err;
   }
-
-  const originMime = (originMeta.contentType || '')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
-
-  if (!originMime || !ALLOWED_MEDIA[resolved.kind].mimes.has(originMime)) {
-    const err = new Error(
-      `Content-Type do objeto (${originMime || 'vazio'}) não é permitido para ${resolved.kind}.`
-    );
+  if (originMeta.contentLength > entry.maxBytes) {
+    const err = new Error('Objeto excede o limite máximo após upload.');
+    err.code = 'SIZE_LIMIT_EXCEEDED';
+    throw err;
+  }
+  const originMime = String(originMeta.contentType || '').split(';')[0].trim().toLowerCase();
+  if (!entry.mimes.has(originMime)) {
+    const err = new Error(`MIME real informado nos metadados não permitido: ${originMime || 'ausente'}.`);
     err.code = 'MIME_MISMATCH';
     throw err;
   }
-
   validateMimeExtConsistency(resolved.kind, originMime, quarantineKey);
-
   if (expectedSize !== null && originMeta.contentLength !== expectedSize) {
-    const err = new Error(
-      `Tamanho do objeto (${originMeta.contentLength}) difere do esperado (${expectedSize}).`
-    );
+    const err = new Error(`Tamanho real (${originMeta.contentLength}) difere do esperado (${expectedSize}).`);
     err.code = 'SIZE_MISMATCH';
     throw err;
   }
-
   if (expectedMime !== null && originMime !== expectedMime) {
-    const err = new Error(
-      `MIME do objeto (${originMime}) difere do esperado (${expectedMime}).`
-    );
+    const err = new Error(`MIME real (${originMime}) difere do esperado (${expectedMime}).`);
     err.code = 'MIME_MISMATCH';
     throw err;
   }
-
-  const etag = originMeta.etag;
-
-  if (!etag) {
-    const err = new Error('ETag da origem ausente — impossível proteger a cópia.');
+  if (!originMeta.etag) {
+    const err = new Error('ETag da origem ausente; cópia protegida impossível.');
     err.code = 'ETAG_MISSING';
     throw err;
   }
 
-  const copyParams = {
-    Bucket: bucket,
-    Key: definitiveKey,
-    CopySource: `/${bucket}/${encodeKey(quarantineKey)}`,
-    MetadataDirective: 'COPY',
-    CopySourceIfMatch: etag
-  };
-
+  const copySource = `/${sourceBucket}/${encodeKey(quarantineKey)}`;
+  let copied = false;
   try {
-    await c.send(new CopyObjectCommand(copyParams));
+    await s3.send(new CopyObjectCommand({
+      Bucket: destinationBucket,
+      Key: definitiveKey,
+      CopySource: copySource,
+      MetadataDirective: 'COPY',
+      CopySourceIfMatch: originMeta.etag
+    }));
+    copied = true;
+
+    const destMeta = await getObjectMetadata(definitiveKey);
+    if (!destMeta || destMeta.contentLength <= 0) throw new Error('Destino promovido vazio/inexistente.');
+    if (destMeta.contentLength !== originMeta.contentLength) throw new Error('Tamanho do destino difere da origem.');
+    const destMime = String(destMeta.contentType || '').split(';')[0].trim().toLowerCase();
+    if (destMime !== originMime) throw new Error('MIME do destino difere da origem.');
+
+    // Only delete quarantine after destination verification.
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: sourceBucket, Key: quarantineKey }));
+    } catch (cleanupErr) {
+      console.warn('[storage] promoção concluída, mas quarentena não removida:', cleanupErr?.message || cleanupErr);
+    }
+
+    return { definitiveKey, meta: destMeta, originMeta, etag: originMeta.etag, kind: resolved.kind, bucket: destinationBucket };
   } catch (err) {
-    if (
-      err?.name === 'PreconditionFailed' ||
-      err?.$metadata?.httpStatusCode === 412
-    ) {
-      const e = new Error(
-        'Objeto de quarentena foi modificado entre a leitura e a cópia.'
-      );
+    // Compensating cleanup: if destination was created but verification failed, remove it.
+    if (copied) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: destinationBucket, Key: definitiveKey }));
+      } catch (cleanupErr) {
+        console.error('[storage] rollback de promoção falhou:', definitiveKey, cleanupErr?.message || cleanupErr);
+      }
+    }
+    if (err?.name === 'PreconditionFailed' || err?.$metadata?.httpStatusCode === 412) {
+      const e = new Error('Objeto de quarentena foi modificado antes da cópia.');
       e.code = 'SOURCE_CHANGED';
       throw e;
     }
-
     throw err;
   }
-
-  const destMeta = await getObjectMetadata(definitiveKey);
-
-  if (!destMeta || destMeta.contentLength <= 0) {
-    const err = new Error('Falha ao promover objeto — definitivo vazio.');
-    err.code = 'PROMOTE_FAILED';
-    throw err;
-  }
-
-  if (destMeta.contentLength !== originMeta.contentLength) {
-    try {
-      await c.send(
-        new DeleteObjectCommand({
-          Bucket: bucket,
-          Key: definitiveKey
-        })
-      );
-    } catch {}
-
-    const err = new Error('Tamanho do definitivo difere da origem.');
-    err.code = 'PROMOTE_SIZE_MISMATCH';
-    throw err;
-  }
-
-  const destMime = (destMeta.contentType || '')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
-
-  if (destMime !== originMime) {
-    try {
-      await c.send(
-        new DeleteObjectCommand({
-          Bucket: bucket,
-          Key: definitiveKey
-        })
-      );
-    } catch {}
-
-    const err = new Error('MIME do definitivo difere da origem.');
-    err.code = 'PROMOTE_MIME_MISMATCH';
-    throw err;
-  }
-
-  try {
-    await c.send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: quarantineKey
-      })
-    );
-  } catch (err) {
-    console.warn(
-      '[storage] falha ao apagar quarentena:',
-      quarantineKey,
-      err.message
-    );
-  }
-
-  return {
-    definitiveKey,
-    meta: destMeta,
-    originMeta,
-    etag,
-    kind: resolved.kind
-  };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Exclusão / limpeza
-// ─────────────────────────────────────────────────────────────
 async function deleteObject(key) {
-  try {
-    validateObjectKey(key);
-
-    const kind = inferKindFromKey(key);
-    const bucket = resolveBucket(kind);
-
-    await getS3Client().send(
-      new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: key
-      })
-    );
-
-    return true;
-  } catch (err) {
-    console.warn('[storage] deleteObject falhou:', key, err.message);
-    return false;
-  }
+  validateObjectKey(key);
+  const bucket = resolveBucket(key);
+  await getS3Client().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  return true;
 }
 
 async function purgeOldQuarantine(olderThanHours = QUARANTINE_TTL_HOURS_DEFAULT) {
   const hours = Number(olderThanHours);
-
-  if (
-    !Number.isInteger(hours) ||
-    hours <= 0 ||
-    hours > QUARANTINE_TTL_HOURS_MAX
-  ) {
-    throw new Error(
-      `olderThanHours deve ser um inteiro entre 1 e ${QUARANTINE_TTL_HOURS_MAX}.`
-    );
+  if (!Number.isInteger(hours) || hours <= 0 || hours > QUARANTINE_TTL_HOURS_MAX) {
+    throw new Error(`olderThanHours deve ser inteiro entre 1 e ${QUARANTINE_TTL_HOURS_MAX}.`);
   }
-
-  const c = getS3Client();
+  const c = getStorageConfig();
+  const s3 = getS3Client();
   const cutoff = Date.now() - hours * 3600 * 1000;
   let deleted = 0;
+  let failed = 0;
 
+  // All quarantine objects live in the private bucket, irrespective of media kind.
   for (const kind of Object.keys(ALLOWED_MEDIA)) {
-    const bucket = resolveBucket(kind);
     const prefix = `${QUARANTINE_PREFIX}/${kind}/`;
     let token;
-
     do {
-      const list = await c.send(
-        new ListObjectsV2Command({
-          Bucket: bucket,
-          Prefix: prefix,
-          ContinuationToken: token
-        })
-      );
-
+      const list = await s3.send(new ListObjectsV2Command({
+        Bucket: c.privateBucket, Prefix: prefix, ContinuationToken: token
+      }));
       for (const obj of list.Contents || []) {
-        const lm = obj.LastModified
-          ? new Date(obj.LastModified).getTime()
-          : 0;
-
-        if (lm && lm < cutoff) {
+        const modified = obj.LastModified ? new Date(obj.LastModified).getTime() : 0;
+        if (modified && modified < cutoff && obj.Key) {
           try {
-            await c.send(
-              new DeleteObjectCommand({
-                Bucket: bucket,
-                Key: obj.Key
-              })
-            );
-
+            await s3.send(new DeleteObjectCommand({ Bucket: c.privateBucket, Key: obj.Key }));
             deleted++;
           } catch (err) {
-            console.warn('[storage] purge falhou:', obj.Key, err.message);
+            failed++;
+            console.warn('[storage] purge falhou:', obj.Key, err?.message || err);
           }
-        } else if (!lm) {
-          console.warn(
-            '[storage] purge ignorou objeto sem LastModified:',
-            obj.Key
-          );
         }
       }
-
-      token = list.IsTruncated
-        ? list.NextContinuationToken
-        : undefined;
-
+      token = list.IsTruncated ? list.NextContinuationToken : undefined;
     } while (token);
   }
-
-  return { deleted };
+  return { deleted, failed };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Configuração pública (para o frontend)
-// ─────────────────────────────────────────────────────────────
 function getPublicR2Config() {
   const c = getStorageConfig();
-
   return {
     ok: true,
-    accountId: c.accountId,
-    publicBucket: c.publicBucket,
-    privateBucket: c.privateBucket,
-    s3Host: c.s3Host,
     publicBaseUrl: c.publicBaseUrl,
-    customImageDomain: c.customImageDomain || null,
+    customImageDomain: c.customImageDomain,
     prefixes: c.prefixes,
-
-    allowedMedia: Object.fromEntries(
-      Object.entries(ALLOWED_MEDIA).map(([k, v]) => [
-        k,
-        {
-          exts: [...v.exts],
-          mimes: [...v.mimes],
-          bucket: v.bucket,
-          maxBytes: v.maxBytes
-        }
-      ])
-    ),
-
-    quarantine: {
-      prefix: QUARANTINE_PREFIX,
-      ttlHours: QUARANTINE_TTL_HOURS_DEFAULT
-    },
-
+    allowedMedia: Object.fromEntries(Object.entries(ALLOWED_MEDIA).map(([kind, v]) => [
+      kind, { exts: [...v.exts], mimes: [...v.mimes], bucket: v.bucket, maxBytes: v.maxBytes }
+    ])),
+    quarantine: { prefix: QUARANTINE_PREFIX, ttlHours: QUARANTINE_TTL_HOURS_DEFAULT },
     directUploadKinds: [...DIRECT_UPLOAD_KINDS]
   };
 }
 
-// ─────────────────────────────────────────────────────────────
-// Exports
-// ─────────────────────────────────────────────────────────────
 module.exports = {
   createSignedUploadUrl,
   createSignedDownloadUrl,
@@ -1017,3 +634,7 @@ module.exports = {
   QUARANTINE_TTL_HOURS_DEFAULT,
   QUARANTINE_TTL_HOURS_MAX
 };
+"""
+path = Path("/mnt/data/api_storage_v5.js")
+path.write_text(code, encoding="utf-8")
+print(f"Arquivo criado: {path} | {len(code.splitlines())} linhas")
