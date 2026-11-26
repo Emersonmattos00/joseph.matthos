@@ -21,7 +21,9 @@ const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
-const CDN_BASE = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+// S-05: CDN da prévia por env (fallback ao domínio público atual)
+const CDN_BASE = String(process.env.R2_PUBLIC_BASE_URL || 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev')
+  .replace(/\/+$/, '');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -199,7 +201,8 @@ module.exports = async (req, res) => {
     /* 9. Áudio completo → URL assinada do B2 */
     if (accessLevel === 'full') {
       try {
-        const signedUrl = await getPlaybackUrl(cleanKey, true);
+        // S-05: getPlaybackUrl aceita apenas a chave (TTL estendido via B-04 do _storage v5)
+        const signedUrl = await getPlaybackUrl(cleanKey);
         if (typeof signedUrl !== 'string' || !signedUrl.startsWith('https://')) {
           throw new Error('URL assinada inválida.');
         }
