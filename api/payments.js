@@ -1,4 +1,3 @@
-
 'use strict';
 
 /* ============================================================
@@ -770,12 +769,12 @@ async function handleSubscription(req, res, user) {
         auto_recurring: {
           frequency: plan.intervalCount,
 
-          frequency_type:
-            plan.intervalUnit === 'YEAR'
-              ? 'years'
-              : plan.intervalUnit === 'MONTH'
-                ? 'months'
-                : 'days',
+          // S-02: normalizar o casing (planos gravados em minúsculas
+          // hoje gerariam recorrência "days" no gateway)
+          frequency_type: (() => {
+            const u = String(plan.intervalUnit || '').toUpperCase();
+            return u === 'YEAR' ? 'years' : u === 'MONTH' ? 'months' : 'days';
+          })(),
 
           transaction_amount: plan.priceCents / 100,
           currency_id: plan.currency || 'BRL',
@@ -1240,14 +1239,17 @@ async function handleWebhook(req, res) {
                 plan.intervalUnit || ''
               ).toUpperCase();
 
-              if (unit === 'MONTH') {
-                nextEnd.setMonth(
-                  nextEnd.getMonth() + plan.intervalCount
-                );
-              } else if (unit === 'YEAR') {
-                nextEnd.setFullYear(
-                  nextEnd.getFullYear() + plan.intervalCount
-                );
+              // S-10: clamp de fim-de-mês (evita overflow de setMonth)
+              if (unit === 'MONTH' || unit === 'YEAR') {
+                const day = nextEnd.getDate();
+                nextEnd.setDate(1);
+                if (unit === 'MONTH') {
+                  nextEnd.setMonth(nextEnd.getMonth() + plan.intervalCount);
+                } else {
+                  nextEnd.setFullYear(nextEnd.getFullYear() + plan.intervalCount);
+                }
+                const lastDay = new Date(nextEnd.getFullYear(), nextEnd.getMonth() + 1, 0).getDate();
+                nextEnd.setDate(Math.min(day, lastDay));
               } else {
                 nextEnd.setDate(
                   nextEnd.getDate() +
