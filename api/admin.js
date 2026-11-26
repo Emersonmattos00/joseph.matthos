@@ -452,7 +452,7 @@ async function handleUploadSign(req, res, session) {
   try {
     await db.insert(uploadIntents).values({
       id: intentionId, adminUser: session.user, kind, path: quarantinePath,
-      contentType: validation.mime, expectedSize: sizeBytes, expiresAt,
+      contentType: validation.mime, sizeLimit: sizeBytes, expiresAt, // S-01: coluna real é size_limit
       consumedAt: null, createdAt: new Date().toISOString()
     });
   } catch (err) {
@@ -509,7 +509,7 @@ async function handleUploadConfirm(req, res, session) {
         ))
         .returning({
           id: uploadIntents.id, path: uploadIntents.path, kind: uploadIntents.kind,
-          contentType: uploadIntents.contentType, expectedSize: uploadIntents.expectedSize
+          contentType: uploadIntents.contentType, sizeLimit: uploadIntents.sizeLimit // S-01
         });
 
       if (consumed.length !== 1) { const err = new Error('UPLOAD_INTENT_ALREADY_CONSUMED'); err.code = 'UPLOAD_INTENT_ALREADY_CONSUMED'; throw err; }
@@ -541,7 +541,7 @@ async function handleUploadConfirm(req, res, session) {
 
   try {
     await promoteFromQuarantine(path, kind, {
-      expectedSize: intentSnapshot.expectedSize ? Number(intentSnapshot.expectedSize) : undefined,
+      expectedSize: intentSnapshot.sizeLimit ? Number(intentSnapshot.sizeLimit) : undefined, // S-01
       expectedMime: intentSnapshot.contentType || undefined,
       definitiveKey
     });
@@ -569,7 +569,7 @@ async function handleReconcileUploads(req, res, session) {
   try {
     intents = await db.select({
       id: uploadIntents.id, kind: uploadIntents.kind, path: uploadIntents.path,
-      contentType: uploadIntents.contentType, expectedSize: uploadIntents.expectedSize,
+      contentType: uploadIntents.contentType, sizeLimit: uploadIntents.sizeLimit, // S-01
       consumedAt: uploadIntents.consumedAt
     }).from(uploadIntents)
       .where(and(
@@ -620,7 +620,7 @@ async function handleReconcileUploads(req, res, session) {
 
     try {
       await promoteFromQuarantine(it.path, it.kind, {
-        expectedSize: it.expectedSize ? Number(it.expectedSize) : undefined,
+        expectedSize: it.sizeLimit ? Number(it.sizeLimit) : undefined, // S-01
         expectedMime: it.contentType || undefined,
         definitiveKey: currentPath
       });
@@ -965,6 +965,23 @@ async function handleCreateAlbum(req, res, session) {
   if (body.published !== undefined && typeof body.published !== 'boolean') return sendJson(res, 400, { ok: false, error: 'published deve ser booleano.' });
   const published = typeof body.published === 'boolean' ? body.published : false;
 
+  // A-07: aceitar year/coverUrl no POST (antes só o PATCH aceitava)
+  const extra = {};
+  if (body.year !== undefined) {
+    const y = Number(body.year);
+    if (!Number.isInteger(y) || y < 1900 || y > new Date().getFullYear() + 1) {
+      return sendJson(res, 400, { ok: false, error: 'Ano inválido.' });
+    }
+    extra.year = y;
+  }
+  if (body.coverUrl !== undefined) {
+    const cu = String(body.coverUrl).trim();
+    if (!/^https?:\/\/[^\s]+$/i.test(cu)) {
+      return sendJson(res, 400, { ok: false, error: 'URL da capa inválida.' });
+    }
+    extra.coverUrl = cu;
+  }
+
   const slug = createSlug(title);
   if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
 
@@ -980,7 +997,7 @@ async function handleCreateAlbum(req, res, session) {
       if (dup) { const err = new Error('SLUG_CONFLICT'); err.code = 'SLUG_CONFLICT'; throw err; }
 
       const [row] = await tx.insert(albums).values({
-        id: crypto.randomUUID(), title, slug, artistId: artist.id, published
+        id: crypto.randomUUID(), title, slug, artistId: artist.id, published, ...extra
       }).returning();
       return row;
     });
@@ -1138,13 +1155,21 @@ async function handleCreateTrack(req, res, session) {
 }
 
 async function assertPathFromConsumedIntent(path, adminUser) {
-  const [row] = await db.select({ id: uploadIntents.id }).from(uploadIntents)
+  // A-09: aceita o path de quarentena OU o definitivo derivado da intent consumida
+  const rows = await db.select({
+    id: uploadIntents.id, kind: uploadIntents.kind, path: uploadIntents.path
+  }).from(uploadIntents)
     .where(and(
-      eq(uploadIntents.path, path),
       eq(uploadIntents.adminUser, adminUser),
       sql`${uploadIntents.consumedAt} IS NOT NULL`
-    )).limit(1);
-  return Boolean(row);
+    ))
+    .orderBy(desc(uploadIntents.consumedAt))
+    .limit(20);
+  for (const it of rows) {
+    if (it.path === path) return true;
+    try { if (buildIntentDefinitivePath(it.kind, it.id, it.path) === path) return true; } catch {}
+  }
+  return false;
 }
 
 async function handleUpdateTrack(req, res, session) {
