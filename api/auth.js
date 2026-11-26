@@ -14,7 +14,7 @@ const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { eq, and, isNull, gt, inArray, sql, asc, ne } = require('drizzle-orm');
 const { db } = require('./_db');
-const { users, refreshTokens } = require('../src/schema.js');
+const { users, refreshTokens, rentals, tracks } = require('../src/schema.js');
 
 const {
   getAuthUser,
@@ -1262,11 +1262,31 @@ async function handleMe(req, res, authUser) {
 
   const { plan, planDegraded } = await resolvePlan(user.id);
 
+  // F-02: aluguéis ativos no formato { trackKey: "albumId:trackNumber", expiresAt }
+  let rentalsOut = [];
+  try {
+    const rows = await db
+      .select({ albumId: rentals.albumId, trackId: rentals.trackId,
+                expiresAt: rentals.expiresAt, trackNumber: tracks.trackNumber })
+      .from(rentals)
+      .leftJoin(tracks, eq(rentals.trackId, tracks.id))
+      .where(and(
+        eq(rentals.userId, user.id), eq(rentals.status, 'ACTIVE'),
+        gt(rentals.expiresAt, new Date().toISOString())
+      ));
+    rentalsOut = rows.map((r) => ({
+      trackKey: (r.trackId && r.trackNumber != null && r.albumId)
+        ? `${r.albumId}:${r.trackNumber}` : null,
+      albumId: r.albumId, expiresAt: r.expiresAt,
+    })).filter((r) => r.trackKey || r.albumId);
+  } catch {}
+
   return sendJson(res, 200, {
     ok: true,
     user,
     plan,
     planDegraded,
+    rentals: rentalsOut,
   });
 }
 
