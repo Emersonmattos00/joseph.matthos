@@ -959,11 +959,13 @@ async function handleDeleteUser(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
+      // Alinhar o estado local com os status que também foram cancelados
+      // externamente: ACTIVE, PENDING, PAUSED e PAST_DUE.
       await tx.update(subscriptions)
         .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
         .where(and(
           eq(subscriptions.userId, userId),
-          inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
+          inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'])
         ));
 
       const anonymizedAt = new Date().toISOString();
@@ -1298,9 +1300,41 @@ async function handleUpdateTrack(req, res, session) {
 
   if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
 
+  // P1: publicação só é permitida quando o áudio completo existe e
+  // possui metadados válidos no bucket privado. Considera também um fullPath
+  // enviado nesta mesma atualização.
+  if (patch.status === 'PUBLISHED') {
+    const [current] = await db.select({ fullPath: tracks.fullPath, status: tracks.status })
+      .from(tracks).where(eq(tracks.id, trackId)).limit(1);
+    if (!current) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    const candidatePath = patch.fullPath !== undefined ? patch.fullPath : current.fullPath;
+    if (!candidatePath) return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: áudio completo não associado.' });
+    let candidateKind;
+    try { candidateKind = inferKindFromKey(candidatePath); }
+    catch { return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: caminho do áudio completo inválido.' }); }
+    if (candidateKind !== 'audio-full') return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: o arquivo associado não é áudio completo privado.' });
+    let fullMeta;
+    try { fullMeta = await getObjectMetadata(candidatePath); }
+    catch { return sendJson(res, 502, { ok: false, error: 'Falha ao validar o áudio no Storage. A faixa não foi publicada.' }); }
+    if (!fullMeta || !Number.isSafeInteger(fullMeta.contentLength) || fullMeta.contentLength <= 0) {
+      return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: áudio completo ausente ou vazio no Storage.' });
+    }
+  }
+
+  const [oldTrackMedia] = await db.select({ fullPath: tracks.fullPath, previewPath: tracks.previewPath })
+    .from(tracks).where(eq(tracks.id, trackId)).limit(1);
+  if (!oldTrackMedia) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
   try {
     const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
     if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+    const replacedMedia = [];
+    if (patch.fullPath !== undefined && oldTrackMedia.fullPath && oldTrackMedia.fullPath !== patch.fullPath) replacedMedia.push(oldTrackMedia.fullPath);
+    if (patch.previewPath !== undefined && oldTrackMedia.previewPath && oldTrackMedia.previewPath !== patch.previewPath) replacedMedia.push(oldTrackMedia.previewPath);
+    if (replacedMedia.length) {
+      try { await purgeTrackMedia(replacedMedia); }
+      catch (e) { console.warn('[admin] purge de mídia substituída falhou:', e.message); }
+    }
     try { await audit('track.update', { actor: session.user, target: trackId, metadata: patch }); }
     catch (e) { console.warn('[admin] audit track.update falhou:', e.message); }
     return sendJson(res, 200, { ok: true, track: updated[0] });
@@ -1713,4 +1747,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-                                                              }
+}
