@@ -1,5 +1,5 @@
 /* ============================================================
-   js/admin/editors/albums.js — v10.2 (Audit-Ready)
+   js/admin/editors/albums.js — v10.3 (Audit-Ready + patches A-01..A-26)
    ============================================================
    v10 + auditoria completa:
    1. Validação de domínio robusta (subdomínio legítimo)
@@ -12,6 +12,17 @@
    8. Prev/next com comportamento explícito
    9. Capa em <img> (não background-image)
    10. Hints para backend em operações não-transacionais
+   ============================================================
+   v10.3 — patches da auditoria de 2026-11-26 aplicados:
+   A-01/A-02 drag&drop seguro + DOM otimista · A-03 anti-duplo-clique
+   A-04 ids de álbum normalizados · A-05 type=full nos downloads
+   A-06 volume inicial 0.8 · A-07 normalizeTrack (snake→camel)
+   A-08 letras com linhas em branco · A-09 guarda res.track.id
+   A-10 observer desconecta sempre · A-11 fallback de versão prev/next
+   A-12 sem URLs assinadas em logs · A-13 debug global sob flag
+   A-16 assinatura AAC · A-17 reset versions · A-18 capa sem handler inline
+   A-19 lookup por dataset · A-20 guarda de remount · A-22 sem rethrow 401
+   A-24 probe com timeout · A-26 código morto removido
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -132,7 +143,7 @@ async function validateAudioFile(file) {
   if (!ALLOWED_AUDIO_EXTS.includes(ext)) {
     return `Extensão .${ext} não suportada. Use: ${ALLOWED_AUDIO_EXTS.join(', ')}.`;
   }
-  if (file.type && !ALLOWED_AUDIO_TYPES.includes(file.type) && !file.type.startsWith('audio/')) {
+  if (file.type && !ALLOWED_AUDIO_TYPES.includes(file.type)) { // A-16: MIME estrito
     return `Tipo de arquivo inválido: ${file.type}.`;
   }
 
@@ -145,7 +156,9 @@ async function validateAudioFile(file) {
       ogg:  () => bytesEq(header, 0, [0x4F, 0x67, 0x67, 0x53]),
       flac: () => bytesEq(header, 0, [0x66, 0x4C, 0x61, 0x43]),
       wav:  () => bytesEq(header, 0, [0x52, 0x49, 0x46, 0x46]) && bytesEq(header, 8, [0x57, 0x41, 0x56, 0x45]),
-      webm: () => bytesEq(header, 0, [0x1A, 0x45, 0xDF, 0xA3])
+      webm: () => bytesEq(header, 0, [0x1A, 0x45, 0xDF, 0xA3]),
+      aac:  () => bytesEq(header, 0, [0x41, 0x44, 0x49, 0x46])        // A-16: ADIF
+            || (header[0] === 0xFF && (header[1] & 0xF0) === 0xF0)   // A-16: ADTS
     };
     const extSig = sigs[ext];
     if (extSig && !extSig()) {
@@ -184,7 +197,10 @@ function parseLyricsInput(raw) {
     try { entries = JSON.parse(trimmed); } catch { return null; }
     if (!Array.isArray(entries)) return null;
   } else {
-    entries = trimmed.split('\n').map((text, index) => ({ time: index * 4, text }));
+    entries = trimmed.split('\n') // A-08: linhas em branco não invalidam a letra
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((text, index) => ({ time: index * 4, text }));
   }
 
   const result = [];
@@ -245,9 +261,9 @@ export function renderAlbumsEditor(_content) {
   const container = document.getElementById('albumsEditor');
   if (!container) return;
 
-  if (container.dataset.mounted === '1') {
-    const body = container.querySelector('[data-albums-body]');
-    if (body) paintBody(body);
+  const existingBody = container.querySelector('[data-albums-body]');
+  if (container.dataset.mounted === '1' && existingBody) { // A-20
+    paintBody(existingBody);
     return;
   }
 
@@ -293,7 +309,8 @@ async function loadAlbums() {
   try {
     const res = await apiFetch('albums', { method: 'GET' });
     if (currentReq !== State.loadReqId) return;
-    State.albums = Array.isArray(res?.albums) ? res.albums : [];
+    State.albums = (Array.isArray(res?.albums) ? res.albums : []) // A-04
+      .map((a) => ({ ...a, id: String(a.id) }));
 
     await Promise.all(
       Array.from(State.expandedAlbumIds).map((id) => loadTracksForAlbum(id))
@@ -302,7 +319,7 @@ async function loadAlbums() {
     if (currentReq !== State.loadReqId) return;
     if (err?.status === 401 || err?.status === 403) {
       toast('Sessão expirada.', '⚠');
-      throw err;
+      return; // A-22: chamadores de clique não tratam rejection
     }
     State.error = err?.message || 'Falha ao carregar álbuns.';
     State.albums = [];
@@ -314,18 +331,32 @@ async function loadAlbums() {
   }
 }
 
+// A-07: normaliza snake_case/camelCase e ids na ingestão
+function normalizeTrack(t) {
+  if (!t || typeof t !== 'object') return t;
+  return {
+    ...t,
+    id: String(t.id),
+    previewPath: t.previewPath ?? t.preview_path ?? null,
+    fullPath:    t.fullPath    ?? t.full_path    ?? null,
+    priceCents:  t.priceCents  ?? t.price_cents  ?? 0,
+    trackNumber: t.trackNumber ?? t.track_index ?? 0
+  };
+}
+
 async function loadTracksForAlbum(albumId) {
-  const reqId = (State.tracksReqId.get(albumId) || 0) + 1;
-  State.tracksReqId.set(albumId, reqId);
+  const key = String(albumId); // A-04: chave sempre string
+  const reqId = (State.tracksReqId.get(key) || 0) + 1;
+  State.tracksReqId.set(key, reqId);
 
   try {
-    const res = await apiFetch('tracks', { method: 'GET', query: { albumId } });
-    if ((State.tracksReqId.get(albumId) || 0) !== reqId) return;
-    State.tracks.set(albumId, Array.isArray(res?.tracks) ? res.tracks : []);
+    const res = await apiFetch('tracks', { method: 'GET', query: { albumId: key } });
+    if ((State.tracksReqId.get(key) || 0) !== reqId) return;
+    State.tracks.set(key, (Array.isArray(res?.tracks) ? res.tracks : []).map(normalizeTrack));
   } catch (err) {
-    if ((State.tracksReqId.get(albumId) || 0) !== reqId) return;
+    if ((State.tracksReqId.get(key) || 0) !== reqId) return;
     console.warn(`[albums] falha faixas ${albumId}:`, err);
-    State.tracks.set(albumId, { error: err?.message || 'Erro ao carregar faixas.' });
+    State.tracks.set(key, { error: err?.message || 'Erro ao carregar faixas.' });
   }
 }
 
@@ -549,6 +580,7 @@ function ensurePlayer() {
 
   const a = new Audio();
   a.preload = 'auto';
+  a.volume = 0.8; // A-06: igual ao slider inicial
 
   a.addEventListener('timeupdate',     () => { if (!isSeqCurrent()) return; syncProgress(); });
   a.addEventListener('loadedmetadata', () => { if (!isSeqCurrent()) return; onLoadedMetadata(); });
@@ -562,7 +594,7 @@ function ensurePlayer() {
   a.addEventListener('waiting',        () => { if (!isSeqCurrent()) return; setPlayerState('loading'); });
   a.addEventListener('stalled',        () => {
     if (!isSeqCurrent()) return;
-    console.warn('[player] stalled em', a.currentSrc);
+    console.warn('[player] stalled | networkState:', a.networkState); // A-12
     setSub('Conexão lenta…');
   });
   a.addEventListener('canplay',        () => {
@@ -717,6 +749,10 @@ function updateVolumeFill(v) {
   if (fill) fill.style.width = (v * 100) + '%';
 }
 
+function setCoverFallback(coverEl) { // A-18
+  coverEl.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>';
+}
+
 // ─────────────────────────────────────────────────────────────
 // Reprodução — captura posição ANTES de limpar
 // ─────────────────────────────────────────────────────────────
@@ -747,7 +783,7 @@ async function playTrack(albumId, trackId, requestedVersion) {
 
   try {
     const url = await getAdminAudioUrl(track, version);
-    console.info('[player] carregando:', url, '(v' + version + ')');
+    console.info('[player] carregando faixa', trackId, 'versão', version); // A-12: sem URL assinada
 
     if (seq !== Player.seq) return;
 
@@ -780,9 +816,13 @@ async function playTrack(albumId, trackId, requestedVersion) {
     const coverUrl = album?.coverUrl || album?.cover_image;
     const coverEl = Player.bar.querySelector('.sp-cover');
     if (coverUrl && /^https?:\/\//i.test(coverUrl) && isAllowedMediaUrl(coverUrl)) {
-      coverEl.innerHTML = `<img src="${escAttr(coverUrl)}" alt="Capa de ${escAttr(album?.title || 'faixa')}">`;
+      const img = document.createElement('img'); // A-18: erro tratado sem handler inline
+      img.src = coverUrl;
+      img.alt = `Capa de ${album?.title || 'faixa'}`;
+      img.addEventListener('error', () => { setCoverFallback(coverEl); });
+      coverEl.replaceChildren(img);
     } else {
-      coverEl.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>';
+      setCoverFallback(coverEl);
     }
 
     updateBarMeta();
@@ -793,7 +833,7 @@ async function playTrack(albumId, trackId, requestedVersion) {
       if (seq !== Player.seq) return;
       if (Player.el && Player.el.readyState < 2 && Player.state === 'loading') {
         console.warn('[player] STALL 6s | readyState:', Player.el.readyState,
-                     '| networkState:', Player.el.networkState, '| src:', Player.el.currentSrc);
+                     '| networkState:', Player.el.networkState); // A-12
         toast('Áudio não carregou em 6s. Use 🔗 na barra.', '⚠');
       }
     }, 6000);
@@ -838,7 +878,13 @@ async function playPrevNext(delta) {
   }
 
   const next = tracks[targetIdx];
-  await playTrack(Player.current.albumId, String(next.id), Player.current.version);
+  const hasPreview = !!(next.previewPath || next.preview_path);
+  const hasFull    = !!(next.fullPath || next.full_path);
+  let version = Player.current.version; // A-11: degrada para versão disponível
+  if (version === 'preview' && !hasPreview) version = hasFull ? 'full' : null;
+  if (version === 'full'    && !hasFull)    version = hasPreview ? 'preview' : null;
+  if (!version) return toast(`"${next.title}" não tem áudio cadastrado.`, '⚠');
+  await playTrack(Player.current.albumId, String(next.id), version);
 }
 
 function onLoadedMetadata() {
@@ -869,7 +915,7 @@ function onAudioError() {
     4: 'Formato não suportado ou URL inválida'
   }[code] || 'Erro desconhecido';
 
-  console.error('[player] ERRO', code, msg, '\nsrc:', Player.el?.currentSrc);
+  console.error('[player] ERRO', code, msg); // A-12
   toast(`Áudio: ${msg} (código ${code}). Veja 🔗.`, '⚠');
   recoverPlayer();
 }
@@ -906,6 +952,7 @@ function recoverPlayer() {
   }
   Player.current = null;
   Player.state = 'idle';
+  Player.versions = { preview: false, full: false }; // A-17
 
   if (Player.bar) {
     Player.bar.hidden = true;
@@ -996,12 +1043,15 @@ function syncProgress() {
 // ─────────────────────────────────────────────────────────────
 async function downloadTrack(trackId, titleHint) {
   if (!trackId) return;
-  const btn = document.querySelector(`[data-track-download="${trackId}"]`);
+  const btn = Array.from(document.querySelectorAll('[data-track-download]'))
+    .find((b) => b.dataset.trackDownload === String(trackId)); // A-19
   const originalHtml = btn?.innerHTML;
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '⬇ …'; }
-    const res = await apiFetch('download-url', { method: 'GET', query: { id: trackId } });
+    const res = await apiFetch('download-url', { // A-05: exige a versão completa
+      method: 'GET', query: { id: String(trackId), type: 'full' }
+    });
     if (!res?.ok || !res.url) throw new Error(res?.error || 'Falha ao gerar URL.');
     triggerDownload(res.url, res.filename || `${titleHint || trackId}.mp3`);
     toast(`Download iniciado: ${titleHint || trackId}`, '⬇');
@@ -1028,7 +1078,9 @@ async function downloadAlbum(albumId) {
 
   try {
     toast(`Preparando álbum "${albumTitle}"…`, '⏳');
-    const res = await apiFetch('download-album', { method: 'GET', query: { id: albumId } });
+    const res = await apiFetch('download-album', { // A-05: contrato explícito
+      method: 'GET', query: { id: String(albumId), type: 'full' }
+    });
     if (!res?.ok || !Array.isArray(res.tracks)) throw new Error(res?.error || 'Falha ao listar faixas.');
 
     const valid = res.tracks.filter((t) => t.url);
@@ -1104,26 +1156,33 @@ function bindTrackDragDrop(scope) {
       targetRow.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drag-over-top' : 'drag-over-bottom');
     });
 
-    tbody.addEventListener('drop', async (e) => {
+    tbody.addEventListener('drop', async (e) => { // A-01/A-02: drop seguro + DOM otimista
       e.preventDefault();
       if (!_dragState) return;
       if (String(_dragState.albumId) !== String(albumId)) { cleanupDrag(scope); return; }
 
+      const draggedRow = _dragState.row;
+      cleanupDrag(scope);
+
+      // A-01: linha órfã (repaint durante o arrasto) aborta sem corromper
+      if (!tbody.contains(draggedRow)) return;
       const targetRow = e.target.closest('tr[data-track-id]');
-      if (!targetRow || targetRow === _dragState.row) { cleanupDrag(scope); return; }
+      if (!targetRow || !tbody.contains(targetRow) || targetRow === draggedRow) return;
+
+      const rows = Array.from(tbody.querySelectorAll('tr[data-track-id]'));
+      if (rows.indexOf(draggedRow) < 0 || rows.indexOf(targetRow) < 0) return;
 
       const rect = targetRow.getBoundingClientRect();
       const isAbove = e.clientY < rect.top + rect.height / 2;
-      const rows = Array.from(tbody.querySelectorAll('tr[data-track-id]'));
 
-      rows.splice(rows.indexOf(_dragState.row), 1);
+      // A-02: reordena o DOM antes de persistir (estado visível = estado enviado)
+      rows.splice(rows.indexOf(draggedRow), 1);
       let insertAt = rows.indexOf(targetRow);
       if (!isAbove) insertAt += 1;
-      rows.splice(insertAt, 0, _dragState.row);
+      rows.splice(insertAt, 0, draggedRow);
+      rows.forEach((row) => tbody.appendChild(row));
 
       const order = rows.map((row, i) => ({ id: String(row.dataset.trackId), track_number: i + 1 }));
-      cleanupDrag(scope);
-
       await persistTrackOrder(albumId, order);
     });
 
@@ -1139,7 +1198,8 @@ function cleanupDrag(scope) {
 
 // Serializa operações de reorder por álbum + valida linhas existentes
 async function persistTrackOrder(albumId, order) {
-  const tbody = document.querySelector(`[data-tracks-body="${escAttr(albumId)}"]`);
+  const tbody = Array.from(document.querySelectorAll('[data-tracks-body]'))
+    .find((el) => el.dataset.tracksBody === String(albumId)); // A-19
   if (!tbody) return;
   const presentIds = new Set(Array.from(tbody.querySelectorAll('tr[data-track-id]')).map(r => r.dataset.trackId));
   const validOrder = order.filter(o => presentIds.has(String(o.id)));
@@ -1278,7 +1338,6 @@ function renderTrackRow(albumId, track, idx) {
 
   return `
     <tr data-track-id="${escAttr(String(track.id))}"
-        data-track-index="${Number(track.trackNumber || track.track_index) || 0}"
         draggable="true" class="track-row ${playing ? 'is-playing' : ''}">
       <td class="track-drag-cell"><span class="track-drag-handle">⋮⋮</span></td>
       <td>${idx + 1}</td>
@@ -1339,7 +1398,9 @@ function openAlbumModal(album) {
     </div>
   `);
 
-  document.getElementById('albumSave')?.addEventListener('click', async () => {
+  const albumSaveBtn = document.getElementById('albumSave');
+  albumSaveBtn?.addEventListener('click', async () => {
+    if (albumSaveBtn.disabled) return; // A-03
     const errEl = document.getElementById('albumError');
     const title = document.getElementById('albumTitle').value.trim();
     const yearRaw = document.getElementById('albumYear').value;
@@ -1357,6 +1418,7 @@ function openAlbumModal(album) {
 
     const payload = { title, year, coverUrl: cover, published: pub };
 
+    albumSaveBtn.disabled = true; // A-03
     try {
       if (isNew) await apiFetch('albums', { method: 'POST', body: payload });
       else await apiFetch('album', { method: 'PATCH', query: { id: a.id }, body: payload });
@@ -1365,6 +1427,8 @@ function openAlbumModal(album) {
       await loadAlbums();
     } catch (err) {
       if (errEl) errEl.textContent = err?.message || 'Falha ao salvar.';
+    } finally {
+      albumSaveBtn.disabled = false;
     }
   });
 }
@@ -1423,22 +1487,21 @@ function openTrackModal(albumId, track) {
     </div>
   `);
 
-  // ModalId para controle de detecção de duração
-  const modalId = Date.now();
-
   // Observer: quando o modal some, para qualquer reprodução de teste (correção #7)
   const modalObs = new MutationObserver(() => {
-    if (!document.getElementById('trackTitle') && Player.current?.albumId === 'preview') {
-      stopPlayback();
-      modalObs.disconnect();
-    }
+    if (document.getElementById('trackTitle')) return;
+    modalObs.disconnect(); // A-10: desconecta em TODOS os caminhos
+    if (Player.current?.albumId === 'preview') stopPlayback();
   });
-  modalObs.observe(document.body, { childList: true, subtree: true });
+  const modalRoot = document.querySelector('[data-admin-modal], .admin-modal') || document.body;
+  modalObs.observe(modalRoot, { childList: true, subtree: true });
 
-  bindTrackUpload({ buttonSel: '[data-upload-preview]', inputId: 'trackPreviewInput', statusSel: '[data-preview-status]', testSel: '[data-test-preview]', kind: 'audio-preview', uploadFn: uploadAudioPreview, field: 'previewPath', albumId, track: t, modalId });
-  bindTrackUpload({ buttonSel: '[data-upload-full]',    inputId: 'trackFullInput',    statusSel: '[data-full-status]',    testSel: '[data-test-full]',    kind: 'audio-full',    uploadFn: uploadAudioFull,    field: 'fullPath',    albumId, track: t, modalId });
+  bindTrackUpload({ buttonSel: '[data-upload-preview]', inputId: 'trackPreviewInput', statusSel: '[data-preview-status]', testSel: '[data-test-preview]', kind: 'audio-preview', uploadFn: uploadAudioPreview, field: 'previewPath', albumId, track: t });
+  bindTrackUpload({ buttonSel: '[data-upload-full]',    inputId: 'trackFullInput',    statusSel: '[data-full-status]',    testSel: '[data-test-full]',    kind: 'audio-full',    uploadFn: uploadAudioFull,    field: 'fullPath',    albumId, track: t });
 
-  document.getElementById('trackSave')?.addEventListener('click', async () => {
+  const trackSaveBtn = document.getElementById('trackSave');
+  trackSaveBtn?.addEventListener('click', async () => {
+    if (trackSaveBtn.disabled) return; // A-03
     const errEl = document.getElementById('trackError');
     const lyrics = parseLyricsInput(document.getElementById('trackLyrics').value);
     if (lyrics === null) { if (errEl) errEl.textContent = 'Letra inválida. Use JSON com tempos crescentes e distintos.'; return; }
@@ -1461,14 +1524,14 @@ function openTrackModal(albumId, track) {
 
     const opId = nextOpId();
 
+    trackSaveBtn.disabled = true; // A-03
     try {
-      let savedTrackId = t.id;
       if (isNew) {
         State.pendingOperations.set(`create-track-${albumId}`, opId);
         const res = await apiFetch('tracks', { method: 'POST', body: { ...payload, albumId } });
         if (State.pendingOperations.get(`create-track-${albumId}`) !== opId) return;
         State.pendingOperations.delete(`create-track-${albumId}`);
-        savedTrackId = res.track.id;
+        if (!res?.track?.id) throw new Error('Backend não retornou o id da faixa criada.'); // A-09
       } else {
         State.pendingOperations.set(`track-${t.id}`, opId);
         await apiFetch('track', { method: 'PATCH', query: { id: t.id }, body: payload });
@@ -1484,6 +1547,8 @@ function openTrackModal(albumId, track) {
       if (isNew) State.pendingOperations.delete(`create-track-${albumId}`);
       else State.pendingOperations.delete(`track-${t.id}`);
       if (errEl) errEl.textContent = err?.message || 'Falha ao salvar.';
+    } finally {
+      trackSaveBtn.disabled = false; // A-03
     }
   });
 }
@@ -1491,7 +1556,7 @@ function openTrackModal(albumId, track) {
 // ─────────────────────────────────────────────────────────────
 // Upload de Faixa
 // ─────────────────────────────────────────────────────────────
-function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadFn, field, albumId, track, modalId }) {
+function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadFn, field, albumId, track }) {
   const button   = document.querySelector(buttonSel);
   const input    = document.getElementById(inputId);
   const statusEl = document.querySelector(statusSel);
@@ -1560,7 +1625,9 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
         const probe = new Audio();
         probe.preload = 'metadata';
         probe.src = url;
+        const probeTimeout = setTimeout(() => { probe.src = ''; }, 8000); // A-24
         probe.addEventListener('loadedmetadata', () => {
+          clearTimeout(probeTimeout);
           const dur = probe.duration;
           if (Number.isFinite(dur) && dur > 0) {
             const stillOpen = document.getElementById('trackTitle');
@@ -1574,7 +1641,7 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
           }
           probe.remove();
         });
-        probe.addEventListener('error', () => probe.remove());
+        probe.addEventListener('error', () => { clearTimeout(probeTimeout); probe.remove(); });
       } catch {}
 
       await loadTracksForAlbum(albumId);
@@ -1620,5 +1687,7 @@ async function playExternal(url) {
 // ─────────────────────────────────────────────────────────────
 // Debug
 // ─────────────────────────────────────────────────────────────
-window.__player = Player;
-window.__albums  = { State, playTrack, stopPlayback, getAdminAudioUrl, recoverPlayer };
+if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') { // A-13
+  window.__player = Player;
+  window.__albums  = { State, playTrack, stopPlayback, getAdminAudioUrl, recoverPlayer };
+}
