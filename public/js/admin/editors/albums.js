@@ -28,6 +28,7 @@
 import { apiFetch } from '../api.js';
 import { toast } from '../ui/toast.js';
 import { esc, escAttr } from '../ui/dom.js';
+import { AdminMiniPlayer } from '../miniplayer.js'; // MP-01
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
 
@@ -470,6 +471,13 @@ function bindAlbumButtons(scope) {
     });
   });
 
+  scope.querySelectorAll('[data-album-queue]').forEach((btn) => { // MP-01
+    btn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      queueAlbum(btn.dataset.albumQueue, null);
+    });
+  });
+
   scope.querySelectorAll('[data-track-new]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -554,6 +562,13 @@ function bindTrackButtons(scope) {
     btn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       downloadTrack(btn.dataset.trackDownload, btn.dataset.trackDownloadTitle);
+    });
+  });
+
+  scope.querySelectorAll('[data-track-queue]').forEach((btn) => { // MP-01
+    btn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      queueAlbum(btn.dataset.trackAlbum, btn.dataset.trackQueue);
     });
   });
 
@@ -754,11 +769,18 @@ function setCoverFallback(coverEl) { // A-18
   coverEl.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>';
 }
 
+// MP-01: miniplayer assumiu a reprodução → pausa o player de teste
+document.addEventListener('admin-miniplayer:start', () => {
+  try { Player.seq += 1; } catch {}
+  try { if (Player.el) Player.el.pause(); } catch {}
+});
+
 // ─────────────────────────────────────────────────────────────
 // Reprodução — captura posição ANTES de limpar
 // ─────────────────────────────────────────────────────────────
 async function playTrack(albumId, trackId, requestedVersion) {
   ensurePlayer();
+  try { document.dispatchEvent(new CustomEvent('admin-player:start')); } catch {} // MP-01
   const list = State.tracks.get(albumId);
   const track = Array.isArray(list) ? list.find((t) => String(t.id) === String(trackId)) : null;
   if (!track) return toast('Faixa não encontrada.', '⚠');
@@ -1121,6 +1143,36 @@ function triggerDownload(url, filename) {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // ─────────────────────────────────────────────────────────────
+// MP-01 — Fila no miniplayer persistente
+// ─────────────────────────────────────────────────────────────
+async function queueAlbum(albumId, startTrackId) {
+  const album = State.albums.find((a) => String(a.id) === String(albumId));
+  let list = State.tracks.get(String(albumId));
+  if (!Array.isArray(list) || !list.length) {
+    try { await loadTracksForAlbum(albumId); } catch { /* segue com o que houver */ }
+    list = State.tracks.get(String(albumId));
+  }
+  if (!Array.isArray(list) || !list.length) {
+    return toast('Não consegui carregar as faixas do álbum.', '⚠');
+  }
+  const dtos = list.map((t) => ({
+    id: t.id,
+    title: t.title,
+    trackNumber: t.trackNumber ?? t.track_index ?? 0,
+    albumId: String(albumId),
+    albumTitle: album?.title || '',
+    coverUrl: album?.coverUrl || album?.cover_image || '',
+    previewPath: t.previewPath ?? t.preview_path ?? null,
+    fullPath: t.fullPath ?? t.full_path ?? null,
+    streamKey: t.streamKey ?? t.stream_key ?? null
+  })).filter((t) => t.previewPath || t.fullPath || t.streamKey);
+  if (!dtos.length) return toast('Este álbum não tem áudios cadastrados.', '⚠');
+  AdminMiniPlayer.setQueue(dtos, { startId: startTrackId || dtos[0].id, version: 'preview' });
+}
+
+function queueTrack(albumId, trackId) { return queueAlbum(albumId, trackId); }
+
+// ─────────────────────────────────────────────────────────────
 // Drag & Drop — serializado por álbum + validação (correção #6)
 // ─────────────────────────────────────────────────────────────
 function bindTrackDragDrop(scope) {
@@ -1261,6 +1313,7 @@ function renderAlbumBlock(album) {
           </div>
         </div>
         <div class="album-actions">
+          <button class="btn btn-ghost btn-sm" data-album-queue="${escAttr(album.id)}" type="button" title="Tocar álbum no miniplayer">▶ Tocar</button>
           <button class="btn btn-ghost btn-sm" data-album-download="${escAttr(album.id)}" type="button" title="Baixar">⬇</button>
           <button class="btn btn-ghost btn-sm" data-album-edit="${escAttr(album.id)}" type="button" title="Editar">✎</button>
           <button class="btn btn-ghost btn-sm" data-album-delete="${escAttr(album.id)}" type="button" title="Excluir">🗑</button>
@@ -1355,6 +1408,10 @@ function renderTrackRow(albumId, track, idx) {
                   type="button" ${canPlay ? '' : 'disabled'}>
             ${playing ? '⏸ Pausar' : '▶ Ouvir'}
           </button>
+          <button class="btn btn-ghost btn-sm"
+                  data-track-queue="${escAttr(String(track.id))}"
+                  data-track-album="${escAttr(albumId)}"
+                  type="button" title="Tocar a partir daqui no miniplayer">＋ Fila</button>
           <button class="btn btn-ghost btn-sm"
                   data-track-download="${escAttr(String(track.id))}"
                   data-track-download-title="${escAttr(track.title || '')}"
