@@ -223,7 +223,7 @@ function parseLyricsInput(raw) {
 async function getAdminAudioUrl(track, version) {
   const pathField = version === 'preview'
     ? (track.previewPath || track.preview_path)
-    : (track.fullPath || track.full_path);
+    : (track.fullPath || track.full_path || track.streamKey || track.stream_key); // DL-01
 
   if (!pathField) {
     throw new Error(version === 'preview' ? 'Prévia não cadastrada.' : 'Áudio completo não cadastrado.');
@@ -339,6 +339,7 @@ function normalizeTrack(t) {
     id: String(t.id),
     previewPath: t.previewPath ?? t.preview_path ?? null,
     fullPath:    t.fullPath    ?? t.full_path    ?? null,
+    streamKey:   t.streamKey   ?? t.stream_key   ?? null,
     priceCents:  t.priceCents  ?? t.price_cents  ?? 0,
     trackNumber: t.trackNumber ?? t.track_index ?? 0
   };
