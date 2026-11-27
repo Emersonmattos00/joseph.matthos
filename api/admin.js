@@ -8,15 +8,6 @@
    - Advisory locks em operações críticas
    - Cancelamento externo (Mercado Pago) antes de alterações locais
    - Cache invalidado após mudanças de plano/usuário
-   ------------------------------------------------------------
-   PATCH DE AUDITORIA (26/11/2026) — 4 correções mínimas sobre a
-   v4.2, marcadas com ★ P-Axx. Rotas, verbos e respostas preservados:
-   P-A01  FK 23503 → 409 (não 500) + purge de mídia órfã no R2
-   P-A02  fingerprint de ADMIN_PASSWORD_HASH no token (pv) —
-          trocar a senha derruba sessões antigas (revogação)
-   P-A03  guard de autoexclusão do admin fail-closed
-   P-A04  incidente auditável se a transação falhar após cancelar
-          a cobrança no Mercado Pago
    ============================================================ */
 
 const crypto = require('crypto');
@@ -86,24 +77,6 @@ function getSessionSecret() {
   if (secret.length < MIN_SESSION_SECRET_LENGTH) throw new Error('ADMIN_SESSION_SECRET muito curto.');
   _sessionSecretCache = secret;
   return secret;
-}
-
-// ★ P-A02: fingerprint curto do hash da senha vigente. Fica dentro
-// do token; verifySession compara com o valor ATUAL da env — trocar
-// ADMIN_PASSWORD_HASH invalida todas as sessões emitidas antes
-// (inclui cookies fabricados por scripts/dev-admin-cookie.js).
-let _passwordFingerprintCache = null;
-function getSessionPasswordFingerprint() {
-  if (_passwordFingerprintCache) return _passwordFingerprintCache;
-  const hash = String(process.env.ADMIN_PASSWORD_HASH || '').trim();
-  if (!hash) throw new Error('ADMIN_PASSWORD_HASH ausente.');
-  _passwordFingerprintCache = crypto.createHash('sha256').update(hash).digest('hex').slice(0, 16);
-  return _passwordFingerprintCache;
-}
-
-function invalidateSessionCaches() {
-  _sessionSecretCache = null;
-  _passwordFingerprintCache = null;
 }
 
 let _adminIdentityCache = null;
@@ -258,8 +231,7 @@ async function handleLogin(req, res) {
 
   try { await resetBucket(`admin-login:${ip}`); } catch {}
 
-  // ★ P-A02: token carrega o fingerprint da senha vigente.
-  const token = signHmac({ user: expectedUser, iat: Date.now(), jti: crypto.randomUUID(), pv: getSessionPasswordFingerprint() }, getSessionSecret());
+  const token = signHmac({ user: expectedUser, iat: Date.now(), jti: crypto.randomUUID() }, getSessionSecret());
   const attrs = ['Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${SESSION_MAX_AGE}`, IS_PROD ? 'Secure' : null].filter(Boolean).join('; ');
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; ${attrs}`);
 
@@ -887,19 +859,7 @@ async function handlePatchUser(req, res, session) {
     });
   } catch (err) {
     console.error('[admin] patchUser transação:', err);
-    // ★ P-A04: a cobrança externa JÁ foi cancelada e a transação
-    // local falhou — o Mercado Pago não oferece reativação. Registrar
-    // incidente auditável e instruir ação manual.
-    try {
-      await audit('user.plan.change.failed_after_mp_cancel', {
-        actor: session.user, target: userId, success: false,
-        metadata: { plan, planId: planRow?.id || null, reason: err.code || 'db_error' }
-      });
-    } catch (e) { console.warn('[admin] audit de incidente falhou:', e.message); }
-    return sendJson(res, 500, {
-      ok: false,
-      error: 'A cobrança recorrente foi cancelada no Mercado Pago, mas a troca de plano local falhou. Recrie o plano manualmente e verifique a assinatura do usuário.'
-    });
+    return sendJson(res, 500, { ok: false, error: 'Falha ao atualizar plano.' });
   }
 
   try {
@@ -924,9 +884,6 @@ async function handleDeleteUser(req, res, session) {
   const userId = String(req.query?.id || '').trim();
   if (!isUuid(userId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  // ★ P-A03: guard fail-closed. Antes: erro de banco era engolido
-  // (console.warn) e a anonimização prosseguia — inclusive sobre a
-  // própria conta de administrador.
   try {
     const adminIdentity = getAdminIdentity();
     const [adminUser] = await db.select({ id: users.id }).from(users)
@@ -935,14 +892,7 @@ async function handleDeleteUser(req, res, session) {
     if (adminUser && adminUser.id === userId) {
       return sendJson(res, 403, { ok: false, error: 'Não é permitido anonimizar a própria conta de administrador.' });
     }
-    if (!adminUser) {
-      console.error('[admin] deleteUser: identidade admin não encontrada no banco — operação bloqueada.');
-      return sendJson(res, 503, { ok: false, error: 'Não foi possível validar o administrador. Operação bloqueada por segurança.' });
-    }
-  } catch (e) {
-    console.error('[admin] deleteUser: falha ao validar administrador:', e.message);
-    return sendJson(res, 503, { ok: false, error: 'Não foi possível validar o administrador. Operação bloqueada por segurança.' });
-  }
+  } catch (e) { console.warn('[admin] check de admin falhou:', e.message); }
 
   const [user] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
   if (!user) return sendJson(res, 404, { ok: false, error: 'Usuário não encontrado.' });
@@ -959,13 +909,11 @@ async function handleDeleteUser(req, res, session) {
 
   try {
     await db.transaction(async (tx) => {
-      // Alinhar o estado local com os status que também foram cancelados
-      // externamente: ACTIVE, PENDING, PAUSED e PAST_DUE.
       await tx.update(subscriptions)
         .set({ status: 'CANCELLED', updatedAt: new Date().toISOString() })
         .where(and(
           eq(subscriptions.userId, userId),
-          inArray(subscriptions.status, ['ACTIVE', 'PENDING', 'PAUSED', 'PAST_DUE'])
+          inArray(subscriptions.status, ['ACTIVE', 'PENDING'])
         ));
 
       const anonymizedAt = new Date().toISOString();
@@ -1096,31 +1044,10 @@ async function handleUpdateAlbum(req, res, session) {
   }
 }
 
-// ★ P-A01: purge de mídia órfã no R2 após exclusão. Só remove o
-// objeto quando NENHUMA outra faixa o referencia (paths podem ser
-// compartilhados). Falha de purge é avisada — não reverte a exclusão.
-async function purgeTrackMedia(paths) {
-  const unique = [...new Set((paths || []).filter(Boolean))];
-  let purged = 0;
-  for (const path of unique) {
-    try {
-      const [ref] = await db.select({ n: sql`COUNT(*)::int` }).from(tracks)
-        .where(sql`${tracks.fullPath} = ${path} OR ${tracks.previewPath} = ${path}`);
-      if (Number(ref?.n || 0) > 0) continue;
-      await deleteObject(path);
-      purged++;
-    } catch (e) {
-      console.warn('[admin] purge de mídia falhou:', path, e.message);
-    }
-  }
-  return purged;
-}
-
 async function handleDeleteAlbum(req, res, session) {
   const albumId = String(req.query.id || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  let mediaPaths = [];
   try {
     await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
@@ -1128,33 +1055,13 @@ async function handleDeleteAlbum(req, res, session) {
       const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
       if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
 
-      // ★ P-A01: coletar caminhos de mídia antes de remover as linhas.
-      const trackRows = await tx.select({ fullPath: tracks.fullPath, previewPath: tracks.previewPath })
-        .from(tracks).where(eq(tracks.albumId, albumId));
-      const [albumRow] = await tx.select({ coverUrl: albums.coverUrl }).from(albums).where(eq(albums.id, albumId)).limit(1);
-      mediaPaths = [
-        ...trackRows.flatMap((t) => [t.fullPath, t.previewPath]),
-        albumRow?.coverUrl || null
-      ];
-
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
   } catch (err) {
     if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
-    // ★ P-A01: violação de FK (23503 — ex. playback_events ON DELETE
-    // restrict) responde 409 com mensagem acionável, não 500.
-    if (err.code === '23503') {
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'Existem registros ligados a este álbum ou às suas faixas (ex.: eventos de reprodução). Resolva as dependências antes de excluir.'
-      });
-    }
     throw err;
   }
-
-  try { await purgeTrackMedia(mediaPaths); }
-  catch (e) { console.warn('[admin] purge pós-delete falhou:', e.message); }
 
   try { await audit('album.delete', { actor: session.user, target: albumId }); }
   catch (e) { console.warn('[admin] audit album.delete falhou:', e.message); }
@@ -1300,41 +1207,9 @@ async function handleUpdateTrack(req, res, session) {
 
   if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
 
-  // P1: publicação só é permitida quando o áudio completo existe e
-  // possui metadados válidos no bucket privado. Considera também um fullPath
-  // enviado nesta mesma atualização.
-  if (patch.status === 'PUBLISHED') {
-    const [current] = await db.select({ fullPath: tracks.fullPath, status: tracks.status })
-      .from(tracks).where(eq(tracks.id, trackId)).limit(1);
-    if (!current) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-    const candidatePath = patch.fullPath !== undefined ? patch.fullPath : current.fullPath;
-    if (!candidatePath) return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: áudio completo não associado.' });
-    let candidateKind;
-    try { candidateKind = inferKindFromKey(candidatePath); }
-    catch { return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: caminho do áudio completo inválido.' }); }
-    if (candidateKind !== 'audio-full') return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: o arquivo associado não é áudio completo privado.' });
-    let fullMeta;
-    try { fullMeta = await getObjectMetadata(candidatePath); }
-    catch { return sendJson(res, 502, { ok: false, error: 'Falha ao validar o áudio no Storage. A faixa não foi publicada.' }); }
-    if (!fullMeta || !Number.isSafeInteger(fullMeta.contentLength) || fullMeta.contentLength <= 0) {
-      return sendJson(res, 400, { ok: false, error: 'Não é possível publicar: áudio completo ausente ou vazio no Storage.' });
-    }
-  }
-
-  const [oldTrackMedia] = await db.select({ fullPath: tracks.fullPath, previewPath: tracks.previewPath })
-    .from(tracks).where(eq(tracks.id, trackId)).limit(1);
-  if (!oldTrackMedia) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-
   try {
     const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
     if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-    const replacedMedia = [];
-    if (patch.fullPath !== undefined && oldTrackMedia.fullPath && oldTrackMedia.fullPath !== patch.fullPath) replacedMedia.push(oldTrackMedia.fullPath);
-    if (patch.previewPath !== undefined && oldTrackMedia.previewPath && oldTrackMedia.previewPath !== patch.previewPath) replacedMedia.push(oldTrackMedia.previewPath);
-    if (replacedMedia.length) {
-      try { await purgeTrackMedia(replacedMedia); }
-      catch (e) { console.warn('[admin] purge de mídia substituída falhou:', e.message); }
-    }
     try { await audit('track.update', { actor: session.user, target: trackId, metadata: patch }); }
     catch (e) { console.warn('[admin] audit track.update falhou:', e.message); }
     return sendJson(res, 200, { ok: true, track: updated[0] });
@@ -1348,36 +1223,20 @@ async function handleDeleteTrack(req, res, session) {
   const trackId = String(req.query.id || '');
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
-  let mediaPaths = [];
   try {
     await db.transaction(async (tx) => {
-      const [row] = await tx.select({ albumId: tracks.albumId, fullPath: tracks.fullPath, previewPath: tracks.previewPath })
-        .from(tracks).where(eq(tracks.id, trackId)).for('update');
+      const [row] = await tx.select({ albumId: tracks.albumId }).from(tracks).where(eq(tracks.id, trackId)).for('update');
       if (!row) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
 
       if (row.albumId) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.albumId}))`);
-
-      // ★ P-A01: coletar caminhos de mídia antes de remover a linha.
-      mediaPaths = [row.fullPath, row.previewPath];
 
       const deleted = await tx.delete(tracks).where(eq(tracks.id, trackId)).returning({ id: tracks.id });
       if (!deleted.length) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
     });
   } catch (err) {
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-    // ★ P-A01: violação de FK (23503 — ex. playback_events ON DELETE
-    // restrict) responde 409 com mensagem acionável, não 500.
-    if (err.code === '23503') {
-      return sendJson(res, 409, {
-        ok: false,
-        error: 'Existem registros ligados a esta faixa (ex.: eventos de reprodução). Resolva as dependências antes de excluir.'
-      });
-    }
     throw err;
   }
-
-  try { await purgeTrackMedia(mediaPaths); }
-  catch (e) { console.warn('[admin] purge pós-delete falhou:', e.message); }
 
   try { await audit('track.delete', { actor: session.user, target: trackId }); }
   catch (e) { console.warn('[admin] audit track.delete falhou:', e.message); }
@@ -1692,9 +1551,6 @@ async function handleGenHash(req, res, session) {
   if (password.length < 8 || password.length > 200) return sendJson(res, 400, { ok: false, error: 'Senha deve ter entre 8 e 200 caracteres.' });
   try {
     const hash = await generateScryptHash(password);
-    // ★ P-A02: o fingerprint muda — todas as sessões antigas deixam
-    // de valer na próxima requisição.
-    invalidateSessionCaches();
     try { await audit('admin.gen_hash', { actor: session.user }); } catch {}
     return sendJson(res, 200, { ok: true, hash });
   } catch (err) {
@@ -1713,9 +1569,6 @@ function verifySession(req) {
   if (!payload) return null;
   const expectedUser = String(process.env.ADMIN_USER || '').trim();
   if (!expectedUser || payload.user !== expectedUser) return null;
-  // ★ P-A02: exige o fingerprint da senha vigente — sessões emitidas
-  // antes de uma troca de senha são rejeitadas aqui.
-  if (!payload.pv || payload.pv !== getSessionPasswordFingerprint()) return null;
   return payload;
 }
 
