@@ -1,10 +1,15 @@
 /* ============================================================
-   js/admin/miniplayer.js — v1.0 (MP-01)
+   js/admin/miniplayer.js — v1.1 (MP-01 + MP-02)
    ------------------------------------------------------------
-   Miniplayer persistente do painel (estilo Apple Music):
-   pílula fixa no rodapé, fila do álbum, shuffle/repeat,
-   badge PREVIEW/COMPLETO, volume/progresso, fila expansível,
+   Miniplayer persistente do painel: pílula fixa no rodapé,
+   fila do álbum, shuffle/repeat, badge PREVIEW/COMPLETO,
+   volume/progresso (thumb estilo Spotify), fila expansível,
    MediaSession e atalhos de teclado.
+
+   MP-02: ícones SVG estilo Spotify (play branco em círculo,
+   hover branco, ativo verde com ponto), thumb na barra de
+   progresso, prev reinicia a faixa atual (não salta para o
+   fim) e next manual circula a fila.
 
    Integração (sem tocar no player de teste interno do editor):
    - albums.js dispara 'admin-player:start' → miniplayer pausa;
@@ -30,6 +35,72 @@ const ALLOWED_MEDIA_HOSTS = ['r2.dev', 'r2.cloudflarestorage.com', 'josephmattho
 
 const LS_KEY = 'adminMiniPlayer';
 const MAX_CONSECUTIVE_ERRORS = 3;
+
+// ─────────────────────────────────────────────────────────────
+// Ícones SVG estilo Spotify (16×16, currentColor)
+// ─────────────────────────────────────────────────────────────
+const SVG_ATTRS = 'width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"';
+const STROKE = 'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"';
+
+const ICONS = {
+  shuffle: `<svg ${SVG_ATTRS} ${STROKE}>
+    <path d="M1.5 3.5h2.2c.9 0 1.74.42 2.26 1.12l4.08 5.26c.52.7 1.36 1.12 2.26 1.12H14"/>
+    <path d="M1.5 11.5h2.2c.9 0 1.74-.42 2.26-1.12l.7-.9"/>
+    <path d="M8.06 5.62l.68-.92c.52-.7 1.36-1.2 2.26-1.2H14"/>
+    <path d="M12.3 1.9 14 3.5l-1.7 1.6"/>
+    <path d="M12.3 9.9 14 11.5l-1.7 1.6"/>
+  </svg>`,
+  prev: `<svg ${SVG_ATTRS}>
+    <path d="M3.5 2.8v10.4" ${STROKE}/>
+    <path d="M13 3.6v8.8L5.4 8 13 3.6Z" fill="currentColor"/>
+  </svg>`,
+  next: `<svg ${SVG_ATTRS}>
+    <path d="M12.5 2.8v10.4" ${STROKE}/>
+    <path d="M3 3.6v8.8L10.6 8 3 3.6Z" fill="currentColor"/>
+  </svg>`,
+  play: `<svg ${SVG_ATTRS}>
+    <path d="M4.4 2.9v10.2L13.4 8 4.4 2.9Z" fill="currentColor"/>
+  </svg>`,
+  pause: `<svg ${SVG_ATTRS}>
+    <path d="M4.9 3.2v9.6M11.1 3.2v9.6" stroke="currentColor" stroke-width="2.7" stroke-linecap="butt"/>
+  </svg>`,
+  repeat: `<svg ${SVG_ATTRS} ${STROKE}>
+    <path d="M4.6 3.5h6.2a3 3 0 0 1 3 3v1.4"/>
+    <path d="M11.6 5.9 14 8.1l-2.4 2.2"/>
+    <path d="M11.4 12.5H5.2a3 3 0 0 1-3-3V7.9"/>
+    <path d="M4.4 10.1 2 7.9l2.4-2.2"/>
+  </svg>`,
+  repeat1: `<svg ${SVG_ATTRS} ${STROKE}>
+    <path d="M4.6 3.5h6.2a3 3 0 0 1 3 3v1.4"/>
+    <path d="M11.6 5.9 14 8.1l-2.4 2.2"/>
+    <path d="M11.4 12.5H5.2a3 3 0 0 1-3-3V7.9"/>
+    <path d="M4.4 10.1 2 7.9l2.4-2.2"/>
+    <text x="7.6" y="10.6" font-size="6.5" font-weight="700" text-anchor="middle"
+          fill="currentColor" stroke="none" font-family="Inter, sans-serif">1</text>
+  </svg>`,
+  queue: `<svg ${SVG_ATTRS} ${STROKE}>
+    <path d="M2.5 4.2h11M2.5 8h11M2.5 11.8h6.5"/>
+  </svg>`,
+  volHigh: `<svg ${SVG_ATTRS}>
+    <path d="M2.2 6v4h2.6l3.6 3.2V2.8L4.8 6H2.2Z" fill="currentColor"/>
+    <path d="M10.6 5.3a4 4 0 0 1 0 5.4M12.6 3.4a6.8 6.8 0 0 1 0 9.2" ${STROKE}/>
+  </svg>`,
+  volLow: `<svg ${SVG_ATTRS}>
+    <path d="M2.2 6v4h2.6l3.6 3.2V2.8L4.8 6H2.2Z" fill="currentColor"/>
+    <path d="M10.6 5.3a4 4 0 0 1 0 5.4" ${STROKE}/>
+  </svg>`,
+  volMute: `<svg ${SVG_ATTRS}>
+    <path d="M2.2 6v4h2.6l3.6 3.2V2.8L4.8 6H2.2Z" fill="currentColor"/>
+    <path d="M10.6 6.1l3.8 3.8M14.4 6.1l-3.8 3.8" ${STROKE}/>
+  </svg>`,
+  close: `<svg ${SVG_ATTRS} ${STROKE}>
+    <path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>
+  </svg>`
+};
+
+function setIcon(el, svg) {
+  if (el) el.innerHTML = svg;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Estado (fora do DOM — módulo só toca window em init/UI)
@@ -145,18 +216,19 @@ export function initAdminMiniPlayer() {
   root.hidden = true;
   root.setAttribute('role', 'region');
   root.setAttribute('aria-label', 'Miniplayer do painel');
-  // Estrutura estática (sem dados externos — seguro)
+  // Estrutura estática (sem dados externos — seguro); ícones via setIcon()
   root.innerHTML = `
     <div class="amp-progress" data-amp="progress" role="slider" aria-label="Progresso da faixa"
          aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="-1">
       <div class="amp-progress__fill"></div>
+      <div class="amp-progress__thumb"></div>
     </div>
     <div class="amp-main">
-      <button class="amp-btn amp-btn--icon amp-btn--opt" data-amp="shuffle" type="button" title="Aleatório" aria-pressed="false">⇄</button>
-      <button class="amp-btn amp-btn--icon" data-amp="prev" type="button" title="Anterior">⏮</button>
-      <button class="amp-btn amp-btn--play" data-amp="play" type="button" title="Tocar/Pausar" aria-label="Tocar ou pausar">▶</button>
-      <button class="amp-btn amp-btn--icon" data-amp="next" type="button" title="Próxima">⏭</button>
-      <button class="amp-btn amp-btn--icon amp-btn--opt" data-amp="repeat" type="button" title="Repetir" aria-pressed="false">↻</button>
+      <button class="amp-btn amp-btn--icon amp-btn--opt" data-amp="shuffle" type="button" title="Aleatório" aria-label="Aleatório" aria-pressed="false"></button>
+      <button class="amp-btn amp-btn--icon" data-amp="prev" type="button" title="Anterior" aria-label="Faixa anterior"></button>
+      <button class="amp-btn amp-btn--play" data-amp="play" type="button" title="Tocar/Pausar" aria-label="Tocar ou pausar"></button>
+      <button class="amp-btn amp-btn--icon" data-amp="next" type="button" title="Próxima" aria-label="Próxima faixa"></button>
+      <button class="amp-btn amp-btn--icon amp-btn--opt" data-amp="repeat" type="button" title="Repetir" aria-label="Repetir" aria-pressed="false"></button>
       <div class="amp-info" data-amp="info">
         <div class="amp-cover" data-amp="cover" aria-hidden="true"></div>
         <div class="amp-meta">
@@ -168,12 +240,12 @@ export function initAdminMiniPlayer() {
         </div>
       </div>
       <span class="amp-time" data-amp="time">0:00</span>
-      <button class="amp-btn amp-btn--icon" data-amp="queue" type="button" title="Fila">☰</button>
+      <button class="amp-btn amp-btn--icon" data-amp="queue" type="button" title="Fila" aria-label="Fila de faixas"></button>
       <div class="amp-vol" data-amp="volwrap">
-        <button class="amp-btn amp-btn--icon" data-amp="mute" type="button" title="Mudo">🔊</button>
+        <button class="amp-btn amp-btn--icon" data-amp="mute" type="button" title="Mudo" aria-label="Mudo"></button>
         <input class="amp-vol__range" data-amp="volume" type="range" min="0" max="100" step="1" aria-label="Volume">
       </div>
-      <button class="amp-btn amp-btn--icon" data-amp="close" type="button" title="Fechar">✕</button>
+      <button class="amp-btn amp-btn--icon" data-amp="close" type="button" title="Fechar" aria-label="Fechar miniplayer"></button>
     </div>
     <div class="amp-queue" data-amp="queuePanel" hidden>
       <div class="amp-queue__head">Fila · <span data-amp="queueCount">0</span> faixa(s)</div>
@@ -191,6 +263,7 @@ export function initAdminMiniPlayer() {
     root,
     progress: root.querySelector('[data-amp="progress"]'),
     fill: root.querySelector('.amp-progress__fill'),
+    thumb: root.querySelector('.amp-progress__thumb'),
     play: root.querySelector('[data-amp="play"]'),
     prev: root.querySelector('[data-amp="prev"]'),
     next: root.querySelector('[data-amp="next"]'),
@@ -210,6 +283,16 @@ export function initAdminMiniPlayer() {
     volwrap: root.querySelector('[data-amp="volwrap"]')
   };
 
+  // Ícones Spotify
+  setIcon(MP.ui.shuffle, ICONS.shuffle);
+  setIcon(MP.ui.prev, ICONS.prev);
+  setIcon(MP.ui.next, ICONS.next);
+  setIcon(MP.ui.queueBtn, ICONS.queue);
+  setIcon(MP.ui.close, ICONS.close);
+  setPlayIcon(false);
+  setRepeatIcon();
+  setVolumeIcon();
+
   bindUi();
   bindAudio();
   bindKeyboard();
@@ -219,7 +302,28 @@ export function initAdminMiniPlayer() {
 
   audio.volume = MP.muted ? 0 : MP.volume;
   paintAll();
-  console.info('[miniplayer] montado');
+  console.info('[miniplayer] montado (v1.1)');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Pintores de ícone (estado → SVG)
+// ─────────────────────────────────────────────────────────────
+function setPlayIcon(playing) {
+  setIcon(MP.ui?.play, playing ? ICONS.pause : ICONS.play);
+}
+
+function setRepeatIcon() {
+  setIcon(MP.ui?.repeat, MP.repeat === 'one' ? ICONS.repeat1 : ICONS.repeat);
+  if (MP.ui?.repeat) {
+    MP.ui.repeat.classList.toggle('is-on', MP.repeat !== 'off');
+    MP.ui.repeat.setAttribute('aria-pressed', String(MP.repeat !== 'off'));
+    MP.ui.repeat.title = MP.repeat === 'off' ? 'Repetir: desligado' : (MP.repeat === 'all' ? 'Repetir: fila' : 'Repetir: faixa');
+  }
+}
+
+function setVolumeIcon() {
+  const v = MP.muted ? 0 : MP.volume;
+  setIcon(MP.ui?.muteBtn, v === 0 ? ICONS.volMute : (v < 0.5 ? ICONS.volLow : ICONS.volHigh));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -230,22 +334,22 @@ function bindUi() {
   u.play.addEventListener('click', () => toggle());
   u.prev.addEventListener('click', prevTrack);
   u.next.addEventListener('click', () => advance(1));
-  u.shuffle.addEventListener('click', () => { MP.shuffle = !MP.shuffle; rebuildOrder(true); savePrefs(); paintAll(); });
+  u.shuffle.addEventListener('click', () => { MP.shuffle = !MP.shuffle; rebuildOrder(true); savePrefs(); paintQueue(); paintAll(); });
   u.repeat.addEventListener('click', () => {
     MP.repeat = MP.repeat === 'off' ? 'all' : (MP.repeat === 'all' ? 'one' : 'off');
-    savePrefs(); paintAll();
+    savePrefs(); setRepeatIcon();
   });
   u.badge.addEventListener('click', () => setVersion(MP.version === 'preview' ? 'full' : 'preview'));
   u.queueBtn.addEventListener('click', () => { MP.queueOpen = !MP.queueOpen; paintQueue(); });
   u.close.addEventListener('click', () => close());
-  u.muteBtn.addEventListener('click', () => { MP.muted = !MP.muted; applyVolume(); savePrefs(); paintAll(); });
+  u.muteBtn.addEventListener('click', () => { MP.muted = !MP.muted; applyVolume(); savePrefs(); paintVolume(); });
   u.volume.addEventListener('input', () => {
     MP.volume = Math.min(1, Math.max(0, Number(u.volume.value) / 100 || 0));
     MP.muted = MP.volume === 0;
     applyVolume(); paintVolume(); savePrefs();
   });
 
-  // Seek: clique + arrasto na barra
+  // Seek: clique + arrasto na barra (estilo Spotify)
   const seekFromEvent = (e) => {
     if (!MP.el || !Number.isFinite(MP.el.duration)) return;
     const rect = u.progress.getBoundingClientRect();
@@ -268,8 +372,8 @@ function bindAudio() {
   el.addEventListener('durationchange', paintProgress);
   el.addEventListener('ended', onEnded);
   el.addEventListener('error', () => onTrackError('Falha ao carregar o áudio.'));
-  el.addEventListener('play', () => { paintAll(); setMediaSessionState(); });
-  el.addEventListener('pause', () => { paintAll(); });
+  el.addEventListener('play', () => { paintAll(); paintQueue(); setMediaSessionState(); });
+  el.addEventListener('pause', () => { paintAll(); paintQueue(); });
 }
 
 function bindKeyboard() {
@@ -277,8 +381,7 @@ function bindKeyboard() {
     if (!isActive() || e.defaultPrevented) return;
     const t = e.target;
     const editable = t && (t.isContentEditable
-      || /INPUT|TEXTAREA|SELECT/.test(String(t.tagName || ''))
-      || /keydown/.test(String(t.type || '')) && /INPUT|TEXTAREA/.test(String(t.tagName || '')));
+      || /INPUT|TEXTAREA|SELECT/.test(String(t.tagName || '')));
     if (editable) return;
     if (e.code === 'Space') { e.preventDefault(); toggle(); }
     else if (e.key === 'ArrowLeft' && MP.el && Number.isFinite(MP.el.duration)) { e.preventDefault(); try { MP.el.currentTime = Math.max(0, MP.el.currentTime - 10); } catch {} }
@@ -420,27 +523,35 @@ function onEnded() {
     return;
   }
   const next = computeNext(MP.order, MP.pos, MP.repeat);
-  if (next < 0) { MP.pos = 0; pause(); paintAll(); return; }
+  if (next < 0) { pause(); paintAll(); return; }
   MP.pos = next;
   playCurrent();
 }
 
+// Avanço MANUAL (botões next/prev e pulo por erro): circula a fila
 function advance(dir) {
   if (!MP.queue.length) return;
   let next = MP.pos + dir;
-  if (next >= MP.order.length) next = MP.repeat === 'all' ? 0 : MP.pos; // sem loop manual além do repeat
+  if (next >= MP.order.length) next = 0;
   if (next < 0) next = MP.order.length - 1;
   MP.pos = next;
   MP.errors = 0;
   playCurrent();
 }
 
+// Volta: reinicia a atual se passou de 3s; senão vai para a anterior.
+// Na primeira faixa, reinicia (não salta para o fim da fila).
 function prevTrack() {
   if (MP.el && Number.isFinite(MP.el.duration) && MP.el.currentTime > 3) {
     try { MP.el.currentTime = 0; } catch {}
     return;
   }
-  advance(-1);
+  if (MP.pos > 0) { advance(-1); return; }
+  if (MP.el && MP.el.src) {
+    try { MP.el.currentTime = 0; MP.el.play().catch(() => {}); } catch {}
+  } else if (MP.queue.length) {
+    playCurrent();
+  }
 }
 
 function toggle() {
@@ -482,13 +593,11 @@ function setVersion(v) {
 function paintAll() {
   if (!MP.ui) return;
   const u = MP.ui;
+  const playing = MP.el && !MP.el.paused && !MP.el.ended;
+  setPlayIcon(!!playing);
   u.shuffle.classList.toggle('is-on', MP.shuffle);
   u.shuffle.setAttribute('aria-pressed', String(MP.shuffle));
-  u.repeat.classList.toggle('is-on', MP.repeat !== 'off');
-  u.repeat.setAttribute('aria-pressed', String(MP.repeat !== 'off'));
-  u.repeat.textContent = MP.repeat === 'one' ? '↻₁' : '↻';
-  u.repeat.title = MP.repeat === 'off' ? 'Repetir: desligado' : (MP.repeat === 'all' ? 'Repetir: fila' : 'Repetir: faixa');
-  u.play.textContent = MP.el && !MP.el.paused && !MP.el.ended ? '⏸' : '▶';
+  setRepeatIcon();
   paintVolume();
 }
 
@@ -498,8 +607,9 @@ function paintVolume() {
   const v = MP.muted ? 0 : MP.volume;
   u.volume.value = String(Math.round(v * 100));
   u.volume.disabled = MP.muted;
-  u.muteBtn.textContent = MP.muted || MP.volume === 0 ? '🔇' : (MP.volume < 0.5 ? '🔉' : '🔊');
+  u.muteBtn.title = MP.muted ? 'Ativar som' : 'Mudo';
   u.volwrap.style.setProperty('--amp-vol', `${v * 100}%`);
+  setVolumeIcon();
 }
 
 function paintMeta(track) {
@@ -534,6 +644,7 @@ function paintProgress() {
   const dur = Number.isFinite(MP.el.duration) ? MP.el.duration : 0;
   const pct = dur > 0 ? (cur / dur) * 100 : 0;
   u.fill.style.width = pct + '%';
+  u.thumb.style.left = pct + '%';
   u.progress.setAttribute('aria-valuenow', String(Math.round(pct)));
   u.time.textContent = dur > 0 ? `${formatTime(cur)} / ${formatTime(dur)}` : formatTime(cur);
 }
