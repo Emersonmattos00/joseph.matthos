@@ -29,6 +29,7 @@ import { renderSocialEditor, bindSocialsAddButton } from './editors/socials.js';
 import { getByPath, setByPath } from './ui/dom.js';
 import { toast } from './ui/toast.js';
 import { renderBackupInfo } from './backup.js';
+import { initAdminMiniPlayer } from './miniplayer.js'; // MP-01
 import { DEFAULT_CONTENT } from '../config.js';
 import { safeMediaUrl } from '../utils.js';
 
@@ -67,6 +68,8 @@ async function bootstrap() {
   bindEditorButtons();
   bindUploadZones();
   bindRefreshButtons();
+
+  try { initAdminMiniPlayer(); } catch (e) { console.warn('[admin] miniplayer indisponível:', e); } // MP-01
 
   const urlParams = new URLSearchParams(window.location.search);
   if (urlParams.has('admin')) {
