@@ -657,19 +657,18 @@
   background: #d4af37;
   transition: width 0.3s;
 }
-
-/* ─── MP-01: Miniplayer do painel (pílula estilo Apple Music) ─── */
+/* ─── MP-02: Miniplayer do painel (pílula, botões estilo Spotify) ─── */
 .amp-root {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
   bottom: 14px;
   width: min(780px, calc(100vw - 24px));
-  border-radius: 18px;
-  background: rgba(22, 22, 24, 0.92);
+  border-radius: 16px;
+  background: rgba(20, 20, 22, 0.94);
   backdrop-filter: blur(24px) saturate(1.2);
   -webkit-backdrop-filter: blur(24px) saturate(1.2);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   z-index: 10001;
   color: #e5e5e5;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -680,36 +679,14 @@
 #adminSite:has(.sp-player:not([hidden])) .amp-root {
   bottom: calc(var(--sp-player-height) + 18px);
 }
-.amp-progress {
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 18px 18px 0 0;
-  cursor: pointer;
-  transition: height 0.15s ease;
-  touch-action: none;
-}
-.amp-progress:hover { height: 5px; }
-.amp-progress__fill {
-  width: 0%;
-  height: 100%;
-  background: linear-gradient(90deg, #d8b45a, #f0d089);
-  border-radius: inherit;
-}
-.amp-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px 12px;
-}
+
+/* Botões estilo Spotify: cinza → branco no hover; ativo verde + ponto */
 .amp-btn {
   appearance: none;
   border: 0;
   background: transparent;
-  color: #cfcfcf;
-  font-size: 15px;
-  line-height: 1;
+  color: #b3b3b3;
+  padding: 0;
   width: 32px;
   height: 32px;
   border-radius: 8px;
@@ -717,21 +694,80 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease, transform 0.15s ease;
   flex: 0 0 auto;
+  position: relative;
 }
-.amp-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.amp-btn:focus-visible { outline: 2px solid #d8b45a; outline-offset: 1px; }
-.amp-btn.is-on { color: #d8b45a; }
-.amp-btn--play {
-  width: 38px;
-  height: 38px;
+.amp-btn:hover { color: #fff; }
+.amp-btn:focus-visible { outline: 2px solid #1ed760; outline-offset: 2px; }
+.amp-btn svg { display: block; }
+.amp-btn.is-on { color: #1ed760; }
+.amp-btn.is-on::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background: #d8b45a;
-  color: #17130a;
-  font-size: 16px;
+  background: #1ed760;
+  transform: translateX(-50%);
 }
-.amp-btn--play:hover { background: #f0d089; }
+.amp-btn--play {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0b0a0c;
+}
+.amp-btn--play:hover {
+  color: #000;
+  transform: scale(1.06);
+}
+.amp-btn--play svg { width: 18px; height: 18px; }
+.amp-btn--play:active { transform: scale(0.98); }
+
+/* Barra de progresso estilo Spotify: branca, verde no hover, thumb */
+.amp-progress {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 16px 16px 0 0;
+  cursor: pointer;
+  touch-action: none;
+}
+.amp-progress__fill {
+  width: 0%;
+  height: 100%;
+  background: #fff;
+  border-radius: inherit;
+  position: relative;
+}
+.amp-progress__thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  pointer-events: none;
+}
+.amp-progress:hover .amp-progress__fill { background: #1ed760; }
+.amp-progress:hover .amp-progress__thumb { opacity: 1; background: #1ed760; }
+.amp-progress:hover { height: 6px; }
+
+.amp-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 12px;
+}
 .amp-info {
   flex: 1;
   min-width: 0;
@@ -742,7 +778,7 @@
 .amp-cover {
   width: 44px;
   height: 44px;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #2a2a2c;
   color: #8a8a8f;
   overflow: hidden;
@@ -775,7 +811,7 @@
   gap: 8px;
   min-width: 0;
   font-size: 12px;
-  color: #9a9a9f;
+  color: #a7a7a7;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -797,7 +833,7 @@
 .amp-badge:hover { background: #f0d089; color: #17130a; }
 .amp-time {
   font-size: 12px;
-  color: #9a9a9f;
+  color: #a7a7a7;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex: 0 0 auto;
@@ -814,25 +850,32 @@
   width: 90px;
   height: 4px;
   border-radius: 999px;
-  background: linear-gradient(to right, #d8b45a var(--amp-vol, 80%), rgba(255, 255, 255, 0.18) var(--amp-vol, 80%));
+  background: linear-gradient(to right, #fff var(--amp-vol, 80%), rgba(255, 255, 255, 0.25) var(--amp-vol, 80%));
   cursor: pointer;
+}
+.amp-vol__range:hover {
+  background: linear-gradient(to right, #1ed760 var(--amp-vol, 80%), rgba(255, 255, 255, 0.25) var(--amp-vol, 80%));
 }
 .amp-vol__range::-webkit-slider-thumb {
   -webkit-appearance: none;
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #fff;
+  background: transparent;
   border: 0;
 }
+.amp-vol__range:hover::-webkit-slider-thumb { background: #1ed760; }
 .amp-vol__range::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #fff;
+  background: transparent;
   border: 0;
 }
+.amp-vol__range:hover::-moz-range-thumb { background: #1ed760; }
 .amp-vol__range:disabled { opacity: 0.4; }
+
+/* Fila expansível */
 .amp-queue {
   position: absolute;
   bottom: calc(100% + 10px);
@@ -840,18 +883,18 @@
   width: min(340px, calc(100vw - 32px));
   max-height: 320px;
   overflow: auto;
-  background: rgba(22, 22, 24, 0.95);
+  background: rgba(20, 20, 22, 0.96);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   padding: 10px;
 }
 .amp-queue__head {
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #8a8a8f;
+  color: #a7a7a7;
   padding: 4px 8px 8px;
 }
 .amp-queue__row {
@@ -863,19 +906,19 @@
   align-items: center;
   gap: 10px;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   text-align: left;
   color: inherit;
 }
-.amp-queue__row:hover { background: rgba(255, 255, 255, 0.07); }
-.amp-queue__row.is-current { background: rgba(216, 180, 90, 0.14); }
-.amp-queue__row.is-current .amp-queue__num { color: #d8b45a; }
+.amp-queue__row:hover { background: rgba(255, 255, 255, 0.08); }
+.amp-queue__row.is-current { background: rgba(30, 215, 96, 0.12); }
+.amp-queue__row.is-current .amp-queue__num { color: #1ed760; }
 .amp-queue__num {
   width: 24px;
   flex: 0 0 auto;
   font-size: 12px;
-  color: #8a8a8f;
+  color: #a7a7a7;
   font-variant-numeric: tabular-nums;
 }
 .amp-queue__title {
@@ -891,19 +934,42 @@
 }
 .amp-queue__sub {
   font-size: 11px;
-  color: #8a8a8f;
+  color: #a7a7a7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Botão de reabrir (após fechar) */
+.amp-reopen {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10001;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: #1ed760;
+  color: #04150a;
+  font: 600 13px 'Inter', -apple-system, sans-serif;
+  padding: 10px 16px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.amp-reopen:hover { transform: scale(1.04); }
+.amp-reopen[hidden] { display: none; }
+
 @media (max-width: 640px) {
   .amp-root { width: calc(100vw - 16px); bottom: 10px; }
-  .amp-main { gap: 6px; padding: 10px; }
+  .amp-main { gap: 6px; padding: 12px 10px 10px; }
   .amp-time, .amp-vol__range, .amp-btn--opt { display: none; }
   .amp-cover { width: 40px; height: 40px; }
   .amp-queue { width: calc(100vw - 24px); right: 50%; transform: translateX(50%); }
   .amp-btn { width: 30px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .amp-progress, .amp-btn, .amp-badge { transition: none; }
+  .amp-btn, .amp-progress__thumb, .amp-badge, .amp-reopen { transition: none; }
 }
