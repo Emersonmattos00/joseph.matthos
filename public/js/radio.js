@@ -1,5 +1,5 @@
 /* ============================================================
-   js/radio.js — Rádio Joseph Matthos (CORRIGIDO — v2)
+   js/radio.js — Rádio Joseph Matthos (CORRIGIDO — v2) 
    ------------------------------------------------------------
    Auditoria 26/11/2026 — correções aplicadas sobre o original:
    R-01 (P1): a fila agora é INJETADA no player do site via as
