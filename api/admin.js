@@ -1444,16 +1444,21 @@ async function handleDownloadUrl(req, res, session) {
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId)).limit(1);
-  if (!track || !track.fullPath) return sendJson(res, 404, { ok: false, error: 'Áudio não encontrado.' });
+  // DL-01: catálogo legado tem stream_key populado mas full_path NULL —
+  // usar o mesmo fallback do stream (fullPath || streamKey).
+  const objectKey = track.fullPath || track.streamKey || '';
+  if (!track || !objectKey) {
+    return sendJson(res, 404, { ok: false, error: 'Faixa sem áudio completo vinculado (full_path e stream_key vazios).' });
+  }
 
   try {
-    const kind = inferKindFromKey(track.fullPath);
+    const kind = inferKindFromKey(objectKey);
     if (kind !== 'audio-full') return sendJson(res, 403, { ok: false, error: 'Caminho não é áudio completo.' });
   } catch { return sendJson(res, 400, { ok: false, error: 'Caminho inválido.' }); }
 
   try {
     const filename = `${sanitizeFilename(track.title)}.mp3`;
-    const { url } = await createSignedDownloadUrl(track.fullPath, DOWNLOAD_TTL_SEC, filename);
+    const { url } = await createSignedDownloadUrl(objectKey, DOWNLOAD_TTL_SEC, filename);
     try { await audit('download.single', { actor: session.user, target: trackId }); } catch {}
     return sendJson(res, 200, { ok: true, url, filename });
   } catch {
@@ -1474,9 +1479,11 @@ async function handleDownloadAlbum(req, res, session) {
     while (queue.length) {
       const t = queue.shift();
       if (!t) break;
-      if (!t.fullPath) { results.push({ id: t.id, title: t.title, url: null, filename: null }); continue; }
+      // DL-01: fallback streamKey (catálogo legado tem full_path NULL)
+      const objectKey = t.fullPath || t.streamKey || '';
+      if (!objectKey) { results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Sem áudio completo' }); continue; }
       try {
-        const kind = inferKindFromKey(t.fullPath);
+        const kind = inferKindFromKey(objectKey);
         if (kind !== 'audio-full') { results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' }); continue; }
       } catch {
         results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Caminho inválido' });
@@ -1484,7 +1491,7 @@ async function handleDownloadAlbum(req, res, session) {
       }
       try {
         const filename = `${sanitizeFilename(t.title)}.mp3`;
-        const { url } = await createSignedDownloadUrl(t.fullPath, DOWNLOAD_TTL_SEC, filename);
+        const { url } = await createSignedDownloadUrl(objectKey, DOWNLOAD_TTL_SEC, filename);
         results.push({ id: t.id, title: t.title, url, filename });
       } catch {
         results.push({ id: t.id, title: t.title, url: null, filename: null, error: 'Falha ao gerar link' });
