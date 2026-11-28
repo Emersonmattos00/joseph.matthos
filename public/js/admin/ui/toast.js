@@ -486,4 +486,4 @@ if (typeof window !== 'undefined') {
   }
   window.dismissToast = dismissToast;
   window.dismissAllToasts = dismissAllToasts;
-                              }
+}
