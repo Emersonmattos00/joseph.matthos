@@ -17,7 +17,7 @@ const crypto = require('crypto');
 
 const {
   sendJson, methodNotAllowed, parseBody, parseCookies, clientIp,
-  checkAndIncrement, resetBucket, audit, VALID_PLANS,
+  checkAndIncrement, resetBucket, audit, VALID_PLANS, normalizePlanCode,
   signHmac, verifyHmac, verifyScrypt, generateScryptHash, timingSafeEq, checkOrigin, IS_PROD
 } = require('./_lib');
 
@@ -643,17 +643,6 @@ async function handleReconcileUploads(req, res, session) {
 // ─────────────────────────────────────────────────────────────
 // USUÁRIOS
 // ─────────────────────────────────────────────────────────────
-function normalizePlanCode(name, intervalUnit) {
-  // UP-01b: remove acentos antes de comparar (Grátis → gratis, Prêmium → premium)
-  const strip = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const n = strip(name);
-  const u = strip(intervalUnit);
-  if (n.includes('free') || n.includes('gratis')) return 'free'; // UP-01c: nome vence o intervalo
-  if (n.includes('anual') || u === 'year') return 'anual';
-  if (n.includes('premium') || u === 'month') return 'premium';
-  return null;
-}
-
 // UP-01: espelha a semântica da view effective_plan (drizzle/0003) em JS —
 // assinatura ACTIVE com período vigente → código do plano comercial;
 // aluguel ACTIVE com validade vigente → 'premium'; senão 'free'.
@@ -702,9 +691,18 @@ function computeEffectivePlanFromRows(userRows, subRows, planRows, rentalRows) {
 }
 
 async function handleGetUsers(req, res) {
-  const rows = await db.select({
+  const rowsAll = await db.select({
     id: users.id, email: users.email, name: users.name, createdAt: users.createdAt
   }).from(users).orderBy(desc(users.createdAt));
+
+  // UP-02: anonimizados ficam OCULTOS por padrão — "excluir" remove o usuário
+  // da lista; o histórico financeiro permanece no banco (LGPD/auditoria).
+  const isAnonymized = (u) =>
+    String(u.email || '').endsWith('@deleted.local') ||
+    String(u.name || '') === 'Usuário Anonimizado';
+  const includeAnonymized = String(req.query?.includeAnonymized || '') === '1';
+  const anonymizedCount = rowsAll.filter(isAnonymized).length;
+  const rows = includeAnonymized ? rowsAll : rowsAll.filter((u) => !isAnonymized(u));
 
   let planMap = new Map();
   let plansError = null; // diagnóstico (string) quando a view falha
@@ -755,7 +753,8 @@ async function handleGetUsers(req, res) {
     })),
     plansSource,
     plansError,
-    total: rows.length
+    total: rows.length,
+    hiddenAnonymized: includeAnonymized ? 0 : anonymizedCount
   });
 }
 
@@ -1681,4 +1680,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-}
+    }
