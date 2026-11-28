@@ -12,6 +12,11 @@
    - Banners de diagnóstico quando a view effective_plan não
      responde (fallback do backend) ou quando não há dados de
      plano — com a correção indicada no guia.
+   v3.1 (UP-02, 2026-11-28):
+   - Excluídos (anonimizados) OCULTOS por padrão — antes a linha
+     "Usuário Anonimizado" voltava na lista e parecia que a
+     exclusão não funcionava. Toggle no toolbar os exibe com
+     badge e sem ações.
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -36,6 +41,8 @@ const state = {
   inflight: null,          // UP: AbortController da requisição atual
   plansSource: 'view',     // UP-01: view | fallback | none
   plansError: null,        // UP-01: mensagem de diagnóstico da view
+  includeAnonymized: false, // UP-02: mostrar os excluídos (anonimizados)?
+  hiddenAnonymized: 0,      // UP-02: quantos estão ocultos agora
 
   page: 1,
   pageSize: DEFAULT_PAGE_SIZE,
@@ -65,9 +72,13 @@ export async function renderUsersTable({ force = false, resetPage = false } = {}
 // Revalidação silênciosa: busca sem o flash de loading (UP-01)
 async function silentRefresh() {
   try {
-    const result = await apiFetch('users', { method: 'GET' });
+    const result = await apiFetch('users', {
+      method: 'GET',
+      query: state.includeAnonymized ? { includeAnonymized: '1' } : null
+    });
     state.all = Array.isArray(result?.users) ? result.users : [];
     state.total = Number(result?.total) || state.all.length;
+    state.hiddenAnonymized = Number(result?.hiddenAnonymized) || 0;
     state.plansSource = result?.plansSource || 'view';
     state.plansError = result?.plansError || null;
     state.fetchedAt = Date.now();
@@ -96,13 +107,15 @@ async function fetchUsers() {
   try {
     const result = await apiFetch('users', {
       method: 'GET',
-      signal: ctrl.signal
+      signal: ctrl.signal,
+      query: state.includeAnonymized ? { includeAnonymized: '1' } : null
     });
 
     if (ctrl.signal.aborted) return;
 
     state.all = Array.isArray(result?.users) ? result.users : [];
     state.total = Number(result?.total) || state.all.length;
+    state.hiddenAnonymized = Number(result?.hiddenAnonymized) || 0;
     state.plansSource = result?.plansSource || 'view';
     state.plansError = result?.plansError || null;
     state.fetchedAt = Date.now();
@@ -218,7 +231,18 @@ function paint() {
         </tr>
       </thead>
       <tbody>
-        ${pageItems.map((u) => `
+        ${pageItems.map((u) => {
+          if (isAnonymizedUser(u)) {
+            return `
+          <tr data-user-row="${esc(u.id)}" data-anonymized="1">
+            <td>${esc(u.name || '—')}</td>
+            <td>${esc(u.email || '—')}</td>
+            <td><span class="badge-mini badge-anonymized">Anonimizado</span></td>
+            <td>${formatDate(u.createdAt)}</td>
+            <td><span style="color:var(--text-dim);font-size:0.85rem;">—</span></td>
+          </tr>`;
+          }
+          return `
           <tr data-user-row="${esc(u.id)}">
             <td>${esc(u.name || '—')}</td>
             <td>${esc(u.email || '—')}</td>
@@ -230,8 +254,8 @@ function paint() {
                 <button class="action-btn danger" data-action="delete" data-id="${esc(u.id)}" data-name="${esc(u.name || u.email || '')}">Excluir</button>
               </div>
             </td>
-          </tr>
-        `).join('')}
+          </tr>`;
+        }).join('')}
       </tbody>
     </table>
 
@@ -294,6 +318,11 @@ function renderToolbarHTML() {
       <select id="userPageSize" aria-label="Itens por página">
         ${PAGE_SIZE_OPTIONS.map((n) => `<option value="${n}" ${state.pageSize === n ? 'selected' : ''}>${n} por página</option>`).join('')}
       </select>
+      ${state.hiddenAnonymized > 0 || state.includeAnonymized ? `
+      <label class="users-anon-toggle">
+        <input type="checkbox" id="userShowAnonymized" ${state.includeAnonymized ? 'checked' : ''}>
+        Anonimizados (${state.includeAnonymized ? state.all.filter(isAnonymizedUser).length : state.hiddenAnonymized} ocultos${state.includeAnonymized ? ' — visíveis' : ''})
+      </label>` : ''}
     </div>`;
 }
 
@@ -328,6 +357,16 @@ function bindToolbar() {
       state.pageSize = Number(sizeEl.value) || DEFAULT_PAGE_SIZE;
       state.page = 1;
       paint();
+    });
+  }
+
+  const anonEl = document.getElementById('userShowAnonymized');
+  if (anonEl && anonEl.dataset.bound !== '1') {
+    anonEl.dataset.bound = '1';
+    anonEl.addEventListener('change', () => {
+      state.includeAnonymized = !!anonEl.checked;
+      state.page = 1;
+      renderUsersTable({ force: true }); // recarrega com/sem os anonimizados
     });
   }
 }
@@ -545,6 +584,13 @@ function openDeleteModal(userId, userName) {
 // ─────────────────────────────────────────────────────────────
 // Badge
 // ─────────────────────────────────────────────────────────────
+// UP-02: usuário excluído (anonimizado) — marcadores determinísticos
+// gravados pelo backend ao anonimizar.
+function isAnonymizedUser(u) {
+  return String(u?.email || '').endsWith('@deleted.local') ||
+    String(u?.name || '') === 'Usuário Anonimizado';
+}
+
 function badgePlan(plan) {
   if (plan === 'free') return '<span class="badge-mini badge-free">Free</span>';
   if (plan === 'premium') return '<span class="badge-mini badge-premium">Premium</span>';
@@ -558,4 +604,4 @@ function badgePlan(plan) {
 export function invalidateUsersCache() {
   state.fetchedAt = 0;
   state.fetched = false;
-}
+                 }
