@@ -119,8 +119,11 @@ function enforceMaxVisible() {
  */
 export function toast(message, icon = 'ℹ', duration, type) {
   // Fallback: se o site público já registrou window.toast, delega
-  // (evita dois sistemas de toast concorrentes na mesma página)
-  if (typeof window !== 'undefined' && typeof window.toast === 'function') {
+  // (evita dois sistemas de toast concorrentes na mesma página).
+  // UP-01d: nunca delega para a PRÓPRIA função — se este módulo se registrou
+  // em window.toast (site ausente), a checagem antiga criava recursão
+  // infinita ("Maximum call stack size exceeded") a partir da 2ª chamada.
+  if (typeof window !== 'undefined' && typeof window.toast === 'function' && window.toast !== toast) {
     return window.toast(message, icon);
   }
 
@@ -483,4 +486,4 @@ if (typeof window !== 'undefined') {
   }
   window.dismissToast = dismissToast;
   window.dismissAllToasts = dismissAllToasts;
-}
+                              }
