@@ -21,10 +21,11 @@
        ?type=full (o frontend nunca envia type). ?type=full|download
        continua aceito como pedido explícito (403 se não autorizado).
        Também restaura o fallback track.streamKey || track.fullPath.
-   S4  CDN de prévia: removido o fallback hardcoded
-       pub-9eaf…@r2.dev (vazamento de identificador do bucket e
-       comportamento silencioso sem env). Sem R2_PUBLIC_BASE_URL
-       → 503 CDN_UNAVAILABLE explícito.
+   S4  CDN de prévia (REVISADO na UP-03, 28/11/2026): a env
+       R2_PUBLIC_BASE_URL tem prioridade; sem env, cai no CDN
+       público do bucket (comportamento original). A versão que
+       exigia env-only quebrava o player em deploys sem a variável
+       (503 CDN_UNAVAILABLE em toda prévia — "falha ao carregar").
    ============================================================ */
 
 const { eq, and, gt, lte } = require('drizzle-orm');
@@ -34,10 +35,20 @@ const { getAuthUser, clientIp, ALLOWED_ORIGINS } = require('./_lib');
 const { checkStreamRateLimit } = require('./_cache');
 const { getPlaybackUrl } = require('./_storage');
 
-// CDN pública de prévias — SEMPRE via env (S4). Sem valor → 503.
-const CDN_BASE = String(process.env.R2_PUBLIC_BASE_URL || '')
-  .trim()
-  .replace(/\/+$/, '');
+// CDN pública de prévias (S4 revisado — UP-03): env primeiro; sem env,
+// cai no CDN público do bucket (comportamento original) para o player
+// voltar a funcionar em deploys sem R2_PUBLIC_BASE_URL. O identificador
+// é público por natureza (o navegador recebe o 302 em toda reprodução);
+// o warn mantém a ausência da env visível nos logs.
+const CDN_FALLBACK = 'https://pub-9eaf26fd8c784a62bae2457a45edc7d2.r2.dev';
+const CDN_BASE =
+  String(process.env.R2_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '') ||
+  CDN_FALLBACK;
+if (CDN_BASE === CDN_FALLBACK) {
+  console.warn(
+    '[stream] R2_PUBLIC_BASE_URL ausente — prévias servidas pelo CDN público padrão (defina a env para apontar outro destino).'
+  );
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
