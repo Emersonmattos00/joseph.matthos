@@ -1,12 +1,17 @@
 /* ============================================================
-   admin/users.js — v2.0 (Auditoria corrigida)
+   admin/users.js — v3.0 (UP-01: gestão de usuários eficiente)
    ------------------------------------------------------------
-   Correções:
-   - CACHE: controla fetched (não apenas lista vazia)
-   - CONCORRÊNCIA: aborta requisição anterior se houver
-   - PAGINAÇÃO: preserva lista anterior durante recarga
-   - ERROS: diferencia 401 (sessão) de 403 (permissão)
-   - MODAL: trata fechamento externo corretamente
+   v2.0: cache/concorrência/paginação/erros 401-403 corrigidos.
+   UP-01 (2026-11-28):
+   - Troca de plano em UM modal (select + prévia + salvar) —
+     sem a segunda confirmação; botão com estado "Salvando…".
+   - Atualização otimista: a linha muda na hora; a lista é
+     revalidada em silêncio depois (sem flash de loading).
+   - Exclusão = anonimização (LGPD) com confirmação digitada;
+     botão com estado "Anonimizando…".
+   - Banners de diagnóstico quando a view effective_plan não
+     responde (fallback do backend) ou quando não há dados de
+     plano — com a correção indicada no guia.
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -19,14 +24,18 @@ const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const DEFAULT_PAGE_SIZE = 10;
 
+const PLAN_LABELS = { free: 'Free', premium: 'Premium', anual: 'Anual' };
+
 const state = {
   all: [],
   loading: false,
   error: null,
   total: 0,
   fetchedAt: 0,
-  fetched: false,          // Correção: controla se já buscou (mesmo se vazio)
-  inflight: null,          // Correção: AbortController da requisição atual
+  fetched: false,          // UP: controla se já buscou (mesmo se vazio)
+  inflight: null,          // UP: AbortController da requisição atual
+  plansSource: 'view',     // UP-01: view | fallback | none
+  plansError: null,        // UP-01: mensagem de diagnóstico da view
 
   page: 1,
   pageSize: DEFAULT_PAGE_SIZE,
@@ -46,7 +55,6 @@ export async function renderUsersTable({ force = false, resetPage = false } = {}
 
   const stale = Date.now() - state.fetchedAt > CACHE_TTL_MS;
 
-  // Correção: usa `state.fetched` em vez de `!state.all.length`
   if (force || !state.fetched || stale) {
     await fetchUsers();
   }
@@ -54,11 +62,24 @@ export async function renderUsersTable({ force = false, resetPage = false } = {}
   paint();
 }
 
+// Revalidação silênciosa: busca sem o flash de loading (UP-01)
+async function silentRefresh() {
+  try {
+    const result = await apiFetch('users', { method: 'GET' });
+    state.all = Array.isArray(result?.users) ? result.users : [];
+    state.total = Number(result?.total) || state.all.length;
+    state.plansSource = result?.plansSource || 'view';
+    state.plansError = result?.plansError || null;
+    state.fetchedAt = Date.now();
+    state.fetched = true;
+    paint();
+  } catch { /* silêncio: a lista local já reflete a ação */ }
+}
+
 // ─────────────────────────────────────────────────────────────
 // Fetch com controle de concorrência
 // ─────────────────────────────────────────────────────────────
 async function fetchUsers() {
-  // Correção: aborta requisição anterior
   if (state.inflight) {
     try { state.inflight.abort(); } catch {}
     state.inflight = null;
@@ -67,7 +88,6 @@ async function fetchUsers() {
   const ctrl = new AbortController();
   state.inflight = ctrl;
 
-  // Correção: mantém lista anterior visível durante recarga
   const hadData = state.all.length > 0;
   state.loading = true;
   state.error = null;
@@ -83,13 +103,14 @@ async function fetchUsers() {
 
     state.all = Array.isArray(result?.users) ? result.users : [];
     state.total = Number(result?.total) || state.all.length;
+    state.plansSource = result?.plansSource || 'view';
+    state.plansError = result?.plansError || null;
     state.fetchedAt = Date.now();
     state.fetched = true;
   } catch (err) {
     if (err?.name === 'AbortError') return;
     if (ctrl.signal.aborted) return;
 
-    // Correção: diferencia 401 de 403
     if (err && err.status === 401) {
       throw new Error('Sessão expirada. Faça login novamente.');
     }
@@ -115,7 +136,6 @@ function paint() {
   const wrap = document.getElementById('usersTable');
   if (!wrap) return;
 
-  // Correção: preserva dados antigos durante recarga
   if (state.loading && !state.all.length) {
     wrap.innerHTML = '<p class="loading">Carregando usuários…</p>';
     updateCount(0, 0);
@@ -167,9 +187,12 @@ function paint() {
   state.page = currentPage;
   updateCount(totalFiltered, state.all.length);
 
+  const banners = renderDiagnosticsHTML();
+
   if (!pageItems.length) {
     wrap.innerHTML = `
       <div class="users-toolbar">${renderToolbarHTML()}</div>
+      ${banners}
       <p style="color:var(--text-dim);padding:1.5rem 1rem;text-align:center;">
         ${state.all.length ? 'Nenhum usuário corresponde ao filtro/busca.' : 'Nenhum usuário cadastrado.'}
       </p>`;
@@ -181,6 +204,7 @@ function paint() {
 
   wrap.innerHTML = `
     <div class="users-toolbar">${renderToolbarHTML()}</div>
+    ${banners}
     ${truncated ? `<p class="hint" style="color:var(--warning,#f0a100);">Mostrando ${state.all.length} de ${state.total} usuários. Refine o filtro.</p>` : ''}
 
     <table class="admin-table">
@@ -195,7 +219,7 @@ function paint() {
       </thead>
       <tbody>
         ${pageItems.map((u) => `
-          <tr>
+          <tr data-user-row="${esc(u.id)}">
             <td>${esc(u.name || '—')}</td>
             <td>${esc(u.email || '—')}</td>
             <td>${badgePlan(u.plan)}</td>
@@ -203,7 +227,7 @@ function paint() {
             <td>
               <div class="actions" style="display:flex;gap:0.5rem;align-items:center;">
                 <button class="btn btn-ghost btn-sm" data-action="plan" data-id="${esc(u.id)}">Alterar plano</button>
-                <button class="action-btn danger" data-action="delete" data-id="${esc(u.id)}" data-name="${esc(u.name || u.email)}">Anonimizar</button>
+                <button class="action-btn danger" data-action="delete" data-id="${esc(u.id)}" data-name="${esc(u.name || u.email || '')}">Excluir</button>
               </div>
             </td>
           </tr>
@@ -224,6 +248,31 @@ function paint() {
 
   bindToolbar();
   bindPagination(totalPages);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Diagnóstico de planos (UP-01)
+// ─────────────────────────────────────────────────────────────
+function renderDiagnosticsHTML() {
+  if (state.plansSource === 'fallback') {
+    return `
+      <div class="plan-diag-banner">
+        <strong>Planos mostrados pelo modo de reserva do servidor.</strong>
+        A view <code>effective_plan</code> não respondeu (${esc(state.plansError || 'erro desconhecido')}).
+        Os planos exibidos são calculados de assinaturas/aluguéis ativos — a troca de
+        plano continua funcionando. Para corrigir definitivamente, aplique o arquivo
+        <code>sql/effective_plan.sql</code> no banco (Neon) e recarregue.
+      </div>`;
+  }
+  if (state.plansSource === 'none') {
+    return `
+      <div class="plan-diag-banner plan-diag-banner--error">
+        <strong>Não foi possível determinar os planos.</strong>
+        Falha ao consultar a view <code>effective_plan</code> e também o fallback.
+        Verifique o banco (Neon) e a aba <em>Planos</em> do painel.
+      </div>`;
+  }
+  return '';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -333,21 +382,19 @@ function updateCount(shown, total) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Modal de alteração de plano
+// Modal de alteração de plano (UP-01: UM modal só)
 // ─────────────────────────────────────────────────────────────
 function openPlanModal(userId) {
   const user = state.all.find((u) => u.id === userId);
   if (!user) { toast('Usuário não encontrado.', '⚠'); return; }
 
-  const planLabels = { free: 'Free', premium: 'Premium', anual: 'Anual' };
-
-  const cleanup = () => { closeAdminModal(); };
+  const currentLabel = PLAN_LABELS[user.plan] || user.plan || '—';
 
   openAdminModal(`
     <h3>Alterar plano</h3>
     <div class="plan-change-header">
       <strong>${esc(user.name || 'Sem nome')}</strong>
-      <span>${esc(user.email)}</span>
+      <span>${esc(user.email || '')}</span>
     </div>
     <div class="form-group">
       <label for="planSelect">Novo plano</label>
@@ -359,33 +406,35 @@ function openPlanModal(userId) {
     </div>
     <div id="planChangePreview" class="plan-change-preview" hidden>
       <span class="plan-change-preview__label">Plano atual:</span>
-      <span class="badge-mini">${esc(planLabels[user.plan] || user.plan || '—')}</span>
+      <span class="badge-mini">${esc(currentLabel)}</span>
       <span class="plan-change-preview__arrow">→</span>
       <span class="plan-change-preview__label">Novo:</span>
       <span class="badge-mini" id="planChangePreviewNew">—</span>
     </div>
     <p class="hint" style="color:var(--text-dim);font-size:0.8rem;margin-top:0.8rem;">
-      Ao mudar para <strong>Free</strong>, a assinatura ativa será cancelada.
-      Ao mudar para <strong>Premium</strong> ou <strong>Anual</strong>, será criada uma assinatura manual.
+      Ao mudar para <strong>Free</strong>, a assinatura ativa será cancelada (inclusive
+      a cobrança recorrente no Mercado Pago, se houver). Ao mudar para
+      <strong>Premium</strong> ou <strong>Anual</strong>, será criada uma assinatura manual
+      pelo período do plano comercial ativo (configurado na aba <em>Planos</em>).
     </p>
     <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
       <button class="btn btn-outline btn-sm" id="planCancel" type="button">Cancelar</button>
-      <button class="btn btn-primary btn-sm" id="planConfirm" type="button" disabled>Confirmar alteração</button>
+      <button class="btn btn-primary btn-sm" id="planConfirm" type="button" disabled>Salvar novo plano</button>
     </div>
   `);
 
   const select = document.getElementById('planSelect');
   const confirmBtn = document.getElementById('planConfirm');
+  const cancelBtn = document.getElementById('planCancel');
   const preview = document.getElementById('planChangePreview');
   const previewNew = document.getElementById('planChangePreviewNew');
 
   const updateConfirmState = () => {
-    const newPlan = select.value;
-    const changed = newPlan !== user.plan;
-    confirmBtn.disabled = !changed;
+    const changed = select.value !== user.plan;
+    confirmBtn.disabled = !changed || confirmBtn.dataset.busy === '1';
     if (changed) {
       preview.hidden = false;
-      previewNew.textContent = planLabels[newPlan] || newPlan;
+      previewNew.textContent = PLAN_LABELS[select.value] || select.value;
     } else {
       preview.hidden = true;
       previewNew.textContent = '—';
@@ -395,109 +444,61 @@ function openPlanModal(userId) {
   select.addEventListener('change', updateConfirmState);
   updateConfirmState();
 
-  document.getElementById('planCancel')?.addEventListener('click', cleanup);
+  cancelBtn?.addEventListener('click', closeAdminModal);
 
   confirmBtn.addEventListener('click', async () => {
     const newPlan = select.value;
-    if (newPlan === user.plan) return;
-    const proceed = await confirmPlanChange(user, newPlan);
-    if (proceed) await applyPlanChange(user, newPlan);
+    if (newPlan === user.plan || confirmBtn.dataset.busy === '1') return;
+
+    confirmBtn.dataset.busy = '1';
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Salvando…';
+    select.disabled = true;
+    cancelBtn.disabled = true;
+
+    try {
+      await apiFetch('users', { method: 'PATCH', body: { userId: user.id, plan: newPlan } });
+
+      // Atualização otimista: a linha muda na hora (UP-01)
+      const row = state.all.find((u) => u.id === user.id);
+      if (row) row.plan = newPlan;
+      closeAdminModal();
+      toast(`Plano de ${user.name || user.email} alterado para "${PLAN_LABELS[newPlan] || newPlan}".`, '✓');
+      paint();
+      silentRefresh(); // revalida em silêncio (sem flash)
+    } catch (err) {
+      closeAdminModal();
+      if (err && err.status === 401) { toast('Sessão expirada.', '⚠'); throw err; }
+      if (err && err.status === 403) { toast('Sem permissão para alterar planos.', '⚠'); return; }
+      toast(err?.message || 'Falha ao atualizar plano.', '⚠');
+    }
   });
 }
 
 // ─────────────────────────────────────────────────────────────
-// Confirmação final (correção: resolve mesmo se fechar externamente)
-// ─────────────────────────────────────────────────────────────
-function confirmPlanChange(user, newPlan) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const finish = (val) => { if (resolved) return; resolved = true; resolve(val); };
-
-    const planLabels = { free: 'Free', premium: 'Premium', anual: 'Anual' };
-
-    closeAdminModal();
-
-    openAdminModal(`
-      <h3>Confirmar alteração</h3>
-      <p style="color:var(--text-dim);margin-bottom:1rem;">Tem certeza que deseja alterar o plano deste usuário?</p>
-      <div class="plan-change-header">
-        <strong>${esc(user.name || 'Sem nome')}</strong>
-        <span>${esc(user.email)}</span>
-      </div>
-      <div class="plan-change-preview">
-        <span class="plan-change-preview__label">De:</span>
-        <span class="badge-mini">${esc(planLabels[user.plan] || user.plan || '—')}</span>
-        <span class="plan-change-preview__arrow">→</span>
-        <span class="plan-change-preview__label">Para:</span>
-        <span class="badge-mini" style="background:var(--accent);color:var(--bg);">${esc(planLabels[newPlan] || newPlan)}</span>
-      </div>
-      <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
-        <button class="btn btn-outline btn-sm" id="confirmCancel" type="button">Cancelar</button>
-        <button class="btn btn-primary btn-sm" id="confirmProceed" type="button">Sim, alterar</button>
-      </div>
-    `);
-
-    document.getElementById('confirmCancel')?.addEventListener('click', () => { closeAdminModal(); finish(false); });
-    document.getElementById('confirmProceed')?.addEventListener('click', () => { closeAdminModal(); finish(true); });
-
-    // Correção: se o modal for fechado por outro meio, resolve false
-    const observer = new MutationObserver(() => {
-      const modal = document.querySelector('.admin-modal-overlay');
-      if (!modal || !modal.classList.contains('open')) {
-        observer.disconnect();
-        finish(false);
-      }
-    });
-    const overlay = document.querySelector('.admin-modal-overlay');
-    if (overlay) observer.observe(overlay, { attributes: true, attributeFilter: ['class'] });
-  });
-}
-
-// ─────────────────────────────────────────────────────────────
-// Aplicar alteração
-// ─────────────────────────────────────────────────────────────
-async function applyPlanChange(user, plan) {
-  openAdminModal(`
-    <h3>Alterando plano…</h3>
-    <p style="color:var(--text-dim);">Aplicando <strong>${esc(plan)}</strong> para <strong>${esc(user.name || user.email)}</strong>.</p>
-    <div style="margin-top:1rem;"><div class="admin-loading">Processando…</div></div>
-  `);
-
-  try {
-    await apiFetch('users', { method: 'PATCH', body: { userId: user.id, plan } });
-    closeAdminModal();
-    toast(`Plano de ${user.name || user.email} alterado para "${plan}".`, '✓');
-    await renderUsersTable({ force: true });
-  } catch (err) {
-    closeAdminModal();
-    if (err && err.status === 401) { toast('Sessão expirada.', '⚠'); throw err; }
-    if (err && err.status === 403) { toast('Sem permissão para alterar planos.', '⚠'); return; }
-    toast(err?.message || 'Falha ao atualizar plano.', '⚠');
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Modal de anonimização
+// Modal de exclusão = anonimização (LGPD) — confirmação digitada
 // ─────────────────────────────────────────────────────────────
 function openDeleteModal(userId, userName) {
   openAdminModal(`
-    <h3 style="color:var(--danger);">Anonimizar usuário</h3>
+    <h3 style="color:var(--danger);">Excluir usuário</h3>
     <p style="color:var(--text-dim);margin-bottom:1.5rem;">
-      Esta ação desativa o acesso e anonimiza os dados pessoais.
-      O histórico financeiro será preservado para auditoria e obrigações legais.
+      O acesso será desativado e os dados pessoais serão <strong>anonimizados
+      permanentemente</strong> (nome, e-mail e senha são removidos; a assinatura
+      ativa é cancelada). O histórico financeiro é preservado para auditoria e
+      obrigações legais — por isso a exclusão é feita por anonimização.
       <strong>Esta ação não pode ser desfeita.</strong>
     </p>
     <div class="plan-change-header" style="border-left:3px solid var(--danger);">
-      <strong>${esc(userName)}</strong>
+      <strong>${esc(userName || 'Sem nome')}</strong>
       <span>ID: ${esc(userId)}</span>
     </div>
     <div class="form-group" style="margin-top:1.5rem;">
-      <label for="deleteConfirmInput" style="color:var(--text-dim);">Digite <strong style="color:var(--danger);">ANONIMIZAR</strong> para confirmar:</label>
-      <input type="text" id="deleteConfirmInput" autocomplete="off" placeholder="ANONIMIZAR">
+      <label for="deleteConfirmInput" style="color:var(--text-dim);">Digite <strong style="color:var(--danger);">EXCLUIR</strong> para confirmar:</label>
+      <input type="text" id="deleteConfirmInput" autocomplete="off" placeholder="EXCLUIR">
     </div>
     <div style="display:flex;gap:0.7rem;margin-top:1.5rem;justify-content:flex-end;">
       <button class="btn btn-outline btn-sm" id="deleteCancel" type="button">Cancelar</button>
-      <button class="btn btn-primary btn-sm" id="deleteProceed" type="button" disabled style="background:var(--danger);color:#fff;">Anonimizar usuário</button>
+      <button class="btn btn-primary btn-sm" id="deleteProceed" type="button" disabled style="background:var(--danger);color:#fff;">Excluir usuário</button>
     </div>
   `);
 
@@ -506,27 +507,37 @@ function openDeleteModal(userId, userName) {
   const cancelBtn = document.getElementById('deleteCancel');
 
   input.addEventListener('input', () => {
-    proceedBtn.disabled = input.value.trim().toUpperCase() !== 'ANONIMIZAR';
+    proceedBtn.disabled = input.value.trim().toUpperCase() !== 'EXCLUIR';
   });
 
   cancelBtn.addEventListener('click', closeAdminModal);
 
   proceedBtn.addEventListener('click', async () => {
-    if (input.value.trim().toUpperCase() !== 'ANONIMIZAR') return;
+    if (input.value.trim().toUpperCase() !== 'EXCLUIR' || proceedBtn.dataset.busy === '1') return;
 
+    proceedBtn.dataset.busy = '1';
     proceedBtn.disabled = true;
     proceedBtn.textContent = 'Anonimizando…';
+    input.disabled = true;
+    cancelBtn.disabled = true;
 
     try {
       await apiFetch('users', { method: 'DELETE', query: { id: userId } });
+
+      // Atualização otimista: some da lista na hora (UP-01)
+      state.all = state.all.filter((u) => u.id !== userId);
       closeAdminModal();
-      toast(`Usuário "${userName}" anonimizado.`, '🗑️');
-      await renderUsersTable({ force: true });
+      toast(`Usuário "${userName}" excluído (anonimizado).`, '🗑️');
+      paint();
+      silentRefresh();
     } catch (err) {
       closeAdminModal();
       if (err && err.status === 401) { toast('Sessão expirada.', '⚠'); throw err; }
-      if (err && err.status === 403) { toast('Sem permissão para anonimizar.', '⚠'); return; }
-      toast(err?.message || 'Falha ao anonimizar usuário.', '⚠');
+      if (err && err.status === 403) {
+        toast(err?.message || 'Sem permissão para excluir usuários.', '⚠');
+        return;
+      }
+      toast(err?.message || 'Falha ao excluir usuário.', '⚠');
     }
   });
 }
