@@ -1,12 +1,8 @@
 /* ============================================================
-   ADMIN.CSS — Estilos dedicados ao Painel Administrativo (v10.3)
-   v10.3: + MP-01 miniplayer do painel (seção .amp-* no fim)
+   ADMIN.CSS — Estilos dedicados ao Painel Administrativo (v10.4)
+   v10.4: MP-03 player de teste (sp-player) removido — só a pílula
+   .amp-* (MP-02, estilo Spotify) resta no painel.
    ============================================================ */
-
-:root {
-  --sp-player-height: 80px;
-  --sp-player-height-mobile: 64px;
-}
 
 #adminSite {
   background: #0b0a0c;
@@ -46,7 +42,7 @@
 /* ─── Área Principal ────────────────────────────────────── */
 .admin-main {
   padding: 2rem 3rem;
-  padding-bottom: calc(var(--sp-player-height) + 16px);
+  padding-bottom: 110px; /* espaço para a pílula do miniplayer */
   background: linear-gradient(135deg, rgba(11,10,12,0.95), rgba(11,10,12,0.8));
   overflow-y: auto;
   height: 100vh;
@@ -344,211 +340,11 @@
   padding: 2rem;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MINIPLAYER — estilo Spotify (v10.2)
-   ═══════════════════════════════════════════════════════════ */
-.sp-player {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 9999;
-  height: var(--sp-player-height);
-  background: #181818;
-  border-top: 1px solid #282828;
-  color: #fff;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-.sp-player[hidden] { display: none; }
-.sp-player__inner {
-  display: grid;
-  grid-template-columns: 1fr 2fr 1fr;
-  align-items: center;
-  gap: 1rem;
-  height: 100%;
-  max-width: 1600px;
-  margin: 0 auto;
-  padding: 0 1.25rem;
-}
-
-/* Esquerda */
-.sp-left { display: flex; align-items: center; gap: 0.875rem; min-width: 0; }
-.sp-cover {
-  width: 56px; height: 56px;
-  border-radius: 4px; flex: none;
-  background: #282828;
-  color: #727272;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,.4);
-  overflow: hidden;
-}
-.sp-cover img { width: 100%; height: 100%; object-fit: cover; }
-.sp-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.sp-title {
-  font-size: 0.9rem; font-weight: 500; color: #fff;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.sp-sub { font-size: 0.75rem; color: #b3b3b3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Centro */
-.sp-center {
-  display: flex; flex-direction: column;
-  align-items: center; gap: 0.5rem;
-  max-width: 722px; margin: 0 auto; width: 100%;
-}
-.sp-controls { display: flex; align-items: center; gap: 0.5rem; }
-
-/* Botões */
-.sp-btn {
-  background: transparent;
-  border: none;
-  color: #b3b3b3;
-  cursor: pointer;
-  padding: 6px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, transform 0.1s, background 0.15s;
-  min-width: 32px;
-  min-height: 32px;
-}
-.sp-btn:hover { color: #fff; }
-.sp-btn:disabled { color: #535353; cursor: not-allowed; }
-.sp-btn--ctrl { width: 32px; height: 32px; }
-.sp-btn--ctrl:hover { transform: scale(1.06); }
-.sp-btn--play { width: 36px; height: 36px; background: #fff; color: #000; box-shadow: 0 2px 4px rgba(0,0,0,.3); }
-.sp-btn--play:hover { transform: scale(1.08); }
-.sp-btn--icon { width: 28px; height: 28px; color: #b3b3b3; }
-.sp-btn--icon:hover { color: #fff; background: rgba(255,255,255,.07); }
-.sp-btn--ghost {
-  width: 28px; height: 28px;
-  font-size: 0.8rem; font-weight: 700;
-  color: #b3b3b3;
-  border: 1px solid #535353;
-  border-radius: 6px;
-  padding: 0;
-  letter-spacing: 0.5px;
-}
-.sp-btn--ghost:hover { color: #fff; border-color: #fff; }
-.sp-btn--ghost.is-active {
-  background: var(--accent, #d4af37);
-  border-color: var(--accent, #d4af37);
-  color: #121212;
-}
-
-/* Progresso */
-.sp-progress-wrap { display: flex; align-items: center; gap: 0.6rem; width: 100%; }
-.sp-time { font-size: 0.7rem; color: #b3b3b3; min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
-.sp-progress { position: relative; flex: 1; height: 16px; display: flex; align-items: center; cursor: pointer; }
-.sp-progress__track {
-  position: absolute; left: 0; right: 0; top: 50%;
-  transform: translateY(-50%);
-  height: 4px; background: #535353;
-  border-radius: 2px; overflow: hidden;
-}
-.sp-progress__fill {
-  height: 100%; width: 0;
-  background: #fff; border-radius: 2px;
-  transition: background 0.15s;
-}
-.sp-progress__seek {
-  position: absolute; inset: 0; width: 100%;
-  margin: 0; padding: 0;
-  appearance: none; -webkit-appearance: none;
-  background: transparent; cursor: pointer;
-}
-.sp-progress__thumb {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 12px; height: 12px;
-  background: #fff;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity 0.15s;
-  pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.2);
-}
-.sp-progress:hover .sp-progress__fill,
-.sp-progress:focus-within .sp-progress__fill { background: var(--accent, #d4af37); }
-.sp-progress:hover .sp-progress__thumb,
-.sp-progress:focus-within .sp-progress__thumb {
-  opacity: 1;
-  background: var(--accent, #d4af37);
-  box-shadow: 0 0 0 2px rgba(212, 175, 55, 0.4);
-}
-
-/* Direita */
-.sp-right { display: flex; align-items: center; gap: 0.35rem; justify-content: flex-end; min-width: 180px; }
-.sp-volume { position: relative; width: 96px; height: 16px; display: flex; align-items: center; cursor: pointer; }
-.sp-volume__track {
-  position: absolute; left: 0; right: 0; top: 50%;
-  transform: translateY(-50%);
-  height: 4px; background: #535353;
-  border-radius: 2px; overflow: hidden;
-}
-.sp-volume__fill { height: 100%; width: 80%; background: #fff; border-radius: 2px; }
-.sp-volume__seek {
-  position: absolute; inset: 0; width: 100%;
-  margin: 0; padding: 0;
-  appearance: none; -webkit-appearance: none;
-  background: transparent; cursor: pointer;
-}
-.sp-volume:hover .sp-volume__fill,
-.sp-volume:focus-within .sp-volume__fill { background: var(--accent, #d4af37); }
-
-/* Acessibilidade — foco por teclado */
-.sp-btn:focus-visible,
+/* Acessibilidade — foco por teclado (chips/toggle) */
 .album-toggle:focus-visible,
 .audio-chip:focus-visible {
   outline: 2px solid var(--accent, #d4af37);
   outline-offset: 2px;
-}
-.sp-progress:focus-visible,
-.sp-volume:focus-visible {
-  outline: 2px solid var(--accent, #d4af37);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-/* Responsivo do player */
-@media (max-width: 960px) {
-  .sp-player__inner {
-    grid-template-columns: auto 1fr auto;
-    gap: 0.75rem;
-  }
-  .sp-center {
-    grid-column: 1 / -1;
-    order: 2;
-    max-width: none;
-    margin-top: -4px;
-  }
-  .sp-right {
-    display: flex;
-    flex: none;
-    min-width: auto;
-    gap: 0.25rem;
-  }
-  .sp-volume { display: none; }
-  .sp-btn--icon[title*="URL"] { display: none; }
-}
-@media (max-width: 560px) {
-  .sp-player { height: var(--sp-player-height-mobile); }
-  .sp-player__inner {
-    grid-template-columns: auto 1fr;
-    padding: 0 0.75rem;
-    gap: 0.5rem;
-  }
-  .sp-left { gap: 0.6rem; }
-  .sp-cover { width: 48px; height: 48px; }
-  .sp-title { font-size: 0.85rem; }
-  .sp-btn--play { width: 32px; height: 32px; }
-  .sp-btn--ctrl { width: 28px; height: 28px; }
-  .sp-btn--ghost { width: 24px; height: 24px; font-size: 0.7rem; }
-  .sp-right { display: flex; gap: 0.25rem; }
-  .sp-btn--icon[title*="URL"] { display: none; }
-  .sp-btn--icon[title*="Mudo"] { display: none; }
-  .admin-main { padding-bottom: calc(var(--sp-player-height-mobile) + 48px); }
 }
 
 /* ─── Chips de áudio + linha tocando ────────────────────── */
@@ -675,11 +471,6 @@
   -webkit-font-smoothing: antialiased;
   overflow: visible;
 }
-/* Recua quando a barra de teste do editor estiver visível */
-#adminSite:has(.sp-player:not([hidden])) .amp-root {
-  bottom: calc(var(--sp-player-height) + 18px);
-}
-
 /* Botões estilo Spotify: cinza → branco no hover; ativo verde + ponto */
 .amp-btn {
   appearance: none;
@@ -972,4 +763,4 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .amp-btn, .amp-progress__thumb, .amp-badge, .amp-reopen { transition: none; }
-}
+     }
