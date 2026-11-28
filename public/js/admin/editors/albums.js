@@ -27,6 +27,10 @@
    MP-03 (2026-11-28): o player de teste (sp-player) foi REMOVIDO.
    Os chips P/F e o botão ▶ Ouvir tocam no miniplayer persistente
    (AdminMiniPlayer). O modal de faixa usa áudio próprio (sem barra).
+   ============================================================
+   UP-04 (2026-11-28) — discografia funcional:
+   - Duração derivada de durationSeconds (antes sempre "—").
+   - Preço exibido vem de rental_products (backend anexa priceCents).
    ============================================================ */
 
 import { apiFetch } from '../api.js';
@@ -305,7 +309,14 @@ async function loadAlbums() {
   }
 }
 
-// A-07: normaliza snake_case/camelCase e ids na ingestão
+// A-07 + UP-04: normaliza snake_case/camelCase, ids e DERIVA a duração
+// (o backend guarda durationSeconds; a UI usa mm:ss — antes mostrava "—")
+function secondsToDuration(s) {
+  const n = Number(s);
+  if (!Number.isInteger(n) || n <= 0) return '';
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+}
+
 function normalizeTrack(t) {
   if (!t || typeof t !== 'object') return t;
   return {
@@ -315,7 +326,10 @@ function normalizeTrack(t) {
     fullPath:    t.fullPath    ?? t.full_path    ?? null,
     streamKey:   t.streamKey   ?? t.stream_key   ?? null,
     priceCents:  t.priceCents  ?? t.price_cents  ?? 0,
-    trackNumber: t.trackNumber ?? t.track_index ?? 0
+    trackNumber: t.trackNumber ?? t.track_index ?? 0,
+    duration: (typeof t.duration === 'string' && t.duration.trim())
+      ? t.duration
+      : secondsToDuration(t.durationSeconds ?? t.duration_seconds)
   };
 }
 
@@ -594,8 +608,8 @@ async function downloadTrack(trackId, titleHint) {
       method: 'GET', query: { id: String(trackId), type: 'full' }
     });
     if (!res?.ok || !res.url) throw new Error(res?.error || 'Falha ao gerar URL.');
-    triggerDownload(res.url, res.filename || `${titleHint || trackId}.mp3`);
-    toast(`Download iniciado: ${titleHint || trackId}`, '⬇');
+    const ok = await triggerDownload(res.url, res.filename || `${titleHint || trackId}.mp3`); // UP-04: blob
+    if (ok) toast(`Download iniciado: ${titleHint || trackId}`, '⬇');
   } catch (err) {
     toast(err?.message || 'Falha ao baixar.', '⚠');
   } finally {
@@ -630,8 +644,8 @@ async function downloadAlbum(albumId) {
     toast(`Disparando ${valid.length} download(s)...`, '⬇');
     let failures = 0;
     for (let i = 0; i < valid.length; i++) {
-      try { triggerDownload(valid[i].url, valid[i].filename || `${valid[i].title}.mp3`); }
-      catch { failures++; }
+      const ok = await triggerDownload(valid[i].url, valid[i].filename || `${valid[i].title}.mp3`);
+      if (!ok) failures++;
       await sleep(600);
     }
 
@@ -642,20 +656,36 @@ async function downloadAlbum(albumId) {
   }
 }
 
-function triggerDownload(url, filename) {
+// UP-04: download via blob — o atributo `download` do <a> é IGNORADO pelo
+// navegador quando a URL é cross-origin (URLs assinadas do R2), e o clique
+// NAVIGAVA para o áudio em vez de salvar o arquivo. Com blob o download
+// funciona para qualquer destino permitido.
+async function triggerDownload(url, filename) {
   if (!isAllowedMediaUrl(url)) {
     toast('URL de download não autorizada.', '⚠');
-    return;
+    return false;
   }
 
-  const a = document.createElement('a');
-  a.href = url;
-  if (filename) a.download = filename;
-  a.rel = 'noopener noreferrer';
-  a.style.display = 'none';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => a.remove(), 1000);
+  let objUrl = null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}.`);
+    const blob = await res.blob();
+    objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = filename || 'arquivo';
+    a.rel = 'noopener noreferrer';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(objUrl); objUrl = null; }, 1500);
+    return true;
+  } catch (err) {
+    toast(`Não foi possível baixar: ${err?.message || 'erro'}`, '⚠');
+    if (objUrl) URL.revokeObjectURL(objUrl);
+    return false;
+  }
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -1030,7 +1060,11 @@ function openTrackModal(albumId, track) {
         <input type="text" id="trackDuration" value="${escAttr(t.duration || '')}" placeholder="03:45">
         <span class="hint" data-detected-duration></span>
       </div>
-      <div class="form-group"><label>Preço (centavos, máx ${MAX_TRACK_PRICE_CENTS})</label><input type="number" id="trackPrice" value="${escAttr(String(t.priceCents || 0))}"></div>
+      <div class="form-group">
+        <label>Preço do aluguel (centavos, 0 desativa)</label>
+        <input type="number" id="trackPrice" value="${escAttr(String(t.priceCents ?? 0))}">
+        <span class="hint" style="color:var(--text-dim);font-size:0.78rem;">UP-04: o preço cria/atualiza o produto de aluguel (72h por padrão) que o site cobra. Salve a faixa para aplicar.</span>
+      </div>
     </div>
     <div class="form-group">
       <label style="display:flex;align-items:center;gap:0.5rem;"><input type="checkbox" id="trackPublished" ${t.status === 'PUBLISHED' ? 'checked' : ''}> Publicar faixa</label>
