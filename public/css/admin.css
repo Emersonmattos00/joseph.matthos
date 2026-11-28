@@ -885,3 +885,22 @@
 @media (prefers-reduced-motion: reduce) {
   .users-pagination__btn { transition: none; }
 }
+
+/* UP-02: toggle de anonimizados + badge */
+.users-anon-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-dim, #8a8a8f);
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.users-anon-toggle input { accent-color: var(--accent, #d4af37); cursor: pointer; }
+.badge-mini.badge-anonymized {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim, #8a8a8f);
+  border: 1px dashed var(--border, rgba(255,255,255,0.2));
+}
+tr[data-anonymized="1"] td { opacity: 0.65; }
