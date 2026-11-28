@@ -603,6 +603,24 @@ function bindGlobalActions() {
           throw new Error('O arquivo deve conter um objeto de conteúdo.');
         }
         const nextContent = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONTENT)), data);
+
+        // BK-01: a importação SOBRESCREVE o conteúdo editorial do servidor
+        // (PUT com a versão carregada) — exigir confirmação explícita e
+        // avisar quando houver alterações locais não salvas (elas serão
+        // descartadas pelo markClean() logo após o save).
+        if (AdminState.dirty) {
+          const ok = window.confirm(
+            'Há alterações LOCAIS não salvas. Importar vai descartá-las e sobrescrever o conteúdo do site no servidor.\n\n' +
+            `Arquivo: ${f.name} (${(f.size / 1024).toFixed(1)} KB)\nContinuar?`
+          );
+          if (!ok) return;
+        } else {
+          const ok = window.confirm(
+            `Importar "${f.name}"? Isso sobrescreve o conteúdo editorial do site no servidor (versão atual: ${AdminState.contentVersion}).`
+          );
+          if (!ok) return;
+        }
+
         const saved = await saveContent(nextContent, { baseVersion: AdminState.contentVersion });
         AdminState.content = nextContent;
         AdminState.contentVersion = saved.version;
