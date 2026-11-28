@@ -691,6 +691,53 @@ function resolveDbSql() {
   }
 }
 
+// UP-02: código de plano a partir de nome + intervalo (sem acentos;
+// nome free/grátis vence o intervalo). Mesma regra usada pelo painel.
+function normalizePlanCode(name, intervalUnit) {
+  const strip = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const n = strip(name);
+  const u = strip(intervalUnit);
+  if (n.includes('free') || n.includes('gratis')) return 'free';
+  if (n.includes('anual') || u === 'year') return 'anual';
+  if (n.includes('premium') || u === 'month') return 'premium';
+  return null;
+}
+
+// UP-02: plano efetivo de UM usuário a partir das tabelas (sem a view).
+// subRows: status, current_period_end, plan_name, interval_unit (JOIN plans).
+// rentRows: status, expires_at. Aceita Date ou string ISO nos tempos.
+function computePlanFromRows(subRows, rentRows) {
+  const toMs = (v) => {
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === 'string' || typeof v === 'number') {
+      const t = Date.parse(v);
+      return Number.isFinite(t) ? t : NaN;
+    }
+    return NaN;
+  };
+  const now = Date.now();
+
+  let best = null;
+  for (const s of subRows || []) {
+    if (String(s.status || '') !== 'ACTIVE') continue;
+    const end = toMs(s.current_period_end);
+    if (!Number.isFinite(end) || end <= now) continue;
+    if (!best || end > best.end) {
+      best = { end, planName: String(s.plan_name || ''), intervalUnit: String(s.interval_unit || '') };
+    }
+  }
+  if (best) {
+    const code = normalizePlanCode(best.planName, best.intervalUnit);
+    if (code) return code;
+  }
+  for (const r of rentRows || []) {
+    if (String(r.status || '') !== 'ACTIVE') continue;
+    const exp = toMs(r.expires_at);
+    if (Number.isFinite(exp) && exp > now) return 'premium';
+  }
+  return 'free';
+}
+
 async function getPlanForUserDetailed(userId) {
   if (!userId) {
     return { plan: 'free', degraded: true, reason: 'no_user_id' };
@@ -732,9 +779,27 @@ async function getPlanForUserDetailed(userId) {
       }
     }
   } catch (err) {
-    degraded = true;
-    reason = 'query_error';
-    console.warn('[_lib] getPlanForUserDetailed query falhou:', err.message);
+    // UP-02: a view effective_plan falhou (ausente/quebrada) — recalcula o
+    // plano direto das tabelas para o usuário NÃO voltar a 'free' degradado.
+    try {
+      const sql = resolveDbSql();
+      if (!sql) throw new Error('DB_SQL_UNAVAILABLE');
+      const subRes = await sql`SELECT s.status, s.current_period_end, p.name AS plan_name, p.interval_unit
+        FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = ${userId}`;
+      const rentRes = await sql`SELECT status, expires_at FROM rentals WHERE user_id = ${userId}`;
+      const subs = Array.isArray(subRes) ? subRes : (subRes?.rows || []);
+      const rents = Array.isArray(rentRes) ? rentRes : (rentRes?.rows || []);
+      const fallbackPlan = computePlanFromRows(subs, rents);
+      if (!VALID_PLANS.has(fallbackPlan)) throw new Error('fallback_invalid_plan');
+      plan = fallbackPlan;
+      degraded = false;
+      reason = 'fallback_no_view';
+    } catch (err2) {
+      degraded = true;
+      reason = 'query_error';
+      console.warn('[_lib] getPlanForUserDetailed query falhou:', err.message, '| fallback:', err2.message);
+    }
   }
 
   if (redis && !degraded) {
@@ -910,6 +975,7 @@ module.exports = {
   checkAndIncrement, resetBucket, hashRateLimitKey,
   audit,
   getPlanForUser, getPlanForUserDetailed, invalidatePlanCache,
+  normalizePlanCode, computePlanFromRows,
   checkOrigin, validatedOrigin,
   signHmac, verifyHmac,
   generateScryptHash, verifyScrypt, timingSafeEq,
