@@ -1,5 +1,5 @@
 /* ============================================================
-   js/admin/miniplayer.js — v1.1 (MP-01 + MP-02)
+   js/admin/miniplayer.js — v1.2 (MP-01 + MP-02 + MP-03)
    ------------------------------------------------------------
    Miniplayer persistente do painel: pílula fixa no rodapé,
    fila do álbum, shuffle/repeat, badge PREVIEW/COMPLETO,
@@ -11,10 +11,16 @@
    progresso, prev reinicia a faixa atual (não salta para o
    fim) e next manual circula a fila.
 
-   Integração (sem tocar no player de teste interno do editor):
-   - albums.js dispara 'admin-player:start' → miniplayer pausa;
-   - este módulo dispara 'admin-miniplayer:start' → editor pausa
-     o player interno (listener adicionado pelo MP-01).
+   MP-03: player único do painel — o listener do player de
+   teste foi removido; o módulo emite "admin-miniplayer:state"
+   (play/pause/fim) para o editor repintar os chips P/F/▶ e
+   expõe current() (faixa/álbum/versão/pausado) para os binds.
+
+   Integração (MP-03: player único no painel):
+   - este módulo dispara 'admin-miniplayer:start' (o modal de
+     faixas para o próprio áudio de teste) e
+     'admin-miniplayer:state' (o editor repinta os chips P/F/▶);
+   - albums.js não tem mais player próprio.
    - Versão preview usa a URL pública do CDN; versão completa
      pede URL assinada (download-url) por faixa, com o mesmo
      fallback do DL-01 (fullPath || streamKey).
@@ -22,7 +28,7 @@
    API pública:
      initAdminMiniPlayer()      — monta a pílula (idempotente)
      AdminMiniPlayer.setQueue(tracks, opts) — { startId?, version? }
-     AdminMiniPlayer.toggle() / pause() / close() / isActive()
+     AdminMiniPlayer.toggle() / pause() / close() / isActive() / current()
    ============================================================ */
 
 import { apiFetch } from './api.js';
@@ -118,6 +124,7 @@ const MP = {
   muted: false,
   seq: 0,              // guarda anti-corrida (padrão A-05)
   errors: 0,
+  activeVersion: null, // versão efetivamente tocando (MP-03: current())
   el: null,            // <audio>
   ui: null,            // refs da pílula
   queueOpen: false
@@ -125,8 +132,19 @@ const MP = {
 
 export const AdminMiniPlayer = {
   setQueue, toggle, pause, close, isActive, setVersion,
+  // MP-03: faixa atual para os binds do editor (chips P/F/▶)
+  current: () => {
+    const t = currentTrack();
+    return t ? { id: t.id, albumId: t.albumId, version: MP.activeVersion || MP.version,
+                 paused: !MP.el || MP.el.paused } : null;
+  },
   getState: () => ({ active: isActive(), pos: MP.pos, version: MP.version, size: MP.queue.length })
 };
+
+// MP-03: editor e modal escutam para repintar/parar sons concorrentes
+function dispatchState() {
+  try { document.dispatchEvent(new CustomEvent('admin-miniplayer:state')); } catch {}
+}
 
 // ─────────────────────────────────────────────────────────────
 // Funções puras (exportadas para teste)
@@ -280,7 +298,8 @@ export function initAdminMiniPlayer() {
     queueCount: root.querySelector('[data-amp="queueCount"]'),
     volume: root.querySelector('[data-amp="volume"]'),
     muteBtn: root.querySelector('[data-amp="mute"]'),
-    volwrap: root.querySelector('[data-amp="volwrap"]')
+    volwrap: root.querySelector('[data-amp="volwrap"]'),
+    close: root.querySelector('[data-amp="close"]')
   };
 
   // Ícones Spotify
@@ -296,9 +315,6 @@ export function initAdminMiniPlayer() {
   bindUi();
   bindAudio();
   bindKeyboard();
-
-  // Exclusividade com o player de teste do editor
-  document.addEventListener('admin-player:start', () => { try { pause(); } catch {} });
 
   audio.volume = MP.muted ? 0 : MP.volume;
   paintAll();
@@ -372,8 +388,8 @@ function bindAudio() {
   el.addEventListener('durationchange', paintProgress);
   el.addEventListener('ended', onEnded);
   el.addEventListener('error', () => onTrackError('Falha ao carregar o áudio.'));
-  el.addEventListener('play', () => { paintAll(); paintQueue(); setMediaSessionState(); });
-  el.addEventListener('pause', () => { paintAll(); paintQueue(); });
+  el.addEventListener('play', () => { paintAll(); paintQueue(); setMediaSessionState(); dispatchState(); });
+  el.addEventListener('pause', () => { paintAll(); paintQueue(); dispatchState(); });
 }
 
 function bindKeyboard() {
@@ -492,6 +508,7 @@ async function playCurrent() {
 
   try {
     paintVersionBadge(version);
+    MP.activeVersion = version;
     MP.el.src = url;
     MP.el.volume = MP.muted ? 0 : MP.volume;
     MP.el.load();
@@ -519,11 +536,15 @@ function onTrackError(msg) {
 
 function onEnded() {
   if (MP.repeat === 'one' && MP.el) {
-    try { MP.el.currentTime = 0; MP.el.play(); } catch {}
+    try {
+      MP.el.currentTime = 0;
+      const p = MP.el.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {}); // autoplay pode bloquear
+    } catch {}
     return;
   }
   const next = computeNext(MP.order, MP.pos, MP.repeat);
-  if (next < 0) { pause(); paintAll(); return; }
+  if (next < 0) { pause(); paintAll(); dispatchState(); return; }
   MP.pos = next;
   playCurrent();
 }
@@ -567,8 +588,10 @@ function close() {
   try { MP.el?.removeAttribute('src'); MP.el?.load(); } catch {}
   MP.queue = []; MP.order = []; MP.pos = -1; MP.queueOpen = false;
   MP.visible = false;
+  MP.activeVersion = null;
   if (MP.ui) MP.ui.root.hidden = true;
   paintQueue();
+  dispatchState();
 }
 
 function isActive() {
@@ -599,6 +622,16 @@ function paintAll() {
   u.shuffle.setAttribute('aria-pressed', String(MP.shuffle));
   setRepeatIcon();
   paintVolume();
+}
+
+// Aplica volume/mudo no elemento <audio> (MP-02: faltava definição — mute e
+// volume lançavam ReferenceError no painel real)
+function applyVolume() {
+  if (!MP.el) return;
+  try {
+    MP.el.volume = MP.muted ? 0 : MP.volume;
+    MP.el.muted = MP.muted;
+  } catch { /* elemento sem fonte carregada */ }
 }
 
 function paintVolume() {
@@ -705,4 +738,4 @@ function updateMediaSession(track, version) {
 function setMediaSessionState() {
   if (!('mediaSession' in navigator)) return;
   try { navigator.mediaSession.playbackState = MP.el && !MP.el.paused ? 'playing' : 'paused'; } catch {}
-}
+      }
