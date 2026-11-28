@@ -1,5 +1,5 @@
 /* ============================================================
-   js/admin/editors/albums.js — v10.3 (Audit-Ready + patches A-01..A-26)
+   js/admin/editors/albums.js — v10.4 (Audit-Ready + MP-03: player único)
    ============================================================
    v10 + auditoria completa:
    1. Validação de domínio robusta (subdomínio legítimo)
@@ -23,12 +23,16 @@
    A-16 assinatura AAC · A-17 reset versions · A-18 capa sem handler inline
    A-19 lookup por dataset · A-20 guarda de remount · A-22 sem rethrow 401
    A-24 probe com timeout · A-26 código morto removido
+   ============================================================
+   MP-03 (2026-11-28): o player de teste (sp-player) foi REMOVIDO.
+   Os chips P/F e o botão ▶ Ouvir tocam no miniplayer persistente
+   (AdminMiniPlayer). O modal de faixa usa áudio próprio (sem barra).
    ============================================================ */
 
 import { apiFetch } from '../api.js';
 import { toast } from '../ui/toast.js';
 import { esc, escAttr } from '../ui/dom.js';
-import { AdminMiniPlayer } from '../miniplayer.js'; // MP-01
+import { AdminMiniPlayer } from '../miniplayer.js'; // MP-01/MP-03/MP-03/MP-03/MP-03
 import { openAdminModal, closeAdminModal } from '../ui/modal.js';
 import { uploadAudioPreview, uploadAudioFull } from '../uploads.js';
 
@@ -70,37 +74,6 @@ const _trackOrderQueue = new Map(); // albumId -> Promise chain
 function nextOpId() {
   return `op-${++_opCounter}-${Math.random().toString(36).slice(2, 8)}`;
 }
-
-// ─────────────────────────────────────────────────────────────
-// Player singleton
-// ─────────────────────────────────────────────────────────────
-const Player = {
-  el: null,
-  bar: null,
-  current: null,
-  versions: { preview: false, full: false },
-  seq: 0,
-  _activeSeq: 0, // filtra eventos de operações antigas
-  seeking: false,
-  stallTimer: null,
-  pendingRestore: null,
-  state: 'idle' // idle | loading | playing | paused | error | ended
-};
-
-// ─────────────────────────────────────────────────────────────
-// Ícones SVG (Spotify)
-// ─────────────────────────────────────────────────────────────
-const ICON = {
-  play:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/></svg>',
-  pause: '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2.7 1a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7H2.7zm8 0a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7h-2.6z"/></svg>',
-  prev:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M13.151.922a.75.75 0 0 1 .112.948l-.112.13-3.872 3.872 3.872 3.871a.75.75 0 0 1-.948 1.168l-.132-.109L8.063 6.93a.75.75 0 0 1-.12-.94l.12-.13 3.87-3.87A.75.75 0 0 1 13.15.922zM3.75 1a.75.75 0 0 1 .14.013l.11.041A.75.75 0 0 1 4.5 1.75v12.5a.75.75 0 0 1-1.5 0V1.75a.75.75 0 0 1 .75-.75z"/></svg>',
-  next:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2.838.922a.75.75 0 0 0-.111.948l.111.13 3.872 3.872-3.872 3.871a.75.75 0 0 0 .949 1.168l.132-.109 3.871-3.87a.75.75 0 0 0 .12-.94l-.12-.13-3.87-3.87a.75.75 0 0 0-1.082-.07zM12.25 1a.75.75 0 0 0-.14.013l-.11.041A.75.75 0 0 0 11.5 1.75v12.5a.75.75 0 0 0 1.5 0V1.75a.75.75 0 0 0-.75-.75z"/></svg>',
-  vol:   '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.925 4.072a2.142 2.142 0 0 0-.783 2.929 2.142 2.142 0 0 0 .783.783L8.393 11.5v-7L2.816 4.922zM12.32 3.12a.75.75 0 0 1 1.06 0 6.726 6.726 0 0 1 1.973 4.773 6.726 6.726 0 0 1-1.973 4.773.75.75 0 1 1-1.061-1.06 5.226 5.226 0 0 0 1.534-3.712 5.226 5.226 0 0 0-1.534-3.713.75.75 0 0 1 0-1.061z"/></svg>',
-  mute:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M13.86 5.47a.75.75 0 0 0-1.061 0l-1.47 1.47-1.47-1.47A.75.75 0 0 0 8.8 6.53L10.269 8l-1.47 1.47a.75.75 0 1 0 1.06 1.06l1.47-1.47 1.47 1.47a.75.75 0 0 0 1.06-1.06L12.39 8l1.47-1.47a.75.75 0 0 0 0-1.06z"/><path d="M10.116 1.527a.75.75 0 0 0-.375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 1.125.65.75.75 0 0 0 .375-.65zM7.616 6.5v7l-4.575-2.62a2.142 2.142 0 0 1-.783-2.929 2.142 2.142 0 0 1 .783-.783L7.616 6.5z"/></svg>',
-  close: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M2.47 2.47a.75.75 0 0 1 1.06 0L8 6.94l4.47-4.47a.75.75 0 1 1 1.06 1.06L9.06 8l4.47 4.47a.75.75 0 1 1-1.06 1.06L8 9.06l-4.47 4.47a.75.75 0 0 1-1.06-1.06L6.94 8 2.47 3.53a.75.75 0 0 1 0-1.06z"/></svg>',
-  link:  '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M7.05 3.584a5.2 5.2 0 0 1 7.34 0 5.22 5.22 0 0 1 0 7.371l-2.378 2.378a5.21 5.21 0 0 1-7.371 0 .75.75 0 1 1 1.06-1.06 3.71 3.71 0 0 0 5.25 0l2.38-2.38a3.72 3.72 0 0 0 0-5.25 3.7 3.7 0 0 0-5.23 0L6.94 5.794a.75.75 0 0 1-1.06-1.06l1.17-1.15zm-4.259 1.434a5.213 5.213 0 0 1 7.37 0 .75.75 0 1 1-1.06 1.06 3.71 3.71 0 0 0-5.25 0L1.47 8.456a3.72 3.72 0 0 0 0 5.25 3.7 3.7 0 0 0 5.23 0L8.86 11.55a.75.75 0 1 1 1.06 1.06l-2.17 2.17a5.2 5.2 0 0 1-7.34 0 5.22 5.22 0 0 1 0-7.371L2.79 5.02z"/></svg>',
-  stop:  '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M2.5 1a.5.5 0 0 0-.5.5v13a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-13a.5.5 0 0 0-.5-.5h-11z"/></svg>'
-};
 
 // ─────────────────────────────────────────────────────────────
 // Utilitários de validação
@@ -445,9 +418,8 @@ function bindAlbumButtons(scope) {
         if (State.pendingOperations.get(`album-${albumId}`) !== opId) return;
         State.pendingOperations.delete(`album-${albumId}`);
 
-        if (Player.current && String(Player.current.albumId) === String(albumId)) {
-          stopPlayback();
-        }
+        const mpAlbum = AdminMiniPlayer.current(); // MP-03
+        if (mpAlbum && String(mpAlbum.albumId) === String(albumId)) AdminMiniPlayer.close();
         State.expandedAlbumIds.delete(albumId);
         State.tracks.delete(albumId);
         State.tracksReqId.delete(albumId);
@@ -490,29 +462,23 @@ function bindAlbumButtons(scope) {
 // Bind — botões de faixa (P/F verificam versão atual)
 // ─────────────────────────────────────────────────────────────
 function bindTrackButtons(scope) {
-  scope.querySelectorAll('[data-track-play]').forEach((btn) => {
+  scope.querySelectorAll('[data-track-play]').forEach((btn) => { // MP-03: miniplayer
     btn.addEventListener('click', async (e) => {
       e.preventDefault(); e.stopPropagation();
       const trackId = String(btn.dataset.trackPlay);
       const albumId = String(btn.dataset.trackAlbum);
       const requestedVersion = btn.dataset.playVersion || null;
 
-      const isCurrent = Player.current
-        && String(Player.current.trackId) === trackId
-        && String(Player.current.albumId) === albumId;
-
-      if (isCurrent) {
-        const currentVersion = Player.current.version;
-        if (requestedVersion && requestedVersion !== currentVersion) {
-          await switchVersion(requestedVersion);
+      const cur = AdminMiniPlayer.current();
+      if (cur && String(cur.id) === trackId && String(cur.albumId) === String(albumId)) {
+        if (requestedVersion && requestedVersion !== cur.version) {
+          AdminMiniPlayer.setVersion(requestedVersion);
           return;
         }
-        if (Player.el?.paused) await resumePlayback();
-        else if (Player.el) Player.el.pause();
+        AdminMiniPlayer.toggle(); // mesmo chip de novo = pausar/retomar
         return;
       }
-
-      await playTrack(albumId, trackId, requestedVersion);
+      await queueAlbum(albumId, trackId, requestedVersion);
     });
   });
 
@@ -545,7 +511,8 @@ function bindTrackButtons(scope) {
         if (State.pendingOperations.get(`track-${trackId}`) !== opId) return;
         State.pendingOperations.delete(`track-${trackId}`);
 
-        if (Player.current && String(Player.current.trackId) === trackId) stopPlayback();
+        const mpTrack = AdminMiniPlayer.current(); // MP-03
+        if (mpTrack && String(mpTrack.id) === String(trackId)) AdminMiniPlayer.close();
         toast('Faixa excluída.', '🗑');
         await loadTracksForAlbum(albumId);
         repaint();
@@ -584,482 +551,33 @@ function bindTrackButtons(scope) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Helper: verifica se evento pertence à seq ativa
+// MP-03 — Prévia do modal de faixas (áudio próprio; sem barra antiga)
 // ─────────────────────────────────────────────────────────────
-function isSeqCurrent() { return Player._activeSeq === Player.seq; }
+let _modalAudio = null;
 
-// ─────────────────────────────────────────────────────────────
-// Player — construção (eventos atrelados à seq ativa)
-// ─────────────────────────────────────────────────────────────
-function ensurePlayer() {
-  if (Player.el) return;
-
-  const a = new Audio();
-  a.preload = 'auto';
-  a.volume = 0.8; // A-06: igual ao slider inicial
-
-  a.addEventListener('timeupdate',     () => { if (!isSeqCurrent()) return; syncProgress(); });
-  a.addEventListener('loadedmetadata', () => { if (!isSeqCurrent()) return; onLoadedMetadata(); });
-  a.addEventListener('durationchange', () => { if (!isSeqCurrent()) return; syncProgress(); });
-  a.addEventListener('play',           () => { if (!isSeqCurrent()) return; setPlayerState('playing'); });
-  a.addEventListener('pause',          () => {
-    if (!isSeqCurrent()) return;
-    if (Player.state === 'playing') setPlayerState('paused');
-  });
-  a.addEventListener('ended',          () => { if (!isSeqCurrent()) return; onEnded(); });
-  a.addEventListener('waiting',        () => { if (!isSeqCurrent()) return; setPlayerState('loading'); });
-  a.addEventListener('stalled',        () => {
-    if (!isSeqCurrent()) return;
-    console.warn('[player] stalled | networkState:', a.networkState); // A-12
-    setSub('Conexão lenta…');
-  });
-  a.addEventListener('canplay',        () => {
-    if (!isSeqCurrent()) return;
-    clearTimeout(Player.stallTimer);
-    if (Player.el && !Player.el.paused && Player.state === 'loading') setPlayerState('playing');
-  });
-  a.addEventListener('abort', () => console.info('[player] abortado'));
-  a.addEventListener('error', () => { if (!isSeqCurrent()) return; onAudioError(); });
-
-  Player.el = a;
-  buildPlayerBar();
+function stopModalAudio() {
+  if (_modalAudio) {
+    try { _modalAudio.pause(); _modalAudio.removeAttribute('src'); try { _modalAudio.load(); } catch {} } catch {}
+  }
 }
 
-function setPlayerState(state) {
-  Player.state = state;
-  setPlayIcon(state === 'playing');
-  const subText = {
-    idle: '—',
-    loading: 'Carregando…',
-    playing: Player.current?.version === 'preview' ? 'Prévia · Reproduzindo' : 'Reproduzindo',
-    paused: 'Pausado',
-    error: 'Erro de reprodução',
-    ended: 'Finalizada'
-  }[state] || '';
-  setSub(subText);
-  repaint();
-}
+// Miniplayer assumiu → para o áudio do modal (só um som por vez)
+document.addEventListener('admin-miniplayer:start', stopModalAudio);
 
-function buildPlayerBar() {
-  const bar = document.createElement('div');
-  bar.className = 'sp-player';
-  bar.hidden = true;
-  bar.innerHTML = `
-    <div class="sp-player__inner">
-      <div class="sp-left">
-        <div class="sp-cover" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5">
-            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/>
-          </svg>
-        </div>
-        <div class="sp-meta">
-          <div class="sp-title" title="—">—</div>
-          <div class="sp-sub">—</div>
-        </div>
-      </div>
-
-      <div class="sp-center">
-        <div class="sp-controls">
-          <button class="sp-btn sp-btn--ghost" data-player-version="preview" type="button" title="Prévia 30s">P</button>
-          <button class="sp-btn sp-btn--ctrl" type="button" data-action="prev" title="Faixa anterior">${ICON.prev}</button>
-          <button class="sp-btn sp-btn--play" type="button" data-action="toggle" title="Play/Pause">${ICON.play}</button>
-          <button class="sp-btn sp-btn--ctrl" type="button" data-action="next" title="Próxima faixa">${ICON.next}</button>
-          <button class="sp-btn sp-btn--ghost" data-player-version="full" type="button" title="Áudio completo">F</button>
-        </div>
-        <div class="sp-progress-wrap">
-          <span class="sp-time sp-time--cur">0:00</span>
-          <div class="sp-progress">
-            <div class="sp-progress__track"><div class="sp-progress__fill"></div></div>
-            <input class="sp-progress__seek" type="range" min="0" max="0" step="1" value="0" aria-label="Posição da reprodução">
-            <div class="sp-progress__thumb"></div>
-          </div>
-          <span class="sp-time sp-time--dur">0:00</span>
-        </div>
-      </div>
-
-      <div class="sp-right">
-        <button class="sp-btn sp-btn--icon" type="button" data-action="mute" title="Mudo">${ICON.vol}</button>
-        <div class="sp-volume">
-          <div class="sp-volume__track"><div class="sp-volume__fill"></div></div>
-          <input class="sp-volume__seek" type="range" min="0" max="1" step="0.01" value="0.8" aria-label="Volume">
-        </div>
-        <button class="sp-btn sp-btn--icon" type="button" data-action="stop" title="Parar">${ICON.stop}</button>
-        <button class="sp-btn sp-btn--icon" type="button" data-action="link" title="Abrir URL do áudio">${ICON.link}</button>
-        <button class="sp-btn sp-btn--icon" type="button" data-action="close" title="Fechar player">${ICON.close}</button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(bar);
-  Player.bar = bar;
-
-  bar.querySelector('[data-action="toggle"]').addEventListener('click', async () => {
-    if (!Player.el || !Player.el.src) return;
-    try {
-      if (Player.el.paused) await Player.el.play();
-      else Player.el.pause();
-    } catch (err) {
-      toast('Navegador bloqueou a reprodução. Clique novamente.', '⚠');
-    }
-  });
-
-  bar.querySelector('[data-action="prev"]').addEventListener('click', () => playPrevNext(-1));
-  bar.querySelector('[data-action="next"]').addEventListener('click', () => playPrevNext(1));
-  bar.querySelector('[data-action="stop"]').addEventListener('click', stopPlayback);
-  bar.querySelector('[data-action="close"]').addEventListener('click', stopPlayback);
-
-  bar.querySelector('[data-action="link"]').addEventListener('click', () => {
-    if (Player.el?.currentSrc) {
-      const w = window.open(Player.el.currentSrc, '_blank', 'noopener,noreferrer');
-      if (w) w.opener = null;
-    } else toast('Nenhuma URL carregada.', '⚠');
-  });
-
-  const muteBtn = bar.querySelector('[data-action="mute"]');
-  muteBtn.addEventListener('click', () => {
-    if (Player.el) Player.el.muted = !Player.el.muted;
-    muteBtn.innerHTML = Player.el?.muted ? ICON.mute : ICON.vol;
-  });
-
-  const seek = bar.querySelector('.sp-progress__seek');
-  seek.addEventListener('input', (e) => {
-    Player.seeking = true;
-    bar.querySelector('.sp-time--cur').textContent = fmtTime(Number(e.target.value));
-    updateProgressFill(Number(e.target.value), Number(seek.max || 0));
-  });
-  seek.addEventListener('change', (e) => {
-    const v = Number(e.target.value);
-    if (Player.el && Number.isFinite(v)) {
-      try { Player.el.currentTime = v; } catch {}
-    }
-    Player.seeking = false;
-  });
-
-  const vol = bar.querySelector('.sp-volume__seek');
-  vol.addEventListener('input', (e) => {
-    if (Player.el) {
-      Player.el.volume = Number(e.target.value);
-      Player.el.muted = false;
-      muteBtn.innerHTML = ICON.vol;
-    }
-    updateVolumeFill(Number(e.target.value));
-  });
-
-  bar.querySelectorAll('[data-player-version]').forEach((b) =>
-    b.addEventListener('click', () => switchVersion(b.dataset.playerVersion)));
-
-  updateVolumeFill(0.8);
-}
-
-function updateProgressFill(cur, dur) {
-  if (!Player.bar) return;
-  const fill = Player.bar.querySelector('.sp-progress__fill');
-  const thumb = Player.bar.querySelector('.sp-progress__thumb');
-  const pct = dur > 0 ? (cur / dur) * 100 : 0;
-  if (fill) fill.style.width = pct + '%';
-  if (thumb) thumb.style.left = pct + '%';
-}
-
-function updateVolumeFill(v) {
-  if (!Player.bar) return;
-  const fill = Player.bar.querySelector('.sp-volume__fill');
-  if (fill) fill.style.width = (v * 100) + '%';
-}
-
-function setCoverFallback(coverEl) { // A-18
-  coverEl.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" opacity=".5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.51 4.51 0 0 1 12 16.5zm0-6.5a2 2 0 1 0 2 2 2 2 0 0 0-2-2z"/></svg>';
-}
-
-// MP-01: miniplayer assumiu a reprodução → pausa o player de teste
-document.addEventListener('admin-miniplayer:start', () => {
-  try { Player.seq += 1; } catch {}
-  try { if (Player.el) Player.el.pause(); } catch {}
-});
-
-// ─────────────────────────────────────────────────────────────
-// Reprodução — captura posição ANTES de limpar
-// ─────────────────────────────────────────────────────────────
-async function playTrack(albumId, trackId, requestedVersion) {
-  ensurePlayer();
-  try { document.dispatchEvent(new CustomEvent('admin-player:start')); } catch {} // MP-01
-  const list = State.tracks.get(albumId);
-  const track = Array.isArray(list) ? list.find((t) => String(t.id) === String(trackId)) : null;
-  if (!track) return toast('Faixa não encontrada.', '⚠');
-
-  const hasPreview = !!(track.previewPath || track.preview_path);
-  const hasFull    = !!(track.fullPath || track.full_path);
-  if (!hasPreview && !hasFull) return toast('Esta faixa não tem áudio cadastrado.', '⚠');
-
-  const version = requestedVersion || (hasFull ? 'full' : 'preview');
-
-  if (version === 'preview' && !hasPreview) return toast('Prévia indisponível.', '⚠');
-  if (version === 'full' && !hasFull)       return toast('Áudio completo indisponível.', '⚠');
-
-  const previous = Player.current;
-  const previousTime = Player.el ? Player.el.currentTime : 0;
-  const previousVersion = previous?.version;
-  const isSameTrack = previous
-    && String(previous.trackId) === String(trackId)
-    && String(previous.albumId) === String(albumId);
-
-  const seq = ++Player.seq;
-  Player._activeSeq = seq;
-
+async function playExternal(url) {
   try {
-    const url = await getAdminAudioUrl(track, version);
-    console.info('[player] carregando faixa', trackId, 'versão', version); // A-12: sem URL assinada
-
-    if (seq !== Player.seq) return;
-
-    if (Player.el) {
-      try { Player.el.pause(); } catch {}
-      Player.el.removeAttribute('src');
-      try { Player.el.load(); } catch {}
-    }
-
-    if (seq !== Player.seq) return;
-
-    Player.current = {
-      trackId: String(trackId),
-      albumId: String(albumId),
-      title:   track.title || 'Faixa',
-      version,
-      duration: null
-    };
-    Player.versions = { preview: hasPreview, full: hasFull };
-    Player.el.src = url;
-
-    if (isSameTrack && previousVersion !== version && previousTime > 1) {
-      Player.pendingRestore = previousTime;
-    } else {
-      Player.pendingRestore = null;
-    }
-
-    // Capa em <img> (correção #9)
-    const album = State.albums.find((a) => String(a.id) === String(albumId));
-    const coverUrl = album?.coverUrl || album?.cover_image;
-    const coverEl = Player.bar.querySelector('.sp-cover');
-    if (coverUrl && /^https?:\/\//i.test(coverUrl) && isAllowedMediaUrl(coverUrl)) {
-      const img = document.createElement('img'); // A-18: erro tratado sem handler inline
-      img.src = coverUrl;
-      img.alt = `Capa de ${album?.title || 'faixa'}`;
-      img.addEventListener('error', () => { setCoverFallback(coverEl); });
-      coverEl.replaceChildren(img);
-    } else {
-      setCoverFallback(coverEl);
-    }
-
-    updateBarMeta();
-    Player.bar.hidden = false;
-    setPlayerState('loading');
-
-    Player.stallTimer = setTimeout(() => {
-      if (seq !== Player.seq) return;
-      if (Player.el && Player.el.readyState < 2 && Player.state === 'loading') {
-        console.warn('[player] STALL 6s | readyState:', Player.el.readyState,
-                     '| networkState:', Player.el.networkState); // A-12
-        toast('Áudio não carregou em 6s. Use 🔗 na barra.', '⚠');
-      }
-    }, 6000);
-
-    const playPromise = Player.el.play();
-    if (playPromise && typeof playPromise.catch === 'function') {
-      await playPromise.catch((err) => {
-        if (seq !== Player.seq) return;
-        console.error('[player] play() rejeitado:', err);
-        throw err;
-      });
-    }
-
-    repaint();
-  } catch (err) {
-    if (seq === Player.seq) {
-      toast(err?.message || 'Falha ao reproduzir.', '⚠');
-      recoverPlayer();
-    }
+    AdminMiniPlayer.pause(); // modal assumiu → miniplayer pausa
+    if (!_modalAudio) { _modalAudio = new Audio(); _modalAudio.preload = 'auto'; }
+    _modalAudio.pause();
+    _modalAudio.src = url;
+    await _modalAudio.play();
+  } catch {
+    toast('Falha ao reproduzir.', '⚠');
   }
 }
 
-// Navegação prev/next — comportamento explícito (correção #8)
-async function playPrevNext(delta) {
-  if (!Player.current) return;
-  const tracks = State.tracks.get(Player.current.albumId);
-  if (!Array.isArray(tracks) || !tracks.length) return;
-
-  const idx = tracks.findIndex(t => String(t.id) === String(Player.current.trackId));
-  if (idx < 0) return;
-
-  const targetIdx = idx + delta;
-
-  if (targetIdx < 0) {
-    // Primeira faixa → reinicia
-    if (Player.el) Player.el.currentTime = 0;
-    return;
-  }
-  if (targetIdx >= tracks.length) {
-    // Última faixa → deixa tocar até o fim
-    return;
-  }
-
-  const next = tracks[targetIdx];
-  const hasPreview = !!(next.previewPath || next.preview_path);
-  const hasFull    = !!(next.fullPath || next.full_path);
-  let version = Player.current.version; // A-11: degrada para versão disponível
-  if (version === 'preview' && !hasPreview) version = hasFull ? 'full' : null;
-  if (version === 'full'    && !hasFull)    version = hasPreview ? 'preview' : null;
-  if (!version) return toast(`"${next.title}" não tem áudio cadastrado.`, '⚠');
-  await playTrack(Player.current.albumId, String(next.id), version);
-}
-
-function onLoadedMetadata() {
-  if (!Player.el || !Player.current) return;
-  Player.current.duration = Player.el.duration || 0;
-
-  if (Player.pendingRestore !== null) {
-    const t = Player.pendingRestore;
-    Player.pendingRestore = null;
-    try { Player.el.currentTime = Math.min(t, Player.el.duration - 0.5); } catch {}
-  }
-
-  syncProgress();
-  if (Player.state === 'loading') setPlayerState('playing');
-}
-
-function onEnded() {
-  setPlayerState('ended');
-  updateProgressFill(0, Player.el.duration || 0);
-}
-
-function onAudioError() {
-  const code = Player.el?.error ? Player.el.error.code : 0;
-  const msg = {
-    1: 'Abortado',
-    2: 'Erro de rede (404 ou bloqueio)',
-    3: 'Arquivo corrompido',
-    4: 'Formato não suportado ou URL inválida'
-  }[code] || 'Erro desconhecido';
-
-  console.error('[player] ERRO', code, msg); // A-12
-  toast(`Áudio: ${msg} (código ${code}). Veja 🔗.`, '⚠');
-  recoverPlayer();
-}
-
-async function switchVersion(version) {
-  if (!Player.current || Player.current.version === version) return;
-  if (!Player.versions[version]) return toast('Versão indisponível.', '⚠');
-  const { albumId, trackId } = Player.current;
-  await playTrack(albumId, trackId, version);
-}
-
-async function pausePlayback() {
-  if (!Player.el) return;
-  try { Player.el.pause(); } catch {}
-}
-
-async function resumePlayback() {
-  if (!Player.el || !Player.el.src) return;
-  try { await Player.el.play(); }
-  catch (err) { console.error('[player] resume falhou:', err); toast('Reprodução bloqueada.', '⚠'); }
-}
-
-// Recuperação completa (correção #4 — limpa tudo)
-function recoverPlayer() {
-  clearTimeout(Player.stallTimer);
-  Player.stallTimer = null;
-  Player.pendingRestore = null;
-  Player.seeking = false;
-
-  if (Player.el) {
-    try { Player.el.pause(); } catch {}
-    Player.el.removeAttribute('src');
-    try { Player.el.load(); } catch {}
-  }
-  Player.current = null;
-  Player.state = 'idle';
-  Player.versions = { preview: false, full: false }; // A-17
-
-  if (Player.bar) {
-    Player.bar.hidden = true;
-    Player.bar.querySelector('.sp-title').textContent = '—';
-    Player.bar.querySelector('.sp-sub').textContent = '—';
-    Player.bar.querySelector('.sp-time--cur').textContent = '0:00';
-    Player.bar.querySelector('.sp-time--dur').textContent = '0:00';
-    const seek = Player.bar.querySelector('.sp-progress__seek');
-    if (seek) { seek.max = 0; seek.value = 0; }
-    updateProgressFill(0, 0);
-    Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
-      b.disabled = false;
-      b.classList.remove('is-active');
-    });
-    const playBtn = Player.bar.querySelector('[data-action="toggle"]');
-    if (playBtn) playBtn.innerHTML = ICON.play;
-    const muteBtn = Player.bar.querySelector('[data-action="mute"]');
-    if (muteBtn) muteBtn.innerHTML = ICON.vol;
-    const prevBtn = Player.bar.querySelector('[data-action="prev"]');
-    const nextBtn = Player.bar.querySelector('[data-action="next"]');
-    if (prevBtn) prevBtn.disabled = false;
-    if (nextBtn) nextBtn.disabled = false;
-  }
-
-  repaint();
-}
-
-function stopPlayback() {
-  Player.seq++;
-  recoverPlayer();
-}
-
-function updateBarMeta() {
-  if (!Player.bar || !Player.current) return;
-  const title = Player.current.title;
-  Player.bar.querySelector('.sp-title').textContent = title;
-  Player.bar.querySelector('.sp-title').title      = title;
-  Player.bar.querySelectorAll('[data-player-version]').forEach((b) => {
-    const v = b.dataset.playerVersion;
-    b.disabled = !Player.versions[v];
-    b.classList.toggle('is-active', Player.current.version === v);
-  });
-
-  // Desabilita prev na primeira, next na última
-  const tracks = State.tracks.get(Player.current.albumId);
-  const list = Array.isArray(tracks) ? tracks : [];
-  const idx = list.findIndex(t => String(t.id) === String(Player.current.trackId));
-  const prevBtn = Player.bar.querySelector('[data-action="prev"]');
-  const nextBtn = Player.bar.querySelector('[data-action="next"]');
-  if (prevBtn) prevBtn.disabled = idx <= 0;
-  if (nextBtn) nextBtn.disabled = idx < 0 || idx >= list.length - 1;
-}
-
-function setPlayIcon(playing) {
-  const btn = Player.bar?.querySelector('[data-action="toggle"]');
-  if (btn) btn.innerHTML = playing ? ICON.pause : ICON.play;
-}
-
-function setSub(text) {
-  const el = Player.bar?.querySelector('.sp-sub');
-  if (el) el.textContent = text;
-}
-
-function fmtTime(s) {
-  if (!Number.isFinite(s) || s < 0) return '0:00';
-  const mm = Math.floor(s / 60);
-  const ss = String(Math.floor(s % 60)).padStart(2, '0');
-  return mm >= 60
-    ? `${Math.floor(mm/60)}:${String(mm%60).padStart(2,'0')}:${ss}`
-    : `${mm}:${ss}`;
-}
-
-function syncProgress() {
-  if (!Player.el || !Player.bar) return;
-  const seek = Player.bar.querySelector('.sp-progress__seek');
-  const dur = Number.isFinite(Player.el.duration) ? Player.el.duration : 0;
-  if (!Player.seeking) {
-    seek.max = dur || 0;
-    seek.value = Player.el.currentTime || 0;
-  }
-  Player.bar.querySelector('.sp-time--cur').textContent = fmtTime(Player.el.currentTime);
-  Player.bar.querySelector('.sp-time--dur').textContent = fmtTime(dur);
-  updateProgressFill(Player.el.currentTime || 0, dur);
-}
+// MP-03: repinta os chips P/F e botões ▶ Ouvir quando o miniplayer muda
+document.addEventListener('admin-miniplayer:state', () => { try { repaint(); } catch {} });
 
 // ─────────────────────────────────────────────────────────────
 // Download — faixa individual
@@ -1145,7 +663,7 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // ─────────────────────────────────────────────────────────────
 // MP-01 — Fila no miniplayer persistente
 // ─────────────────────────────────────────────────────────────
-async function queueAlbum(albumId, startTrackId) {
+async function queueAlbum(albumId, startTrackId, requestedVersion) { // MP-03
   const album = State.albums.find((a) => String(a.id) === String(albumId));
   let list = State.tracks.get(String(albumId));
   if (!Array.isArray(list) || !list.length) {
@@ -1167,7 +685,10 @@ async function queueAlbum(albumId, startTrackId) {
     streamKey: t.streamKey ?? t.stream_key ?? null
   })).filter((t) => t.previewPath || t.fullPath || t.streamKey);
   if (!dtos.length) return toast('Este álbum não tem áudios cadastrados.', '⚠');
-  AdminMiniPlayer.setQueue(dtos, { startId: startTrackId || dtos[0].id, version: 'preview' });
+  AdminMiniPlayer.setQueue(dtos, {
+    startId: startTrackId || dtos[0].id,
+    version: requestedVersion === 'full' ? 'full' : 'preview'
+  });
 }
 
 function queueTrack(albumId, trackId) { return queueAlbum(albumId, trackId); }
@@ -1368,10 +889,11 @@ function renderTrackRow(albumId, track, idx) {
   const hasFull    = !!(track.fullPath || track.full_path);
   const canPlay    = hasPreview || hasFull;
 
-  const isCurrent = Player.current
-    && String(Player.current.trackId) === String(track.id)
-    && String(Player.current.albumId) === String(albumId);
-  const playing = isCurrent && Player.state === 'playing';
+  const mpCur = AdminMiniPlayer.current(); // MP-03
+  const isCurrent = mpCur
+    && String(mpCur.id) === String(track.id)
+    && String(mpCur.albumId) === String(albumId);
+  const playing = isCurrent && !mpCur.paused;
 
   const audioChips = `
     <button class="audio-chip ${hasPreview ? '' : 'none'}" type="button"
@@ -1549,7 +1071,7 @@ function openTrackModal(albumId, track) {
   const modalObs = new MutationObserver(() => {
     if (document.getElementById('trackTitle')) return;
     modalObs.disconnect(); // A-10: desconecta em TODOS os caminhos
-    if (Player.current?.albumId === 'preview') stopPlayback();
+    stopModalAudio();
   });
   const modalRoot = document.querySelector('[data-admin-modal], .admin-modal') || document.body;
   modalObs.observe(modalRoot, { childList: true, subtree: true });
@@ -1718,35 +1240,8 @@ function bindTrackUpload({ buttonSel, inputId, statusSel, testSel, kind, uploadF
 }
 
 // ─────────────────────────────────────────────────────────────
-// Reproduzir URL externa (preview no modal)
-// ─────────────────────────────────────────────────────────────
-async function playExternal(url) {
-  ensurePlayer();
-  const seq = ++Player.seq;
-  Player._activeSeq = seq;
-  try {
-    if (Player.el) { try { Player.el.pause(); } catch {} Player.el.removeAttribute('src'); try { Player.el.load(); } catch {} }
-    if (seq !== Player.seq) return;
-    Player.current = { trackId: 'preview', albumId: 'preview', title: 'Prévia do modal', version: 'full', duration: null };
-    Player.versions = { preview: false, full: true };
-    Player.el.src = url;
-    updateBarMeta();
-    Player.bar.hidden = false;
-    setPlayerState('loading');
-    await Player.el.play();
-    repaint();
-  } catch (err) {
-    if (seq === Player.seq) {
-      toast('Falha ao reproduzir.', '⚠');
-      recoverPlayer();
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
 // Debug
 // ─────────────────────────────────────────────────────────────
 if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') { // A-13
-  window.__player = Player;
-  window.__albums  = { State, playTrack, stopPlayback, getAdminAudioUrl, recoverPlayer };
+  window.__albums = { State, queueAlbum, getAdminAudioUrl, stopModalAudio, loadAlbums };
 }
