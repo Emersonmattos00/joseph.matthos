@@ -25,7 +25,7 @@ const { db, eq, and, asc, desc, gte, drizzleSql, inArray, sql, isNull } = requir
 const schema = require('./_db').schema;
 const {
   tracks, albums, artists, orders, orderItems, rentals, paymentsEvents,
-  adminAudit, uploadIntents, users, subscriptions, plans
+  adminAudit, uploadIntents, users, subscriptions, plans, rentalProducts
 } = schema;
 
 const {
@@ -1038,6 +1038,24 @@ async function handleCreateAlbum(req, res, session) {
   if (body.published !== undefined && typeof body.published !== 'boolean') return sendJson(res, 400, { ok: false, error: 'published deve ser booleano.' });
   const published = typeof body.published === 'boolean' ? body.published : false;
 
+  // UP-04: ano, capa e descrição agora são aceitos na criação (antes o
+  // álbum nascia sem eles mesmo preenchidos no modal).
+  const extras = {};
+  if (body.year !== undefined && body.year !== null && body.year !== '') {
+    const y = Number(body.year);
+    const currentYear = new Date().getFullYear();
+    if (!Number.isInteger(y) || y < 1900 || y > currentYear + 1) return sendJson(res, 400, { ok: false, error: 'Ano inválido.' });
+    extras.year = y;
+  }
+  if (body.coverUrl !== undefined) {
+    const c = String(body.coverUrl).trim();
+    if (c && !/^https:\/\//i.test(c)) return sendJson(res, 400, { ok: false, error: 'URL da capa deve ser https.' });
+    extras.coverUrl = c || null;
+  }
+  if (body.description !== undefined) {
+    extras.description = String(body.description).trim().slice(0, 5000) || null;
+  }
+
   const slug = createSlug(title);
   if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
 
@@ -1053,7 +1071,7 @@ async function handleCreateAlbum(req, res, session) {
       if (dup) { const err = new Error('SLUG_CONFLICT'); err.code = 'SLUG_CONFLICT'; throw err; }
 
       const [row] = await tx.insert(albums).values({
-        id: crypto.randomUUID(), title, slug, artistId: artist.id, published
+        id: crypto.randomUUID(), title, slug, artistId: artist.id, published, ...extras
       }).returning();
       return row;
     });
@@ -1121,6 +1139,8 @@ async function handleDeleteAlbum(req, res, session) {
   const albumId = String(req.query.id || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
+  let albumStorageKeys = []; // UP-04
+
   try {
     await db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${albumId}))`);
@@ -1128,12 +1148,24 @@ async function handleDeleteAlbum(req, res, session) {
       const [album] = await tx.select({ id: albums.id }).from(albums).where(eq(albums.id, albumId)).limit(1);
       if (!album) { const err = new Error('ALBUM_NOT_FOUND'); err.code = 'ALBUM_NOT_FOUND'; throw err; }
 
+      const trackRows = await tx.select({
+        previewPath: tracks.previewPath, fullPath: tracks.fullPath,
+        streamKey: tracks.streamKey, masterKey: tracks.masterKey
+      }).from(tracks).where(eq(tracks.albumId, albumId));
+      albumStorageKeys = trackRows.flatMap((t) =>
+        [t.previewPath, t.fullPath, t.streamKey, t.masterKey].filter(Boolean));
+
       await tx.delete(tracks).where(eq(tracks.albumId, albumId));
       await tx.delete(albums).where(eq(albums.id, albumId));
     });
   } catch (err) {
     if (err.code === 'ALBUM_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Álbum não encontrado.' });
     throw err;
+  }
+
+  // UP-04: remove os áudios das faixas do bucket (best-effort)
+  for (const k of albumStorageKeys) {
+    try { await deleteObject(k); } catch (e) { console.warn('[admin] purge áudio falhou:', e.code || e.message); }
   }
 
   try { await audit('album.delete', { actor: session.user, target: albumId }); }
@@ -1166,7 +1198,21 @@ async function handleListTracks(req, res) {
   const albumId = String(req.query.albumId || '');
   if (!isUuid(albumId)) return sendJson(res, 400, { ok: false, error: 'albumId inválido.' });
   const rows = await db.select().from(tracks).where(eq(tracks.albumId, albumId)).orderBy(asc(tracks.trackNumber));
-  return sendJson(res, 200, { ok: true, tracks: rows });
+
+  // UP-04: preço real vem de rental_products (o campo não existe em tracks)
+  const ids = rows.map((r) => r.id);
+  const rps = ids.length ? await db.select({
+    id: rentalProducts.id, trackId: rentalProducts.trackId,
+    durationHours: rentalProducts.durationHours, priceCents: rentalProducts.priceCents
+  }).from(rentalProducts).where(and(inArray(rentalProducts.trackId, ids), eq(rentalProducts.active, true))) : [];
+  const byTrack = new Map(rps.map((p) => [p.trackId, p]));
+  const out = rows.map((r) => ({
+    ...r,
+    priceCents: byTrack.get(r.id)?.priceCents ?? 0,
+    rentalHours: byTrack.get(r.id)?.durationHours ?? null,
+    rentalProductId: byTrack.get(r.id)?.id ?? null
+  }));
+  return sendJson(res, 200, { ok: true, tracks: out });
 }
 
 async function handleCreateTrack(req, res, session) {
@@ -1178,6 +1224,11 @@ async function handleCreateTrack(req, res, session) {
 
   const slug = createSlug(title);
   if (!slug) return sendJson(res, 400, { ok: false, error: 'Título gera um slug inválido.' });
+
+  // UP-04: preço da faixa → produto de aluguel (rental_products). O preço em
+  // centavos NÃO existe na tabela tracks; o site cobra por rental_products.id.
+  const rpPlan = planRentalProduct({ existing: null, title, priceCents: body.priceCents, rentalHours: body.rentalHours });
+  if (rpPlan.action === 'invalid') return sendJson(res, 400, { ok: false, error: 'Preço inválido (centavos, 0 a 999900).' });
 
   let created;
   try {
@@ -1196,6 +1247,9 @@ async function handleCreateTrack(req, res, session) {
         durationSeconds: durationToSeconds(body.duration),
         trackNumber: nextNumber, status: 'DRAFT'
       }).returning();
+      if (rpPlan.action === 'create') { // UP-04: produto de aluguel junto da faixa
+        await tx.insert(rentalProducts).values({ trackId: row.id, ...rpPlan.values });
+      }
       return row;
     });
   } catch (err) {
@@ -1227,6 +1281,11 @@ async function handleUpdateTrack(req, res, session) {
   const body = parseBody(req);
   const patch = {};
 
+  // UP-04: faixa atual (para 404 cedo, nome do produto de aluguel e sync)
+  const [currentTrack] = await db.select({ id: tracks.id, title: tracks.title })
+    .from(tracks).where(eq(tracks.id, trackId)).limit(1);
+  if (!currentTrack) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
   if (body.title !== undefined) {
     const t = String(body.title).trim();
     if (!t || t.length > 200) return sendJson(res, 400, { ok: false, error: 'Título inválido.' });
@@ -1237,6 +1296,11 @@ async function handleUpdateTrack(req, res, session) {
   if (body.duration !== undefined) {
     if (!validateDuration(body.duration)) return sendJson(res, 400, { ok: false, error: 'Duração inválida (use mm:ss).' });
     patch.durationSeconds = durationToSeconds(body.duration);
+  }
+  if (body.lyrics !== undefined) { // UP-04: letras agora salvam junto da faixa
+    const lv = validateLyricsPayload(body.lyrics);
+    if (!lv.ok) return sendJson(res, lv.status, { ok: false, error: lv.error });
+    patch.lyrics = body.lyrics;
   }
   if (body.status !== undefined) {
     if (body.status !== 'PUBLISHED' && body.status !== 'DRAFT') return sendJson(res, 400, { ok: false, error: 'Status deve ser PUBLISHED ou DRAFT.' });
@@ -1278,12 +1342,41 @@ async function handleUpdateTrack(req, res, session) {
     patch.previewPath = p; patch.previewKey = p;
   }
 
-  if (!Object.keys(patch).length) return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
+  // UP-04: sincroniza o produto de aluguel quando preço (ou título) muda
+  let rpPlan = { action: 'none' };
+  if (body.priceCents !== undefined || body.title !== undefined) {
+    const [existingRp] = await db.select().from(rentalProducts)
+      .where(eq(rentalProducts.trackId, trackId)).limit(1);
+    rpPlan = planRentalProduct({
+      existing: existingRp || null,
+      title: patch.title || currentTrack.title,
+      // rename sem preço novo: só sincroniza o NOME se o produto está ativo
+      priceCents: body.priceCents !== undefined ? body.priceCents
+        : (existingRp?.active ? existingRp.priceCents : undefined),
+      rentalHours: body.rentalHours
+    });
+    if (rpPlan.action === 'invalid') return sendJson(res, 400, { ok: false, error: 'Preço inválido (centavos, 0 a 999900).' });
+  }
+
+  if (!Object.keys(patch).length && rpPlan.action === 'none') {
+    return sendJson(res, 400, { ok: false, error: 'Nada a atualizar.' });
+  }
 
   try {
-    const updated = await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning();
-    if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
-    try { await audit('track.update', { actor: session.user, target: trackId, metadata: patch }); }
+    const updated = patch && Object.keys(patch).length
+      ? await db.update(tracks).set(patch).where(eq(tracks.id, trackId)).returning()
+      : [{ id: trackId }];
+    if (!updated.length || !updated[0]) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
+
+    if (rpPlan.action === 'upsert') {
+      await db.update(rentalProducts).set(rpPlan.values).where(eq(rentalProducts.id, rpPlan.id));
+    } else if (rpPlan.action === 'create') {
+      await db.insert(rentalProducts).values({ trackId, ...rpPlan.values });
+    } else if (rpPlan.action === 'deactivate') {
+      await db.update(rentalProducts).set({ active: false }).where(eq(rentalProducts.id, rpPlan.id));
+    }
+
+    try { await audit('track.update', { actor: session.user, target: trackId, metadata: { ...patch, rental: rpPlan.action } }); }
     catch (e) { console.warn('[admin] audit track.update falhou:', e.message); }
     return sendJson(res, 200, { ok: true, track: updated[0] });
   } catch (err) {
@@ -1296,10 +1389,16 @@ async function handleDeleteTrack(req, res, session) {
   const trackId = String(req.query.id || '');
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
+  let storageKeys = [];
   try {
     await db.transaction(async (tx) => {
-      const [row] = await tx.select({ albumId: tracks.albumId }).from(tracks).where(eq(tracks.id, trackId)).for('update');
+      const [row] = await tx.select({
+        albumId: tracks.albumId, previewPath: tracks.previewPath,
+        fullPath: tracks.fullPath, streamKey: tracks.streamKey, masterKey: tracks.masterKey
+      }).from(tracks).where(eq(tracks.id, trackId)).for('update');
       if (!row) { const err = new Error('TRACK_NOT_FOUND'); err.code = 'TRACK_NOT_FOUND'; throw err; }
+
+      storageKeys = [row.previewPath, row.fullPath, row.streamKey, row.masterKey].filter(Boolean); // UP-04
 
       if (row.albumId) await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.albumId}))`);
 
@@ -1309,6 +1408,11 @@ async function handleDeleteTrack(req, res, session) {
   } catch (err) {
     if (err.code === 'TRACK_NOT_FOUND') return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
     throw err;
+  }
+
+  // UP-04: remove os áudios do bucket (best-effort — não bloqueia a exclusão)
+  for (const k of storageKeys) {
+    try { await deleteObject(k); } catch (e) { console.warn('[admin] purge áudio falhou:', e.code || e.message); }
   }
 
   try { await audit('track.delete', { actor: session.user, target: trackId }); }
@@ -1368,25 +1472,65 @@ async function handleReorderTracks(req, res, session) {
   return sendJson(res, 200, { ok: true });
 }
 
+// UP-04: validação compartilhada de letras (update-lyrics + PATCH de faixa)
+function validateLyricsPayload(lyrics) {
+  if (lyrics !== null && typeof lyrics !== 'string' && !Array.isArray(lyrics)) {
+    return { ok: false, status: 400, error: 'Letra inválida.' };
+  }
+  if (typeof lyrics === 'string' && Buffer.byteLength(lyrics, 'utf8') > MAX_LYRICS_BYTES) {
+    return { ok: false, status: 413, error: 'Letra muito longa.' };
+  }
+  if (Array.isArray(lyrics)) {
+    if (lyrics.length > MAX_LYRICS_LINES) return { ok: false, status: 413, error: 'Número excessivo de linhas.' };
+    let totalBytes = 0;
+    for (const l of lyrics) {
+      if (!l || typeof l !== 'object' || Array.isArray(l)) return { ok: false, status: 400, error: 'Item de letra inválido.' };
+      if (typeof l.text !== 'string') return { ok: false, status: 400, error: 'Texto da letra deve ser string.' };
+      if (l.text.length > MAX_LYRICS_LINE_LENGTH) return { ok: false, status: 413, error: 'Linha de letra muito longa.' };
+      totalBytes += Buffer.byteLength(l.text, 'utf8');
+      if (totalBytes > MAX_LYRICS_BYTES) return { ok: false, status: 413, error: 'Letra muito longa.' };
+      if (l.time !== undefined && (typeof l.time !== 'number' || !Number.isFinite(l.time) || l.time < 0)) {
+        return { ok: false, status: 400, error: 'Timestamp da letra inválido.' };
+      }
+    }
+  }
+  return { ok: true, status: 200, error: null };
+}
+
+// UP-04: produto de aluguel da faixa — o site cobra por rental_products.id
+// (payments.js), então o painel passa a criar/atualizar/desativar o produto
+// quando o preço da faixa é definido no modal. Pure function (testável).
+function planRentalProduct({ existing, title, priceCents, rentalHours }) {
+  const name = `Aluguel — ${String(title || '').trim().slice(0, 120)}`;
+  const rh = Number(rentalHours);
+  const hours = Number.isInteger(rh) && rh > 0 && rh <= 8760
+    ? rh
+    : (Number(existing?.durationHours) > 0 ? Number(existing.durationHours) : 72);
+  if (priceCents === undefined || priceCents === null || priceCents === '') return { action: 'none' };
+  const price = Number(priceCents);
+  if (!Number.isInteger(price) || price < 0 || price > 999900) return { action: 'invalid' };
+  if (price === 0) {
+    if (!existing || !existing.active) return { action: 'none' };
+    return { action: 'deactivate', id: existing.id };
+  }
+  if (existing && existing.id) {
+    const changed = Number(existing.priceCents) !== price ||
+      Number(existing.durationHours) !== hours ||
+      !existing.active || existing.name !== name;
+    return changed
+      ? { action: 'upsert', id: existing.id, values: { name, durationHours: hours, priceCents: price, active: true } }
+      : { action: 'none' };
+  }
+  return { action: 'create', values: { name, durationHours: hours, priceCents: price, active: true } };
+}
+
 async function handleUpdateLyrics(req, res, session) {
   const trackId = String(req.query.id || '');
   if (!isUuid(trackId)) return sendJson(res, 400, { ok: false, error: 'ID inválido.' });
 
   const lyrics = parseBody(req).lyrics;
-  if (lyrics !== null && typeof lyrics !== 'string' && !Array.isArray(lyrics)) return sendJson(res, 400, { ok: false, error: 'Letra inválida.' });
-  if (typeof lyrics === 'string' && Buffer.byteLength(lyrics, 'utf8') > MAX_LYRICS_BYTES) return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
-  if (Array.isArray(lyrics)) {
-    if (lyrics.length > MAX_LYRICS_LINES) return sendJson(res, 413, { ok: false, error: 'Número excessivo de linhas.' });
-    let totalBytes = 0;
-    for (const l of lyrics) {
-      if (!l || typeof l !== 'object' || Array.isArray(l)) return sendJson(res, 400, { ok: false, error: 'Item de letra inválido.' });
-      if (typeof l.text !== 'string') return sendJson(res, 400, { ok: false, error: 'Texto da letra deve ser string.' });
-      if (l.text.length > MAX_LYRICS_LINE_LENGTH) return sendJson(res, 413, { ok: false, error: 'Linha de letra muito longa.' });
-      totalBytes += Buffer.byteLength(l.text, 'utf8');
-      if (totalBytes > MAX_LYRICS_BYTES) return sendJson(res, 413, { ok: false, error: 'Letra muito longa.' });
-      if (l.time !== undefined && (typeof l.time !== 'number' || !Number.isFinite(l.time) || l.time < 0)) return sendJson(res, 400, { ok: false, error: 'Timestamp da letra inválido.' });
-    }
-  }
+  const lv = validateLyricsPayload(lyrics); // UP-04
+  if (!lv.ok) return sendJson(res, lv.status, { ok: false, error: lv.error });
 
   const updated = await db.update(tracks).set({ lyrics }).where(eq(tracks.id, trackId)).returning();
   if (!updated.length) return sendJson(res, 404, { ok: false, error: 'Faixa não encontrada.' });
@@ -1680,4 +1824,4 @@ function isUuid(s) {
 
 function addDaysIso(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
-    }
+                      }
